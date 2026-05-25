@@ -1569,10 +1569,13 @@ def detect_live_streams(ip, open_ports, rtsp_ports=None):
         print(f"\n{C}[ℹ️] HTTP/HTTPS streams can be opened directly in your web browser{W}")
         print(f"     💡 Tip: Look above for HTTP/HTTPS stream URLs (e.g., http://IP:PORT/mjpg/video.mjpg)")
 
-def main():
+def main(ip_input=None):
     global threads_running
     try:
-        user_input = input(f"{G}[+] {C}Enter IP address (or IP:PORT): {W}").strip()
+        if ip_input is None:
+            user_input = input(f"{G}[+] {C}Enter IP address (or IP:PORT): {W}").strip()
+        else:
+            user_input = ip_input
         
         # Parse IP:PORT format
         target_ip, specified_port = parse_ip_port(user_input)
@@ -1618,7 +1621,11 @@ def main():
             camera_found = check_if_camera(target_ip, open_ports)
 
             if not camera_found and not skip_osint:
-                choice = input("\n[❓] No camera found. Continue checking login pages, fingerprints, and passwords? [y/N]: ").strip().lower()
+                if ip_input is None:
+                    choice = input("\n[❓] No camera found. Continue checking login pages, fingerprints, and passwords? [y/N]: ").strip().lower()
+                else:
+                    # Default to yes for non-interactive mode
+                    choice = "y"
                 if choice != "y":
                     print("\n[✅] Scan Completed! No camera found.")
                     return

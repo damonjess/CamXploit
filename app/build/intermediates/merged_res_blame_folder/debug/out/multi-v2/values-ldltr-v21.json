@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.spyboy.camxploit.app-mergeDebugResources-56:/values-ldltr-v21/values-ldltr-v21.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\Damon\\.gradle\\caches\\transforms-3\\2c9a8ab5ddc137504258abab64a2816e\\transformed\\appcompat-1.7.1\\res\\values-ldltr-v21\\values-ldltr-v21.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "112",
+                        "endOffsets": "163"
+                    }
+                }
+            ]
+        }
+    ]
+}
