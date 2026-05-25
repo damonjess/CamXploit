@@ -9,7 +9,7 @@
         "bootstrap-native/x86/mmap.so": "594e2355430e914ed522b592103f1a8426a59253",
         "bootstrap-native/arm64-v8a/_ctypes.so": "d963220e38747ebaff725c9d9b38e8718954bbf1",
         "requirements-x86_64.imy": "b04f3ee8f5e43fa3b162981b50bb72fe1acabb33",
-        "app.imy": "806877b84c5d090473db1b0bf77b67bac565e558",
+        "app.imy": "c67c1fa344563b483674d0b924f77a7992fab6c8",
         "bootstrap-native/x86/_struct.so": "be55e86994c613e519627e15c3796de0a8af72e9",
         "stdlib-armeabi-v7a.imy": "23892e286923474b2b1e13ca1faaf971136a68d7",
         "bootstrap-native/arm64-v8a/binascii.so": "96edb7e7a57512635249b3d9efc48f4b8fbc8bf9",

@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.border
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -30,6 +31,22 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 
 import java.io.OutputStream
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.os.Environment
+import android.widget.Toast
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,6 +59,33 @@ class MainActivity : ComponentActivity() {
                 CamXploitUI()
             }
         }
+    }
+}
+
+// Helper functions for new features
+fun saveContentToFile(context: Context, content: String, prefix: String, extension: String) {
+    try {
+        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val fileName = "${prefix}_$timeStamp.$extension"
+        val file = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), fileName)
+        FileOutputStream(file).use { it.write(content.toByteArray()) }
+        Toast.makeText(context, "Saved to: ${file.absolutePath}", Toast.LENGTH_LONG).show()
+    } catch (e: Exception) {
+        Toast.makeText(context, "Error saving: ${e.message}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+fun captureScreenshot(context: Context, view: android.view.View) {
+    try {
+        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        view.draw(canvas)
+        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val file = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "CamXploit_Screenshot_$timeStamp.png")
+        FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        Toast.makeText(context, "Screenshot saved!", Toast.LENGTH_SHORT).show()
+    } catch (e: Exception) {
+        Toast.makeText(context, "Screenshot failed: ${e.message}", Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -69,6 +113,8 @@ fun CamXploitUI() {
     var isScanning by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val view = LocalView.current
 
     Column(
         modifier = Modifier
@@ -76,7 +122,7 @@ fun CamXploitUI() {
             .background(Color.Black)
             .padding(16.dp)
     ) {
-        // Header
+        // Header with Actions
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -88,15 +134,20 @@ fun CamXploitUI() {
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
             )
-            Icon(
-                imageVector = Icons.Default.Refresh,
-                contentDescription = "Reset",
-                tint = Color.Cyan,
-                modifier = Modifier.size(24.dp)
-            )
+            Row {
+                IconButton(onClick = { terminalText = "> Console Cleared\n" }) {
+                    Icon(Icons.Default.Clear, "Clear", tint = Color.Gray)
+                }
+                IconButton(onClick = { saveContentToFile(context, terminalText, "CamXploit_Log", "txt") }) {
+                    Icon(Icons.Default.Info, "Save Log", tint = Color.Cyan)
+                }
+                IconButton(onClick = { captureScreenshot(context, view) }) {
+                    Icon(Icons.Default.Share, "Screenshot", tint = Color.Yellow)
+                }
+            }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         Text(
             text = "CAM-XPLOIT CONSOLE",
@@ -190,15 +241,17 @@ fun CamXploitUI() {
                 .border(1.dp, Color.Gray, RoundedCornerShape(4.dp)),
             color = Color.Black
         ) {
-            Text(
-                text = terminalText,
-                color = Color.Green,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-                modifier = Modifier
-                    .padding(8.dp)
-                    .verticalScroll(scrollState)
-            )
+            SelectionContainer {
+                Text(
+                    text = terminalText,
+                    color = Color.Green,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .padding(8.dp)
+                        .verticalScroll(scrollState)
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
