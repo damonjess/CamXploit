@@ -13,6 +13,7 @@ MERGED from [androidx.viewpager2:viewpager2:1.0.0] C:\Users\Damon\.gradle\caches
 MERGED from [androidx.fragment:fragment:1.5.4] C:\Users\Damon\.gradle\caches\transforms-3\d98d74bc42df7d0ca0825b567cafaa95\transformed\fragment-1.5.4\AndroidManifest.xml:17:1-24:12
 MERGED from [androidx.compose.material:material-ripple-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\2a0020fe86edf7c2fd27a7211b9b9c24\transformed\material-ripple-release\AndroidManifest.xml:2:1-7:12
 MERGED from [androidx.compose.material:material-icons-core-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\84fa9aebc5f53d633e6e6e3a8237fa14\transformed\material-icons-core-release\AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.compose.material:material-icons-extended-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\74c8a71ce53c3cdd119cf55d106dd66a\transformed\material-icons-extended-release\AndroidManifest.xml:2:1-7:12
 MERGED from [androidx.compose.material:material-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\c79cdcdcb52f93c9c9d66d80c8daf2bc\transformed\material-release\AndroidManifest.xml:2:1-7:12
 MERGED from [androidx.compose.animation:animation-core-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\cdc75f878a4e32b2dc2c9b808ae9bf9b\transformed\animation-core-release\AndroidManifest.xml:2:1-7:12
 MERGED from [androidx.compose.animation:animation-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\27b4b5f68a6c696d47646dd469cf5860\transformed\animation-release\AndroidManifest.xml:2:1-7:12
@@ -164,6 +165,8 @@ MERGED from [androidx.compose.material:material-ripple-android:1.5.0] C:\Users\D
 MERGED from [androidx.compose.material:material-ripple-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\2a0020fe86edf7c2fd27a7211b9b9c24\transformed\material-ripple-release\AndroidManifest.xml:5:5-44
 MERGED from [androidx.compose.material:material-icons-core-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\84fa9aebc5f53d633e6e6e3a8237fa14\transformed\material-icons-core-release\AndroidManifest.xml:5:5-44
 MERGED from [androidx.compose.material:material-icons-core-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\84fa9aebc5f53d633e6e6e3a8237fa14\transformed\material-icons-core-release\AndroidManifest.xml:5:5-44
+MERGED from [androidx.compose.material:material-icons-extended-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\74c8a71ce53c3cdd119cf55d106dd66a\transformed\material-icons-extended-release\AndroidManifest.xml:5:5-44
+MERGED from [androidx.compose.material:material-icons-extended-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\74c8a71ce53c3cdd119cf55d106dd66a\transformed\material-icons-extended-release\AndroidManifest.xml:5:5-44
 MERGED from [androidx.compose.material:material-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\c79cdcdcb52f93c9c9d66d80c8daf2bc\transformed\material-release\AndroidManifest.xml:5:5-44
 MERGED from [androidx.compose.material:material-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\c79cdcdcb52f93c9c9d66d80c8daf2bc\transformed\material-release\AndroidManifest.xml:5:5-44
 MERGED from [androidx.compose.animation:animation-core-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\cdc75f878a4e32b2dc2c9b808ae9bf9b\transformed\animation-core-release\AndroidManifest.xml:5:5-44

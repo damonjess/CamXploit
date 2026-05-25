@@ -1,7 +1,7 @@
 {
     "logs": [
         {
-            "outputFile": "com.spyboy.camxploit.app-mergeDebugResources-56:/values-es-rUS/values-es-rUS.xml",
+            "outputFile": "com.spyboy.camxploit.app-mergeDebugResources-57:/values-es-rUS/values-es-rUS.xml",
             "map": [
                 {
                     "source": "C:\\Users\\Damon\\.gradle\\caches\\transforms-3\\fdcbadbc2b7fff72c6bfc566c7cc7f4d\\transformed\\core-1.13.0\\res\\values-es-rUS\\values-es-rUS.xml",

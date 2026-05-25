@@ -154,21 +154,52 @@ def analyze_http_port(ip, port):
         return "", "Generic"
 
 def get_mac_vendor(ip):
+    """Attempts MAC lookup via ARP and identifies Vendor."""
+    mac = "Unknown"
+    vendor = "Unknown Vendor"
     try:
+        # Try to read ARP table
         with open("/proc/net/arp", "r") as f:
             for line in f:
                 if ip in line:
                     parts = line.split()
                     if len(parts) >= 4:
-                        return parts[3]
-    except: pass
-    return "Unknown"
+                        mac = parts[3]
+                        break
+
+        if mac != "Unknown" and mac != "00:00:00:00:00:00":
+            # Simple offline vendor check for top camera brands
+            prefix = mac.replace(":", "").upper()[:6]
+            vendors = {
+                "00408C": "Axis Communications", "00E04F": "Axis Communications",
+                "001DFA": "Hikvision", "BCAD28": "Hikvision", "4419B6": "Hikvision",
+                "000B5D": "Dahua Technology", "38AF29": "Dahua Technology",
+                "00075F": "Panasonic", "0080F0": "Panasonic",
+                "00032F": "Sony", "000ED9": "Sony",
+                "000747": "Bosch Security Systems",
+                "0002D1": "Vivotek", "0018AE": "Vivotek"
+            }
+            vendor = vendors.get(prefix, "Searching online...")
+
+            # Online fallback for more accuracy
+            if vendor == "Searching online...":
+                try:
+                    r = requests.get(f"https://api.macvendors.com/{mac}", timeout=2)
+                    if r.status_code == 200:
+                        vendor = r.text
+                except:
+                    vendor = "Unknown (API Timeout)"
+
+        return mac, vendor
+    except:
+        return "Unknown", "Restricted Access (Android 10+)"
 
 def scan_single_target(target_ip):
     print(f"\n{SCAN} Scanning target IP: {target_ip}")
-    mac = get_mac_vendor(target_ip)
+    mac, vendor = get_mac_vendor(target_ip)
     if mac != "Unknown":
         print(f"  {INFO} Hardware ID (MAC): {mac}")
+        print(f"  {INFO} Manufacturer: {vendor}")
 
     print(f"  {ALRT} Port Scan Depth: {len(COMMON_PORTS)} tactical ports...")
 
@@ -263,23 +294,64 @@ def scan_single_target(target_ip):
 def main(target_input=None):
     if not target_input: return
 
-    print(f"{SCAN} Initiating CamXploit Reconnaissance...")
+    print(f"{SCAN} Initiating CamVigil Reconnaissance...")
 
     targets = []
     try:
         if "/" in target_input:
-            print(f"{RADR} Expanding Range: {target_input}")
+            # CIDR notation (e.g., 192.168.1.0/24)
+            print(f"{RADR} Expanding CIDR Range: {target_input}")
             network = ipaddress.ip_network(target_input, strict=False)
             targets = [str(ip) for ip in network.hosts()]
-            print(f"  {INFO} Total Targets: {len(targets)}")
+        elif "-" in target_input:
+            # Range notation (e.g., 192.168.1.1-192.168.1.50 or 192.168.1.1-50)
+            print(f"{RADR} Expanding IP Range: {target_input}")
+            parts = target_input.split("-")
+            start_ip = ipaddress.ip_address(parts[0].strip())
+
+            if "." in parts[1]:
+                end_ip = ipaddress.ip_address(parts[1].strip())
+            else:
+                # Handle 192.168.1.1-50 format
+                start_str = str(start_ip)
+                prefix = start_str[:start_str.rfind(".") + 1]
+                end_ip = ipaddress.ip_address(prefix + parts[1].strip())
+
+            curr = start_ip
+            while curr <= end_ip:
+                targets.append(str(curr))
+                curr += 1
         else:
             targets = [target_input]
+
+        if len(targets) > 1:
+            print(f"  {INFO} Total Targets Identified: {len(targets)}")
+            print(f"  {ALRT} Large range detected. Fast discovery enabled.")
     except Exception as e:
-        print(f"{ERR} Error parsing target: {str(e)}")
+        print(f"{ERR} Error parsing target range: {str(e)}")
         return
 
     for ip in targets:
-        scan_single_target(ip)
+        # For ranges, we do a quick check first to see if the host is alive
+        if len(targets) > 1:
+            is_alive = False
+            # Quick check on common web/rtsp ports
+            for p in [80, 443, 554, 8080, 8000, 37777]:
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.settimeout(0.3)
+                        if s.connect_ex((ip, p)) == 0:
+                            is_alive = True
+                            break
+                except: pass
+
+            if is_alive:
+                scan_single_target(ip)
+            else:
+                # Just a small status line for skipped hosts to show progress
+                pass
+        else:
+            scan_single_target(ip)
 
     print(f"\n{DONE} ALL SCANS COMPLETE.")
 
