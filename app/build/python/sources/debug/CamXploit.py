@@ -705,6 +705,207 @@ def discover_onvif(target_ip):
     if not discovered:
         print(f"    {INFO} No active ONVIF services detected via standard probes.")
 
+def onvif_probe(target_ip, target_port=None):
+    """Lightweight ONVIF probe that works on Android via Chaquopy"""
+    import socket
+    import uuid
+
+    output = []
+    output.append("🔍 ONVIF Probe Started")
+    output.append("=" * 50)
+    output.append(f"📡 Target: {target_ip}")
+    output.append("")
+
+    # Ports to try
+    ports = [target_port] if target_port else [80, 8080, 8000, 8899, 8888, 2020]
+
+    # WS-Discovery multicast probe
+    ws_probe = f"""<?xml version="1.0" encoding="UTF-8"?>
+<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
+            xmlns:d="http://schemas.xmlsoap.org/ws/2004/08/discovery"
+            xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
+  <e:Header>
+    <w:MessageID>uuid:{uuid.uuid4()}</w:MessageID>
+    <w:To>urn:schemas-xmlsoap-org:ws:2004:08:discovery</w:To>
+    <w:Action>http://schemas.xmlsoap.org/ws/2004/08/discovery/Probe</w:Action>
+  </e:Header>
+  <e:Body>
+    <d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe>
+  </e:Body>
+</e:Envelope>"""
+
+    # Step 1: WS-Discovery UDP probe on port 3702
+    output.append("📡 Step 1: WS-Discovery UDP Probe (port 3702)...")
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(3)
+        sock.sendto(ws_probe.encode(), (target_ip, 3702))
+        data, _ = sock.recvfrom(4096)
+        resp = data.decode(errors='ignore')
+        output.append("  ✅ WS-Discovery Response received!")
+        if "NetworkVideoTransmitter" in resp:
+            output.append("  📷 Confirmed: NetworkVideoTransmitter (IP Camera)")
+        if "XAddr" in resp:
+            import re
+            xaddr = re.search(r"<[^>]*XAddr[^>]*>(.*?)</", resp)
+            if xaddr:
+                output.append(f"  🔗 Service URL: {xaddr.group(1).strip()}")
+        sock.close()
+    except socket.timeout:
+        output.append("  ⚠️ No WS-Discovery response (device may not support it)")
+        try: sock.close()
+        except: pass
+    except Exception as e:
+        output.append(f"  ❌ WS-Discovery failed: {type(e).__name__}")
+
+    output.append("")
+
+    # Step 2: HTTP ONVIF endpoint probe
+    output.append("📡 Step 2: Probing ONVIF HTTP endpoints...")
+
+    onvif_endpoints = [
+        "/onvif/device_service",
+        "/onvif/devices",
+        "/onvif/Media",
+        "/onvif/Events",
+        "/onvif/PTZ",
+        "/onvif/imaging",
+    ]
+
+    DEFAULT_CREDS = [
+        ("admin", "admin"), ("admin", "12345"), ("admin", ""),
+        ("admin", "password"), ("root", "root"), ("root", ""),
+        ("admin", "1234"), ("user", "user"), ("guest", "guest"),
+    ]
+
+    import urllib.request
+    import base64
+
+    found_endpoint = None
+    working_cred   = None
+
+    for port in ports:
+        for endpoint in onvif_endpoints:
+            url = f"http://{target_ip}:{port}{endpoint}"
+            try:
+                req = urllib.request.Request(url, method='GET')
+                with urllib.request.urlopen(req, timeout=2) as r:
+                    if r.status in [200, 400, 500]:
+                        output.append(f"  ✅ ONVIF endpoint alive: {url} (HTTP {r.status})")
+                        found_endpoint = (target_ip, port, endpoint)
+                        break
+            except urllib.error.HTTPError as e:
+                if e.code in [400, 401, 500]:
+                    output.append(f"  ✅ ONVIF endpoint responds: {url} (HTTP {e.code})")
+                    found_endpoint = (target_ip, port, endpoint)
+                    break
+            except:
+                pass
+        if found_endpoint:
+            break
+
+    if not found_endpoint:
+        output.append("  ⚠️ No standard ONVIF HTTP endpoints responded")
+
+    output.append("")
+
+    # Step 3: Credential test if endpoint found
+    if found_endpoint:
+        ip, port, ep = found_endpoint
+        output.append("🔐 Step 3: Testing Default Credentials...")
+
+        # ONVIF GetDeviceInformation SOAP request
+        soap_body = """<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
+  <s:Body>
+    <tds:GetDeviceInformation/>
+  </s:Body>
+</s:Envelope>"""
+
+        for user, pwd in DEFAULT_CREDS:
+            try:
+                url = f"http://{ip}:{port}{ep}"
+                credentials = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+                req = urllib.request.Request(
+                    url,
+                    data=soap_body.encode(),
+                    headers={
+                        'Content-Type': 'application/soap+xml',
+                        'Authorization': f'Basic {credentials}'
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=3) as r:
+                    resp_text = r.read().decode(errors='ignore')
+                    if "GetDeviceInformationResponse" in resp_text or r.status == 200:
+                        output.append(f"  🔥 CREDENTIALS WORK: {user}:{pwd}")
+                        working_cred = (user, pwd)
+
+                        # Extract device info from response
+                        import re
+                        for tag in ["Manufacturer", "Model", "FirmwareVersion", "SerialNumber"]:
+                            match = re.search(
+                                f"<[^>]*{tag}[^>]*>(.*?)<",
+                                resp_text, re.I
+                            )
+                            if match:
+                                output.append(f"  📋 {tag}: {match.group(1).strip()}")
+                        break
+            except:
+                pass
+
+        if not working_cred:
+            output.append("  ℹ️ No default credentials worked")
+            output.append("  (Device may use custom credentials or digest auth)")
+
+    output.append("")
+
+    # Step 4: GetProfiles if we have working creds
+    if working_cred and found_endpoint:
+        ip, port, ep = found_endpoint
+        user, pwd    = working_cred
+        output.append("📺 Step 4: Fetching Stream Profiles...")
+
+        profiles_soap = """<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
+  <s:Body><trt:GetProfiles/></s:Body>
+</s:Envelope>"""
+
+        try:
+            credentials = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+            media_url   = f"http://{ip}:{port}/onvif/Media"
+            req = urllib.request.Request(
+                media_url,
+                data=profiles_soap.encode(),
+                headers={
+                    'Content-Type': 'application/soap+xml',
+                    'Authorization': f'Basic {credentials}'
+                }
+            )
+            with urllib.request.urlopen(req, timeout=3) as r:
+                resp_text = r.read().decode(errors='ignore')
+                import re
+                tokens = re.findall(r'token="([^"]+)"', resp_text)
+                names  = re.findall(r'<[^>]*Name[^>]*>(.*?)<', resp_text)
+
+                if tokens:
+                    output.append(f"  ✅ Found {len(tokens)} stream profile(s):")
+                    for i, tok in enumerate(tokens):
+                        name = names[i] if i < len(names) else "Unknown"
+                        rtsp = f"rtsp://{user}:{pwd}@{ip}:554/onvif/profile{i}/media.smp"
+                        output.append(f"  📷 Profile {i+1}: {name} (token: {tok})")
+                        output.append(f"  🔗 RTSP: {rtsp}")
+                else:
+                    output.append("  ⚠️ No profiles found in response")
+        except Exception as e:
+            output.append(f"  ❌ Profile fetch failed: {type(e).__name__}")
+
+    output.append("")
+    output.append("✅ ONVIF Probe Complete")
+    return "\n".join(output)
+
 def scan_single_target(target_ip):
     print(f"\n{SCAN} Scanning target IP: {target_ip}")
     success_cred = None # Initialize to avoid UnboundLocalError

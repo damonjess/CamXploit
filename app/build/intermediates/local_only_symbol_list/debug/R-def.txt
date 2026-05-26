@@ -9,6 +9,15 @@ color teal_700
 color white
 drawable ic_launcher_background
 drawable ic_launcher_foreground
+id btnBack
+id btnRetry
+id btnSnapshot
+id playerView
+id tvStreamInfo
+id tvStreamStatus
+id tvStreamTitle
+id tvStreamUrl
+layout activity_stream_viewer
 mipmap ic_launcher
 mipmap ic_launcher_round
 string app_name

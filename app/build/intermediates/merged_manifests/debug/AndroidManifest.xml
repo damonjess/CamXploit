@@ -52,6 +52,11 @@
             </intent-filter>
         </activity>
         <activity
+            android:name="com.spyboy.camxploit.StreamViewerActivity"
+            android:configChanges="orientation|screenSize"
+            android:exported="false"
+            android:screenOrientation="fullSensor" />
+        <activity
             android:name="androidx.compose.ui.tooling.PreviewActivity"
             android:exported="true" />
         <activity

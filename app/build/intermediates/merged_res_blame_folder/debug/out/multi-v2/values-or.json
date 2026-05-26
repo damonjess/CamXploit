@@ -1,7 +1,7 @@
 {
     "logs": [
         {
-            "outputFile": "com.spyboy.camxploit.app-mergeDebugResources-57:/values-or/values-or.xml",
+            "outputFile": "com.spyboy.camxploit.app-mergeDebugResources-60:/values-or/values-or.xml",
             "map": [
                 {
                     "source": "C:\\Users\\Damon\\.gradle\\caches\\transforms-3\\c369eee2ec274166247e4aa35c9e5818\\transformed\\ui-release\\res\\values-or\\values-or.xml",

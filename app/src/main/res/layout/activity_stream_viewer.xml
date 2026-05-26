@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000"
+    android:orientation="vertical">
+
+    <!-- Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="12dp"
+        android:orientation="horizontal"
+        android:background="#1A1A1A">
+
+        <ImageButton
+            android:id="@+id/btnBack"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:src="@android:drawable/ic_media_previous"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            app:tint="#00FFFF"
+            android:contentDescription="Back"/>
+
+        <TextView
+            android:id="@+id/tvStreamTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_gravity="center_vertical"
+            android:layout_marginStart="8dp"
+            android:text="Live Stream"
+            android:textColor="#00FFFF"
+            android:textSize="16sp"
+            android:textStyle="bold"/>
+
+        <TextView
+            android:id="@+id/tvStreamStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_vertical"
+            android:text="● CONNECTING"
+            android:textColor="#FFA500"
+            android:textSize="12sp"/>
+    </LinearLayout>
+
+    <!-- Player -->
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/playerView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#000000"/>
+
+    <!-- Stream Info -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#1A1A1A"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:id="@+id/tvStreamUrl"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#888888"
+            android:textSize="11sp"
+            android:text="URL: —"/>
+
+        <TextView
+            android:id="@+id/tvStreamInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#888888"
+            android:textSize="11sp"
+            android:layout_marginTop="4dp"
+            android:text="Resolution: — | Codec: —"/>
+    </LinearLayout>
+
+    <!-- Controls -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#111111"
+        android:orientation="horizontal"
+        android:padding="8dp">
+
+        <Button
+            android:id="@+id/btnRetry"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:text="↺ Retry"
+            android:backgroundTint="#333333"
+            android:textColor="#FFFFFF"/>
+
+        <Button
+            android:id="@+id/btnSnapshot"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:text="📷 Snapshot"
+            android:backgroundTint="#00AA00"
+            android:textColor="#FFFFFF"/>
+    </LinearLayout>
+
+</LinearLayout>

@@ -1,22 +1,26 @@
 [
     {
-        "merged": "C:\\Users\\Damon\\.gradle\\daemon\\8.2\\com.spyboy.camxploit.app-merged_res-59:\\mipmap-anydpi-v26_ic_launcher.xml.flat",
-        "source": "C:\\Users\\Damon\\.gradle\\daemon\\8.2\\com.spyboy.camxploit.app-main-61:\\mipmap-anydpi-v26\\ic_launcher.xml"
+        "merged": "com.spyboy.camxploit.app-merged_res-62:/layout_activity_stream_viewer.xml.flat",
+        "source": "com.spyboy.camxploit.app-main-64:/layout/activity_stream_viewer.xml"
     },
     {
-        "merged": "com.spyboy.camxploit.app-merged_res-59:/xml_file_paths.xml.flat",
-        "source": "com.spyboy.camxploit.app-main-61:/xml/file_paths.xml"
+        "merged": "com.spyboy.camxploit.app-merged_res-62:/drawable_ic_launcher_background.xml.flat",
+        "source": "com.spyboy.camxploit.app-main-64:/drawable/ic_launcher_background.xml"
     },
     {
-        "merged": "C:\\Users\\Damon\\.gradle\\daemon\\8.2\\com.spyboy.camxploit.app-merged_res-59:\\drawable_ic_launcher_foreground.xml.flat",
-        "source": "C:\\Users\\Damon\\.gradle\\daemon\\8.2\\com.spyboy.camxploit.app-main-61:\\drawable\\ic_launcher_foreground.xml"
+        "merged": "com.spyboy.camxploit.app-merged_res-62:/xml_file_paths.xml.flat",
+        "source": "com.spyboy.camxploit.app-main-64:/xml/file_paths.xml"
     },
     {
-        "merged": "C:\\Users\\Damon\\.gradle\\daemon\\8.2\\com.spyboy.camxploit.app-merged_res-59:\\mipmap-anydpi-v26_ic_launcher_round.xml.flat",
-        "source": "C:\\Users\\Damon\\.gradle\\daemon\\8.2\\com.spyboy.camxploit.app-main-61:\\mipmap-anydpi-v26\\ic_launcher_round.xml"
+        "merged": "com.spyboy.camxploit.app-merged_res-62:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.spyboy.camxploit.app-main-64:/drawable/ic_launcher_foreground.xml"
     },
     {
-        "merged": "C:\\Users\\Damon\\.gradle\\daemon\\8.2\\com.spyboy.camxploit.app-merged_res-59:\\drawable_ic_launcher_background.xml.flat",
-        "source": "C:\\Users\\Damon\\.gradle\\daemon\\8.2\\com.spyboy.camxploit.app-main-61:\\drawable\\ic_launcher_background.xml"
+        "merged": "com.spyboy.camxploit.app-merged_res-62:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "com.spyboy.camxploit.app-main-64:/mipmap-anydpi-v26/ic_launcher.xml"
+    },
+    {
+        "merged": "com.spyboy.camxploit.app-merged_res-62:/mipmap-anydpi-v26_ic_launcher_round.xml.flat",
+        "source": "com.spyboy.camxploit.app-main-64:/mipmap-anydpi-v26/ic_launcher_round.xml"
     }
 ]

@@ -40,6 +40,7 @@ import com.chaquo.python.android.AndroidPlatform
 import kotlinx.coroutines.*
 import android.content.ClipboardManager
 import android.content.ClipData
+import androidx.media3.common.util.UnstableApi
 import org.json.JSONObject
 import org.json.JSONArray
 import androidx.compose.foundation.BorderStroke
@@ -61,6 +62,7 @@ import java.util.*
 import java.net.URL
 import android.net.wifi.WifiManager
 
+@OptIn(UnstableApi::class)
 class MainActivity : ComponentActivity() {
     private var multicastLock: WifiManager.MulticastLock? = null
 
@@ -382,21 +384,14 @@ fun CamGuardianApp() {
                         }
                     },
                     onStreamSelect = { url, type ->
-                        selectedStreamUrl = url
-                        selectedStreamType = type
-                        
-                        // Parse credentials from terminalText if they exist
-                        // Look for: "CRACKED (HTTP): admin:password"
-                        val credMatch = Regex("""CRACKED \(HTTP\): ([^:]+):([^ ]+)""").find(terminalText)
-                        if (credMatch != null) {
-                            detectedUsername = credMatch.groupValues[1]
-                            detectedPassword = credMatch.groupValues[2]
+                        if (type.contains("SNAPSHOT")) {
+                            selectedStreamUrl = url
+                            selectedStreamType = type
+                            showLiveView = true
                         } else {
-                            detectedUsername = ""
-                            detectedPassword = ""
+                            val ip = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").find(url)?.value ?: ipInput
+                            StreamViewerActivity.launch(context, url, ip)
                         }
-                        
-                        showLiveView = true
                     }
                 )
                 1 -> IntelTab(terminalText, {
@@ -445,7 +440,7 @@ fun CamGuardianApp() {
                 }, { url ->
                     activeStreamUrl = url
                 })
-                2 -> ArchiveTab(context) { file -> viewingFile = file }
+                2 -> ArchiveTab(context, selectedTab) { file -> viewingFile = file }
                 3 -> LanScannerTab(onScanComplete = { result -> lanScanResult = result })
             }
 
@@ -726,44 +721,231 @@ fun ConsoleTab(
 }
 
 @Composable
-fun IntelTab(terminalText: String, onCaptureSnapshot: () -> Unit, onPreviewStream: (String) -> Unit) {
-    val streams = terminalText.lines().filter { it.contains("http") || it.contains("rtsp") }
-    val vulns = terminalText.lines().filter { it.contains("VULNERABILITY") || it.contains("CRITICAL") || it.contains("FIRE") }
+fun IntelTab(
+    terminalText: String,
+    onCaptureSnapshot: () -> Unit,
+    onPreviewStream: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val scope   = rememberCoroutineScope()
+
+    var onvifOutput  by remember { mutableStateOf("") }
+    var onvifRunning by remember { mutableStateOf(false) }
+    var showOnvifResult by remember { mutableStateOf(false) }
+
+    val streams    = terminalText.lines().filter { it.contains("http") || it.contains("rtsp") }
+    val vulns      = terminalText.lines().filter { it.contains("VULNERABILITY") || it.contains("CRITICAL") || it.contains("FIRE") }
     val deviceInfo = terminalText.lines().filter { it.contains("Model:") || it.contains("Firmware:") || it.contains("Manufacturer:") }
+
+    // Pull target IP from last scan
+    val targetIp = remember(terminalText) {
+        Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").find(terminalText)?.value ?: ""
+    }
 
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
         Text("CATEGORIZED INTEL", color = Color.Cyan, fontWeight = FontWeight.Bold, fontSize = 14.sp)
         Spacer(modifier = Modifier.height(12.dp))
-        
-        IntelSection("STREAMS FOUND", streams, Color.Green, Icons.Default.Videocam, onPreviewStream)
-        IntelSection("SECURITY VULNERABILITIES", vulns, Color.Red, Icons.Default.ReportProblem, onPreviewStream)
-        IntelSection("DEVICE HARDWARE INFO", deviceInfo, Color.Cyan, Icons.Default.Info, onPreviewStream)
-        
+
+        IntelSection("STREAMS FOUND",           streams,    Color.Green, Icons.Default.Videocam,       onPreviewStream)
+        IntelSection("SECURITY VULNERABILITIES", vulns,      Color.Red,   Icons.Default.ReportProblem,  onPreviewStream)
+        IntelSection("DEVICE HARDWARE INFO",     deviceInfo, Color.Cyan,  Icons.Default.Info,           onPreviewStream)
+
         Spacer(modifier = Modifier.height(20.dp))
         Text("QUICK ACTIONS", color = Color.Cyan, fontWeight = FontWeight.Bold, fontSize = 14.sp)
         Spacer(modifier = Modifier.height(12.dp))
-        
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+
+        // Target display
+        if (targetIp.isNotEmpty()) {
+            Text(
+                "Target: $targetIp",
+                color = Color.Gray,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+        } else {
+            Text(
+                "⚠️ No target found — run a Console scan first",
+                color = Color.Yellow,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             Button(
-                onClick = { /* In a real app, this would trigger a specific ONVIF probe */ },
+                onClick = {
+                    if (targetIp.isEmpty()) {
+                        Toast.makeText(context, "Run a scan first to set a target", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+                    onvifRunning    = true
+                    showOnvifResult = true
+                    onvifOutput     = "🔍 Probing $targetIp for ONVIF services...\n"
+
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            val py     = Python.getInstance()
+                            val module = py.getModule("CamXploit")
+                            val result = module.callAttr("onvif_probe", targetIp).toString()
+                            withContext(Dispatchers.Main) {
+                                onvifOutput  = result
+                                onvifRunning = false
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                onvifOutput  = "❌ ONVIF probe error: ${e.message}"
+                                onvifRunning = false
+                            }
+                        }
+                    }
+                },
+                enabled  = !onvifRunning,
                 modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333)),
+                colors   = ButtonDefaults.buttonColors(
+                    containerColor = if (onvifRunning) Color.DarkGray else Color(0xFF333333)
+                ),
                 shape = RoundedCornerShape(4.dp)
             ) {
-                Text("TEST ONVIF", fontSize = 10.sp)
+                if (onvifRunning) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        color = Color.Cyan,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(if (onvifRunning) "PROBING..." else "TEST ONVIF", fontSize = 10.sp)
             }
+
             Button(
-                onClick = onCaptureSnapshot,
+                onClick  = onCaptureSnapshot,
                 modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20)),
-                shape = RoundedCornerShape(4.dp)
+                colors   = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20)),
+                shape    = RoundedCornerShape(4.dp)
             ) {
                 Text("CAPTURE SNAP", fontSize = 10.sp)
             }
         }
-        
+
+        // ONVIF result output box
+        if (showOnvifResult && onvifOutput.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors   = CardDefaults.cardColors(containerColor = Color(0xFF050505)),
+                border   = BorderStroke(1.dp, Color(0xFF00AAAA))
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "ONVIF PROBE RESULTS",
+                            color = Color.Cyan,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                        Row {
+                            // Copy result button
+                            IconButton(
+                                onClick = {
+                                    val clipboard = context.getSystemService(
+                                        Context.CLIPBOARD_SERVICE
+                                    ) as ClipboardManager
+                                    clipboard.setPrimaryClip(
+                                        ClipData.newPlainText("ONVIF Result", onvifOutput)
+                                    )
+                                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.ContentCopy, null,
+                                    tint = Color.Gray,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            // Dismiss button
+                            IconButton(
+                                onClick = { showOnvifResult = false },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Close, null,
+                                    tint = Color.Gray,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    SelectionContainer {
+                        Text(
+                            text       = onvifOutput,
+                            color      = if (onvifOutput.contains("CREDENTIALS WORK"))
+                                             Color(0xFF00FF41)
+                                         else Color.LightGray,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize   = 11.sp,
+                            lineHeight = 16.sp,
+                            modifier   = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 400.dp)
+                                .verticalScroll(rememberScrollState())
+                        )
+                    }
+
+                    // If RTSP links found in result, show launch buttons
+                    val rtspLinks = onvifOutput.lines()
+                        .filter { it.contains("🔗 RTSP:") }
+                        .map { it.substringAfter("🔗 RTSP:").trim() }
+
+                    if (rtspLinks.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("DETECTED STREAMS:", color = Color.Cyan, fontSize = 11.sp)
+                        rtspLinks.forEach { url ->
+                            Button(
+                                onClick = {
+                                    StreamViewerActivity.launch(context, url, targetIp)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF003300)
+                                )
+                            ) {
+                                Icon(
+                                    Icons.Default.Videocam, null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    url.take(45) + if (url.length > 45) "..." else "",
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (terminalText.isEmpty()) {
-            Text("No intel collected yet. Start a scan first.", color = Color.Gray, modifier = Modifier.padding(20.dp))
+            Text(
+                "No intel collected yet. Start a scan first.",
+                color = Color.Gray,
+                modifier = Modifier.padding(20.dp)
+            )
         }
     }
 }
@@ -822,60 +1004,229 @@ fun IntelSection(
 }
 
 @Composable
-fun ArchiveTab(context: Context, onFileClick: (File) -> Unit) {
+fun ArchiveTab(context: Context, selectedTab: Int, onFileClick: (File) -> Unit) {
     var refreshTrigger by remember { mutableIntStateOf(0) }
+
+    // Auto-refresh whenever Archive tab is opened
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == 2) refreshTrigger++
+    }
+
     val files = remember(refreshTrigger) {
         val docDir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
         val picDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
-        
         val allFiles = mutableListOf<File>()
         docDir?.listFiles()?.let { allFiles.addAll(it) }
         picDir?.listFiles()?.let { allFiles.addAll(it) }
-        
         allFiles.sortedByDescending { it.lastModified() }
     }
 
     Column {
-        Text("SAVED REPORTS & LOGS", color = Color.Yellow, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "SAVED REPORTS & LOGS",
+                color = Color.Yellow,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
+            // Manual refresh button
+            IconButton(onClick = { refreshTrigger++ }) {
+                Icon(Icons.Default.Refresh, "Refresh", tint = Color.Cyan)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // Stats bar
+        val snapCount   = files.count { it.extension == "jpg" || it.extension == "png" }
+        val reportCount = files.count { it.extension == "html" || it.extension == "json" }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("📷 $snapCount snapshots",  color = Color.Gray, fontSize = 11.sp)
+            Text("📄 $reportCount reports",  color = Color.Gray, fontSize = 11.sp)
+            Text("📁 ${files.size} total",   color = Color.Gray, fontSize = 11.sp)
+        }
+
         Spacer(modifier = Modifier.height(12.dp))
-        
+
         if (files.isEmpty()) {
-            Text("No reports found in archive.", color = Color.DarkGray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(20.dp))
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(40.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.FolderOpen,
+                        null,
+                        tint = Color.DarkGray,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "No reports found in archive.",
+                        color = Color.DarkGray,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        "Run a scan or capture a snapshot to populate.",
+                        color = Color.DarkGray,
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
         } else {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 files.forEach { file ->
-                    Row(
+                    val isImage = file.extension in listOf("jpg", "jpeg", "png")
+                    val isSnap  = file.name.contains("Snap") || file.name.contains("Capture")
+
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 6.dp)
-                            .border(1.dp, Color(0xFF111111), RoundedCornerShape(4.dp))
-                            .background(Color(0xFF080808))
-                            .clickable { onFileClick(file) }
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(vertical = 4.dp)
+                            .clickable { onFileClick(file) },
+                        colors = CardDefaults.cardColors(
+                            containerColor = when {
+                                isSnap  -> Color(0xFF0A1A0A)  // green tint for snapshots
+                                else    -> Color(0xFF080808)
+                            }
+                        ),
+                        border = BorderStroke(
+                            1.dp,
+                            when {
+                                isSnap  -> Color(0xFF1A3A1A)
+                                else    -> Color(0xFF111111)
+                            }
+                        ),
+                        shape = RoundedCornerShape(4.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(file.name, color = Color.White, fontSize = 13.sp, maxLines = 1)
-                            Text(SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault()).format(Date(file.lastModified())), color = Color.Gray, fontSize = 10.sp)
-                        }
-                        
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { openFile(context, file) }, modifier = Modifier.size(32.dp)) {
-                                Icon(
-                                    imageVector = if (file.extension == "png") Icons.Default.Image else Icons.Default.OpenInNew,
-                                    contentDescription = "Open", 
-                                    tint = Color.Green, 
-                                    modifier = Modifier.size(18.dp)
-                                )
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Thumbnail or icon
+                            Box(
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .background(Color(0xFF111111), RoundedCornerShape(4.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isImage) {
+                                    val bitmap = remember(file.absolutePath) {
+                                        try {
+                                            val opts = BitmapFactory.Options().apply {
+                                                inSampleSize = 4  // downsample for thumbnail
+                                            }
+                                            BitmapFactory.decodeFile(file.absolutePath, opts)
+                                        } catch (_: Exception) { null }
+                                    }
+                                    if (bitmap != null) {
+                                        Image(
+                                            bitmap = bitmap.asImageBitmap(),
+                                            contentDescription = null,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    } else {
+                                        Icon(Icons.Default.BrokenImage, null, tint = Color.Gray)
+                                    }
+                                } else {
+                                    Icon(
+                                        imageVector = when (file.extension) {
+                                            "html" -> Icons.Default.Code
+                                            "json" -> Icons.Default.DataObject
+                                            else   -> Icons.Default.Description
+                                        },
+                                        contentDescription = null,
+                                        tint = when (file.extension) {
+                                            "html" -> Color.Cyan
+                                            "json" -> Color.Yellow
+                                            else   -> Color.Gray
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
                             }
-                            IconButton(onClick = { shareFile(context, file) }, modifier = Modifier.size(32.dp)) {
-                                Icon(Icons.Default.Share, "Share", tint = Color.Cyan, modifier = Modifier.size(18.dp))
+
+                            Spacer(Modifier.width(10.dp))
+
+                            // File info
+                            Column(modifier = Modifier.weight(1f)) {
+                                // Badge + name
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (isSnap) {
+                                        Text(
+                                            "📷 SNAP",
+                                            color = Color.Green,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier
+                                                .background(Color(0xFF003300), RoundedCornerShape(3.dp))
+                                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                    }
+                                    Text(
+                                        file.name,
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        maxLines = 1
+                                    )
+                                }
+                                Spacer(Modifier.height(2.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
+                                            .format(Date(file.lastModified())),
+                                        color = Color.Gray,
+                                        fontSize = 10.sp
+                                    )
+                                    Text(
+                                        formatFileSize(file.length()),
+                                        color = Color.DarkGray,
+                                        fontSize = 10.sp
+                                    )
+                                }
                             }
-                            IconButton(onClick = { 
-                                if (file.delete()) refreshTrigger++
-                            }, modifier = Modifier.size(32.dp)) {
-                                Icon(Icons.Default.Delete, "Delete", tint = Color.Red, modifier = Modifier.size(18.dp))
+
+                            // Action buttons
+                            Row {
+                                IconButton(
+                                    onClick = { openFile(context, file) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isImage) Icons.Default.Image
+                                                      else Icons.Default.OpenInNew,
+                                        contentDescription = "Open",
+                                        tint = Color.Green,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { shareFile(context, file) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Share, "Share",
+                                        tint = Color.Cyan,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { if (file.delete()) refreshTrigger++ },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete, "Delete",
+                                        tint = Color.Red,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -883,6 +1234,13 @@ fun ArchiveTab(context: Context, onFileClick: (File) -> Unit) {
             }
         }
     }
+}
+
+// Add this helper anywhere in the file
+fun formatFileSize(bytes: Long): String = when {
+    bytes < 1024        -> "${bytes}B"
+    bytes < 1024 * 1024 -> "${"%.1f".format(bytes / 1024.0)}KB"
+    else                -> "${"%.1f".format(bytes / (1024.0 * 1024))}MB"
 }
 
 @Composable
