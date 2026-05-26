@@ -59,8 +59,11 @@ import androidx.compose.foundation.Image
 import java.text.SimpleDateFormat
 import java.util.*
 import java.net.URL
+import android.net.wifi.WifiManager
 
 class MainActivity : ComponentActivity() {
+    private var multicastLock: WifiManager.MulticastLock? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (!Python.isStarted()) {
@@ -889,47 +892,125 @@ fun LanScannerTab(onScanComplete: (String) -> Unit) {
     var scanOutput by remember { mutableStateOf("Ready to scan local network...") }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        val context = LocalContext.current
+        val scanner = remember { LanScanner(context) }
         Text("🔍 LAN Scanner", color = Color.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text("Discover devices on your local network", color = Color.Gray)
 
         Spacer(modifier = Modifier.height(20.dp))
 
+        // First Row: Python Scans
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    isScanning = true
+                    scanOutput = "Scanning network...\nThis may take 10-20 seconds."
+
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            val py = Python.getInstance()
+                            val module = py.getModule("CamXploit")
+                            val pyFunc = module.get("lan_scan")
+
+                            if (pyFunc != null) {
+                                val result = pyFunc.call()
+                                val output = result?.toString() ?: "Scan completed but returned no output."
+                                withContext(Dispatchers.Main) {
+                                    scanOutput = output
+                                    isScanning = false
+                                }
+                            } else {
+                                withContext(Dispatchers.Main) {
+                                    scanOutput = "Error: lan_scan() function not found in Python file."
+                                    isScanning = false
+                                }
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                scanOutput = "Error during scan: ${e.message}"
+                                isScanning = false
+                            }
+                        }
+                    }
+                },
+                enabled = !isScanning,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(if (isScanning) "Scanning..." else "Port Scan", fontSize = 11.sp)
+            }
+
+            Button(
+                onClick = {
+                    isScanning = true
+                    scanOutput = "Broadcasting SSDP M-SEARCH...\nDiscovering UPnP devices..."
+
+                    scope.launch(Dispatchers.IO) {
+                        var lock: WifiManager.MulticastLock? = null
+                        try {
+                            // Acquire Multicast Lock
+                            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                            lock = wifiManager.createMulticastLock("ssdp_scan")
+                            lock.setReferenceCounted(true)
+                            lock.acquire()
+
+                            val py = Python.getInstance()
+                            val module = py.getModule("CamXploit")
+                            val result = module.callAttr("discover_upnp_ssdp").toString()
+
+                            withContext(Dispatchers.Main) {
+                                scanOutput = result
+                                onScanComplete(result)
+                                isScanning = false
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                scanOutput = "Error during UPnP scan: ${e.message}"
+                                isScanning = false
+                            }
+                        } finally {
+                            lock?.let {
+                                if (it.isHeld) it.release()
+                            }
+                        }
+                    }
+                },
+                enabled = !isScanning,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE))
+            ) {
+                Text(if (isScanning) "Searching..." else "UPnP Scan", fontSize = 11.sp)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Second Row: Native Kotlin Scan
         Button(
             onClick = {
                 isScanning = true
-                scanOutput = "Scanning network...\nThis may take 10-20 seconds."
-
-                scope.launch(Dispatchers.IO) {
-                    try {
-                        val py = Python.getInstance()
-                        val module = py.getModule("CamXploit")
-                        val pyFunc = module.get("lan_scan")
-                        
-                        if (pyFunc != null) {
-                            val result = pyFunc.call()
-                            val output = result?.toString() ?: "Scan completed but returned no output."
-                            withContext(Dispatchers.Main) {
-                                scanOutput = output
-                                isScanning = false
-                            }
-                        } else {
-                            withContext(Dispatchers.Main) {
-                                scanOutput = "Error: lan_scan() function not found in Python file."
-                                isScanning = false
-                            }
-                        }
-                    } catch (e: Exception) {
-                        withContext(Dispatchers.Main) {
-                            scanOutput = "Error during scan: ${e.message}"
-                            isScanning = false
-                        }
-                    }
+                val outputLines = StringBuilder()
+                scanOutput = "Starting Native Scan..."
+                
+                scope.launch(Dispatchers.Main) {
+                    scanner.scanNetwork(
+                        onProgress = { line ->
+                            outputLines.appendLine(line)
+                            scanOutput = outputLines.toString()
+                        },
+                        onDeviceFound = { /* Optional: handle device list */ }
+                    )
+                    outputLines.appendLine("\n✅ Scan complete")
+                    scanOutput = outputLines.toString()
+                    isScanning = false
                 }
             },
             enabled = !isScanning,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20))
         ) {
-            Text(if (isScanning) "Scanning..." else "Start LAN Scan")
+            Icon(Icons.Default.Dns, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(if (isScanning) "Scanning..." else "Deep Native Scan (Faster)")
         }
 
         Spacer(modifier = Modifier.height(16.dp))

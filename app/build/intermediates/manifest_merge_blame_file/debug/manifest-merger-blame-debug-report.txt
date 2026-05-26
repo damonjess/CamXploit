@@ -11,153 +11,162 @@
 11    <uses-permission android:name="android.permission.INTERNET" />
 11-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:4:5-67
 11-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:4:22-64
-12
-13    <permission
-13-->[androidx.core:core:1.13.0] C:\Users\Damon\.gradle\caches\transforms-3\fdcbadbc2b7fff72c6bfc566c7cc7f4d\transformed\core-1.13.0\AndroidManifest.xml:22:5-24:47
-14        android:name="com.spyboy.camxploit.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
-14-->[androidx.core:core:1.13.0] C:\Users\Damon\.gradle\caches\transforms-3\fdcbadbc2b7fff72c6bfc566c7cc7f4d\transformed\core-1.13.0\AndroidManifest.xml:23:9-81
-15        android:protectionLevel="signature" />
-15-->[androidx.core:core:1.13.0] C:\Users\Damon\.gradle\caches\transforms-3\fdcbadbc2b7fff72c6bfc566c7cc7f4d\transformed\core-1.13.0\AndroidManifest.xml:24:9-44
-16
-17    <uses-permission android:name="com.spyboy.camxploit.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
-17-->[androidx.core:core:1.13.0] C:\Users\Damon\.gradle\caches\transforms-3\fdcbadbc2b7fff72c6bfc566c7cc7f4d\transformed\core-1.13.0\AndroidManifest.xml:26:5-97
-17-->[androidx.core:core:1.13.0] C:\Users\Damon\.gradle\caches\transforms-3\fdcbadbc2b7fff72c6bfc566c7cc7f4d\transformed\core-1.13.0\AndroidManifest.xml:26:22-94
-18
-19    <application
-19-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:6:5-34:19
-20        android:allowBackup="true"
-20-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:7:9-35
-21        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
-21-->[androidx.core:core:1.13.0] C:\Users\Damon\.gradle\caches\transforms-3\fdcbadbc2b7fff72c6bfc566c7cc7f4d\transformed\core-1.13.0\AndroidManifest.xml:28:18-86
-22        android:debuggable="true"
-23        android:extractNativeLibs="false"
-24        android:icon="@mipmap/ic_launcher"
-24-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:8:9-43
-25        android:label="CamVigil"
-25-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:9:9-33
-26        android:roundIcon="@mipmap/ic_launcher_round"
-26-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:10:9-54
-27        android:supportsRtl="true"
-27-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:11:9-35
-28        android:testOnly="true"
-29        android:theme="@style/Theme.CamXploit"
-29-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:12:9-47
-30        android:usesCleartextTraffic="true" >
-30-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:13:9-44
-31        <provider
-32            android:name="androidx.core.content.FileProvider"
-32-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:16:13-62
-33            android:authorities="com.spyboy.camxploit.fileprovider"
-33-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:17:13-64
-34            android:exported="false"
-34-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:18:13-37
-35            android:grantUriPermissions="true" >
-35-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:19:13-47
-36            <meta-data
-36-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:20:13-22:54
-37                android:name="android.support.FILE_PROVIDER_PATHS"
-37-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:21:17-67
-38                android:resource="@xml/file_paths" />
-38-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:22:17-51
-39        </provider>
-40
-41        <activity
-41-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:25:9-33:20
-42            android:name="com.spyboy.camxploit.MainActivity"
-42-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:26:13-41
-43            android:exported="true"
-43-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:27:13-36
-44            android:theme="@style/Theme.CamXploit" >
-44-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:28:13-51
-45            <intent-filter>
-45-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:29:13-32:29
-46                <action android:name="android.intent.action.MAIN" />
-46-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:30:17-69
-46-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:30:25-66
-47
-48                <category android:name="android.intent.category.LAUNCHER" />
-48-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:31:17-77
-48-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:31:27-74
-49            </intent-filter>
-50        </activity>
-51        <activity
-51-->[androidx.compose.ui:ui-tooling-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\289618df6db35c41618b6bec2d62fc0f\transformed\ui-tooling-release\AndroidManifest.xml:23:9-25:39
-52            android:name="androidx.compose.ui.tooling.PreviewActivity"
-52-->[androidx.compose.ui:ui-tooling-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\289618df6db35c41618b6bec2d62fc0f\transformed\ui-tooling-release\AndroidManifest.xml:24:13-71
-53            android:exported="true" />
-53-->[androidx.compose.ui:ui-tooling-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\289618df6db35c41618b6bec2d62fc0f\transformed\ui-tooling-release\AndroidManifest.xml:25:13-36
+12    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+12-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:5:5-75
+12-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:5:22-73
+13    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+13-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:6:5-78
+13-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:6:22-76
+14    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+14-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:7:5-85
+14-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:7:22-83
+15
+16    <permission
+16-->[androidx.core:core:1.13.0] C:\Users\Damon\.gradle\caches\transforms-3\fdcbadbc2b7fff72c6bfc566c7cc7f4d\transformed\core-1.13.0\AndroidManifest.xml:22:5-24:47
+17        android:name="com.spyboy.camxploit.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+17-->[androidx.core:core:1.13.0] C:\Users\Damon\.gradle\caches\transforms-3\fdcbadbc2b7fff72c6bfc566c7cc7f4d\transformed\core-1.13.0\AndroidManifest.xml:23:9-81
+18        android:protectionLevel="signature" />
+18-->[androidx.core:core:1.13.0] C:\Users\Damon\.gradle\caches\transforms-3\fdcbadbc2b7fff72c6bfc566c7cc7f4d\transformed\core-1.13.0\AndroidManifest.xml:24:9-44
+19
+20    <uses-permission android:name="com.spyboy.camxploit.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+20-->[androidx.core:core:1.13.0] C:\Users\Damon\.gradle\caches\transforms-3\fdcbadbc2b7fff72c6bfc566c7cc7f4d\transformed\core-1.13.0\AndroidManifest.xml:26:5-97
+20-->[androidx.core:core:1.13.0] C:\Users\Damon\.gradle\caches\transforms-3\fdcbadbc2b7fff72c6bfc566c7cc7f4d\transformed\core-1.13.0\AndroidManifest.xml:26:22-94
+21
+22    <application
+22-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:9:5-37:19
+23        android:allowBackup="true"
+23-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:10:9-35
+24        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+24-->[androidx.core:core:1.13.0] C:\Users\Damon\.gradle\caches\transforms-3\fdcbadbc2b7fff72c6bfc566c7cc7f4d\transformed\core-1.13.0\AndroidManifest.xml:28:18-86
+25        android:debuggable="true"
+26        android:extractNativeLibs="false"
+27        android:icon="@mipmap/ic_launcher"
+27-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:11:9-43
+28        android:label="CamVigil"
+28-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:12:9-33
+29        android:roundIcon="@mipmap/ic_launcher_round"
+29-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:13:9-54
+30        android:supportsRtl="true"
+30-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:14:9-35
+31        android:testOnly="true"
+32        android:theme="@style/Theme.CamXploit"
+32-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:15:9-47
+33        android:usesCleartextTraffic="true" >
+33-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:16:9-44
+34        <provider
+35            android:name="androidx.core.content.FileProvider"
+35-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:19:13-62
+36            android:authorities="com.spyboy.camxploit.fileprovider"
+36-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:20:13-64
+37            android:exported="false"
+37-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:21:13-37
+38            android:grantUriPermissions="true" >
+38-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:22:13-47
+39            <meta-data
+39-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:23:13-25:54
+40                android:name="android.support.FILE_PROVIDER_PATHS"
+40-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:24:17-67
+41                android:resource="@xml/file_paths" />
+41-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:25:17-51
+42        </provider>
+43
+44        <activity
+44-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:28:9-36:20
+45            android:name="com.spyboy.camxploit.MainActivity"
+45-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:29:13-41
+46            android:exported="true"
+46-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:30:13-36
+47            android:theme="@style/Theme.CamXploit" >
+47-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:31:13-51
+48            <intent-filter>
+48-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:32:13-35:29
+49                <action android:name="android.intent.action.MAIN" />
+49-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:33:17-69
+49-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:33:25-66
+50
+51                <category android:name="android.intent.category.LAUNCHER" />
+51-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:34:17-77
+51-->C:\Users\Damon\Documents\GitHub\CamXploit\app\src\main\AndroidManifest.xml:34:27-74
+52            </intent-filter>
+53        </activity>
 54        <activity
-54-->[androidx.compose.ui:ui-test-manifest:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\06dd20abc4e8802a62c62064e78bb079\transformed\ui-test-manifest-1.5.0\AndroidManifest.xml:23:9-25:39
-55            android:name="androidx.activity.ComponentActivity"
-55-->[androidx.compose.ui:ui-test-manifest:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\06dd20abc4e8802a62c62064e78bb079\transformed\ui-test-manifest-1.5.0\AndroidManifest.xml:24:13-63
+54-->[androidx.compose.ui:ui-tooling-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\289618df6db35c41618b6bec2d62fc0f\transformed\ui-tooling-release\AndroidManifest.xml:23:9-25:39
+55            android:name="androidx.compose.ui.tooling.PreviewActivity"
+55-->[androidx.compose.ui:ui-tooling-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\289618df6db35c41618b6bec2d62fc0f\transformed\ui-tooling-release\AndroidManifest.xml:24:13-71
 56            android:exported="true" />
-56-->[androidx.compose.ui:ui-test-manifest:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\06dd20abc4e8802a62c62064e78bb079\transformed\ui-test-manifest-1.5.0\AndroidManifest.xml:25:13-36
-57
-58        <provider
-58-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:24:9-32:20
-59            android:name="androidx.startup.InitializationProvider"
-59-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:25:13-67
-60            android:authorities="com.spyboy.camxploit.androidx-startup"
-60-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:26:13-68
-61            android:exported="false" >
-61-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:27:13-37
-62            <meta-data
-62-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:29:13-31:52
-63                android:name="androidx.emoji2.text.EmojiCompatInitializer"
-63-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:30:17-75
-64                android:value="androidx.startup" />
-64-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:31:17-49
+56-->[androidx.compose.ui:ui-tooling-android:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\289618df6db35c41618b6bec2d62fc0f\transformed\ui-tooling-release\AndroidManifest.xml:25:13-36
+57        <activity
+57-->[androidx.compose.ui:ui-test-manifest:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\06dd20abc4e8802a62c62064e78bb079\transformed\ui-test-manifest-1.5.0\AndroidManifest.xml:23:9-25:39
+58            android:name="androidx.activity.ComponentActivity"
+58-->[androidx.compose.ui:ui-test-manifest:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\06dd20abc4e8802a62c62064e78bb079\transformed\ui-test-manifest-1.5.0\AndroidManifest.xml:24:13-63
+59            android:exported="true" />
+59-->[androidx.compose.ui:ui-test-manifest:1.5.0] C:\Users\Damon\.gradle\caches\transforms-3\06dd20abc4e8802a62c62064e78bb079\transformed\ui-test-manifest-1.5.0\AndroidManifest.xml:25:13-36
+60
+61        <provider
+61-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:24:9-32:20
+62            android:name="androidx.startup.InitializationProvider"
+62-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:25:13-67
+63            android:authorities="com.spyboy.camxploit.androidx-startup"
+63-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:26:13-68
+64            android:exported="false" >
+64-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:27:13-37
 65            <meta-data
-65-->[androidx.lifecycle:lifecycle-process:2.7.0] C:\Users\Damon\.gradle\caches\transforms-3\702417531b0af5c848d0d79276ab2207\transformed\lifecycle-process-2.7.0\AndroidManifest.xml:29:13-31:52
-66                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
-66-->[androidx.lifecycle:lifecycle-process:2.7.0] C:\Users\Damon\.gradle\caches\transforms-3\702417531b0af5c848d0d79276ab2207\transformed\lifecycle-process-2.7.0\AndroidManifest.xml:30:17-78
+65-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:29:13-31:52
+66                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+66-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:30:17-75
 67                android:value="androidx.startup" />
-67-->[androidx.lifecycle:lifecycle-process:2.7.0] C:\Users\Damon\.gradle\caches\transforms-3\702417531b0af5c848d0d79276ab2207\transformed\lifecycle-process-2.7.0\AndroidManifest.xml:31:17-49
+67-->[androidx.emoji2:emoji2:1.4.0] C:\Users\Damon\.gradle\caches\transforms-3\a3748eb6e5f8005c35cfe4724f038350\transformed\emoji2-1.4.0\AndroidManifest.xml:31:17-49
 68            <meta-data
-68-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:29:13-31:52
-69                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
-69-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:30:17-85
+68-->[androidx.lifecycle:lifecycle-process:2.7.0] C:\Users\Damon\.gradle\caches\transforms-3\702417531b0af5c848d0d79276ab2207\transformed\lifecycle-process-2.7.0\AndroidManifest.xml:29:13-31:52
+69                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+69-->[androidx.lifecycle:lifecycle-process:2.7.0] C:\Users\Damon\.gradle\caches\transforms-3\702417531b0af5c848d0d79276ab2207\transformed\lifecycle-process-2.7.0\AndroidManifest.xml:30:17-78
 70                android:value="androidx.startup" />
-70-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:31:17-49
-71        </provider>
-72
-73        <receiver
-73-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:34:9-52:20
-74            android:name="androidx.profileinstaller.ProfileInstallReceiver"
-74-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:35:13-76
-75            android:directBootAware="false"
-75-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:36:13-44
-76            android:enabled="true"
-76-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:37:13-35
-77            android:exported="true"
-77-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:38:13-36
-78            android:permission="android.permission.DUMP" >
-78-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:39:13-57
-79            <intent-filter>
-79-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:40:13-42:29
-80                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
-80-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:41:17-91
-80-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:41:25-88
-81            </intent-filter>
+70-->[androidx.lifecycle:lifecycle-process:2.7.0] C:\Users\Damon\.gradle\caches\transforms-3\702417531b0af5c848d0d79276ab2207\transformed\lifecycle-process-2.7.0\AndroidManifest.xml:31:17-49
+71            <meta-data
+71-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:29:13-31:52
+72                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+72-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:30:17-85
+73                android:value="androidx.startup" />
+73-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:31:17-49
+74        </provider>
+75
+76        <receiver
+76-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:34:9-52:20
+77            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+77-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:35:13-76
+78            android:directBootAware="false"
+78-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:36:13-44
+79            android:enabled="true"
+79-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:37:13-35
+80            android:exported="true"
+80-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:38:13-36
+81            android:permission="android.permission.DUMP" >
+81-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:39:13-57
 82            <intent-filter>
-82-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:43:13-45:29
-83                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
-83-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:44:17-85
-83-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:44:25-82
+82-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:40:13-42:29
+83                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+83-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:41:17-91
+83-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:41:25-88
 84            </intent-filter>
 85            <intent-filter>
-85-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:46:13-48:29
-86                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
-86-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:47:17-88
-86-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:47:25-85
+85-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:43:13-45:29
+86                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+86-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:44:17-85
+86-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:44:25-82
 87            </intent-filter>
 88            <intent-filter>
-88-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:49:13-51:29
-89                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
-89-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:50:17-95
-89-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:50:25-92
+88-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:46:13-48:29
+89                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+89-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:47:17-88
+89-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:47:25-85
 90            </intent-filter>
-91        </receiver>
-92    </application>
-93
-94</manifest>
+91            <intent-filter>
+91-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:49:13-51:29
+92                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+92-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:50:17-95
+92-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Damon\.gradle\caches\transforms-3\23e3429f34adf07431b4b555a1490cf4\transformed\profileinstaller-1.3.1\AndroidManifest.xml:50:25-92
+93            </intent-filter>
+94        </receiver>
+95    </application>
+96
+97</manifest>

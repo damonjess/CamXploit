@@ -470,10 +470,14 @@ def shodan_search(api_key, query):
         print(f"  {ERR} Shodan Search Error: {str(e)}")
 
 def discover_upnp_ssdp():
-    """
-    Broad SSDP M-SEARCH for discovering UPnP devices in the local network.
-    """
-    print(f"\n{RADR} Sending SSDP M-SEARCH (Multicast Discovery)...")
+    """SSDP/UPnP multicast discovery - finds smart TVs, printers, cameras, routers"""
+    import socket
+    import re
+
+    output = []
+    output.append("📡 SSDP/UPnP Discovery Started")
+    output.append("=" * 50)
+
     ssdp_request = (
         'M-SEARCH * HTTP/1.1\r\n'
         'HOST: 239.255.255.250:1900\r\n'
@@ -483,48 +487,71 @@ def discover_upnp_ssdp():
         '\r\n'
     )
 
-    discovered_devices = {}
+    discovered = {}
+
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
         sock.settimeout(5)
         sock.sendto(ssdp_request.encode(), ('239.255.255.250', 1900))
 
         while True:
             try:
                 data, addr = sock.recvfrom(4096)
-                resp = data.decode(errors='ignore')
-                location = re.search(r"LOCATION: (.*)\r\n", resp, re.I)
-                server = re.search(r"SERVER: (.*)\r\n", resp, re.I)
-                usn = re.search(r"USN: (.*)\r\n", resp, re.I)
+                ip = addr[0]
 
+                if ip in discovered:
+                    continue  # skip duplicates
+
+                resp = data.decode(errors='ignore')
+                location = re.search(r"LOCATION:\s*(.*)\r\n", resp, re.I)
+                server   = re.search(r"SERVER:\s*(.*)\r\n",   resp, re.I)
+                st       = re.search(r"ST:\s*(.*)\r\n",       resp, re.I)
+
+                discovered[ip] = True
+
+                output.append(f"\n🔵 Device found: {ip}")
+                if server:
+                    output.append(f"   Server  : {server.group(1).strip()}")
+                if st:
+                    output.append(f"   Type    : {st.group(1).strip()}")
                 if location:
                     loc_url = location.group(1).strip()
-                    if addr[0] not in discovered_devices:
-                        discovered_devices[addr[0]] = loc_url
-                        print(f"  {OPEN} SSDP RESPONSE from {addr[0]}")
+                    output.append(f"   Location: {loc_url}")
 
-                        # Use BeautifulSoup to parse device description if possible
-                        try:
-                            desc_resp = requests.get(loc_url, timeout=2)
-                            if desc_resp.status_code == 200:
-                                soup = BeautifulSoup(desc_resp.content, 'xml')
-                                dev_name = soup.find('friendlyName')
-                                model_name = soup.find('modelName')
-                                manuf = soup.find('manufacturer')
+                    # Try to fetch the device description XML
+                    try:
+                        import urllib.request
+                        with urllib.request.urlopen(loc_url, timeout=2) as r:
+                            xml = r.read().decode(errors='ignore')
 
-                                if dev_name: print(f"     {INFO} Friendly Name: {dev_name.text}")
-                                if model_name: print(f"     {INFO} Model: {model_name.text}")
-                                if manuf: print(f"     {INFO} Manufacturer: {manuf.text}")
-                        except: pass
+                        # Pull friendly name, model, manufacturer from XML
+                        friendly = re.search(r"<friendlyName>(.*?)</friendlyName>", xml, re.I)
+                        model    = re.search(r"<modelName>(.*?)</modelName>",       xml, re.I)
+                        manuf    = re.search(r"<manufacturer>(.*?)</manufacturer>", xml, re.I)
 
-                        if server: print(f"     {INFO} Server Header: {server.group(1).strip()}")
-                        if usn: print(f"     {INFO} USN: {usn.group(1).strip()[:60]}...")
+                        if friendly: output.append(f"   Name    : {friendly.group(1).strip()}")
+                        if model:    output.append(f"   Model   : {model.group(1).strip()}")
+                        if manuf:    output.append(f"   Maker   : {manuf.group(1).strip()}")
+
+                    except:
+                        output.append("   (Could not fetch device details)")
+
             except socket.timeout:
-                break
-    except Exception as e:
-        print(f"  {ERR} SSDP Discovery Error: {str(e)}")
+                break  # no more responses
 
-    return discovered_devices
+        sock.close()
+
+    except Exception as e:
+        return f"❌ SSDP Error: {str(e)}"
+
+    if len(discovered) == 0:
+        output.append("\n⚠️ No UPnP devices found.")
+        output.append("This is normal if your router has UPnP disabled.")
+    else:
+        output.append(f"\n✅ Total UPnP devices found: {len(discovered)}")
+
+    return "\n".join(output)
 
 def get_mac_vendor(target_ip):
     """Attempts MAC lookup via ARP and identifies Vendor."""
@@ -977,24 +1004,57 @@ if __name__ == "__main__":
     main()
 
 def lan_scan():
-    """Safe LAN Scanner for Chaquopy"""
+    """Real LAN Scanner - pings subnet and checks camera ports"""
+    import socket
+    import concurrent.futures
     output = []
     output.append("🔍 LAN Scanner Started")
     output.append("=" * 50)
-    output.append("📡 Testing local network discovery...\n")
 
-    try:
-        output.append("✅ Python function is working correctly!")
-        output.append("")
-        output.append("📋 For best results:")
-        output.append("1. Open your router admin page (usually http://192.168.1.1)")
-        output.append("2. Look for 'Connected Devices', 'DHCP Clients', or 'Device List'")
-        output.append("3. Your cameras and other devices will be listed there with their IPs.")
-        output.append("")
-        output.append("💡 Tip: Most routers show device names and MAC addresses.")
+    def get_local_ip():
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except:
+            return None
 
-        # Return string instead of None
-        return "\n".join(output)
+    def check_host(ip, ports=[80, 554, 8080, 8000, 37777]):
+        open_ports = []
+        for port in ports:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.5)
+                    if s.connect_ex((ip, port)) == 0:
+                        open_ports.append(port)
+            except:
+                pass
+        return ip, open_ports
 
-    except Exception as e:
-        return f"Error during scan: {str(e)}"
+    local_ip = get_local_ip()
+    if not local_ip:
+        return "❌ Could not determine local IP address"
+
+    output.append(f"📱 Device IP: {local_ip}")
+    subnet = ".".join(local_ip.split(".")[:3])
+    output.append(f"🌐 Scanning subnet: {subnet}.0/24\n")
+
+    found = []
+    ips = [f"{subnet}.{i}" for i in range(1, 255)]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+        results = executor.map(check_host, ips)
+        for ip, ports in results:
+            if ports:
+                found.append((ip, ports))
+
+    if found:
+        output.append(f"✅ Found {len(found)} device(s):\n")
+        for ip, ports in sorted(found, key=lambda x: int(x[0].split(".")[-1])):
+            output.append(f"  📷 {ip}  →  Ports: {ports}")
+    else:
+        output.append("⚠️ No devices found. Check WiFi connection.")
+
+    return "\n".join(output)
