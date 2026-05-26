@@ -1647,3 +1647,12 @@ def main(ip_input=None):
         
 if __name__ == "__main__":
     main()
+
+def lan_scan():
+    """Safe minimal LAN Scanner"""
+    print("🔍 LAN Scanner Started")
+    print("=" * 50)
+    print("📡 This is a test to check if Python function works...\n")
+    print("✅ Python function loaded successfully!")
+    print("\nNote: Advanced LAN scanning is restricted on Android.")
+    print("Try checking your router's web interface (192.168.1.1) → Connected Devices")

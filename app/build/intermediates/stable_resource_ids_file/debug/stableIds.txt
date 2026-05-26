@@ -1,3 +1,4 @@
+com.spyboy.camxploit:xml/file_paths = 0x7f120000
 com.spyboy.camxploit:styleable/ViewBackgroundHelper = 0x7f11008f
 com.spyboy.camxploit:styleable/Variant = 0x7f11008d
 com.spyboy.camxploit:styleable/Transition = 0x7f11008c
