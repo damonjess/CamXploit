@@ -1,2 +1,5 @@
 requests
-ipaddress
+beautifulsoup4
+lxml
+onvif-zeep
+shodan

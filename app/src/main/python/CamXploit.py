@@ -6,6 +6,13 @@ import warnings
 import ipaddress
 import base64
 import time
+import os
+os.environ['PYTHONIOENCODING'] = 'utf-8'
+
+# Android-safe settings
+MAX_THREADS = 12          # Reduced from 40
+TIMEOUT = 6
+
 try:
     from onvif import ONVIFCamera
 except ImportError:
@@ -230,6 +237,8 @@ def probe_rtsp(ip, port):
 
 def test_dos_resilience(ip, port):
     """Performs a light connection flood to test DoS resilience (Lab Only)."""
+    print(f"       {ALRT} DoS Resilience test disabled on Android for stability.")
+    return
     print(f"\n  [{FIRE}] Testing DoS Resilience (Connection Flooding) on Port {port}:")
     print(f"       {ALRT} NOTE: This test is intended for controlled lab environments only.")
 
@@ -519,7 +528,7 @@ def discover_upnp_ssdp():
         'M-SEARCH * HTTP/1.1\r\n'
         'HOST: 239.255.255.250:1900\r\n'
         'MAN: "ssdp:discover"\r\n'
-        'MX: 3\r\n'
+        'MX: 2\r\n'
         'ST: ssdp:all\r\n'
         '\r\n'
     )
@@ -527,7 +536,7 @@ def discover_upnp_ssdp():
     discovered_devices = {}
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        sock.settimeout(5)
+        sock.settimeout(3)
         sock.sendto(ssdp_request.encode(), ('239.255.255.250', 1900))
 
         while True:
@@ -572,15 +581,19 @@ def get_mac_vendor(target_ip):
     mac = "Unknown"
     vendor = "Unknown Vendor"
     try:
-        # Try to read ARP table
-        with open("/proc/net/arp", "r") as f:
-            for line in f:
-                if target_ip in line:
-                    parts = line.split()
-                    if len(parts) >= 4:
-                        mac = parts[3]
-                        break
+        if os.path.exists("/proc/net/arp"):
+            # Try to read ARP table
+            with open("/proc/net/arp", "r") as f:
+                for line in f:
+                    if target_ip in line:
+                        parts = line.split()
+                        if len(parts) >= 4:
+                            mac = parts[3]
+                            break
+    except:
+        return "Unknown", "Unknown (Android restriction)"
 
+    try:
         if mac != "Unknown" and mac != "00:00:00:00:00:00":
             # Simple offline vendor check for top camera brands
             prefix = mac.replace(":", "").upper()[:6]
@@ -856,42 +869,46 @@ def probe_onvif(target_ip):
     """
     print(f"\n  [{RADR}] Probing ONVIF Services for {target_ip}:")
 
-    if ONVIFCamera is None:
-        print(f"    {ERR} ONVIF Library (onvif-zeep) not available. Cannot perform deep probe.")
+    try:
+        if ONVIFCamera is None:
+            print(f"    {ERR} ONVIF Library (onvif-zeep) not available. Cannot perform deep probe.")
+            return
+
+        # 1. WS-Discovery (Unicast Probe)
+        ws_discovery_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+        <e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
+                    xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
+                    xmlns:d="http://schemas.xmlsoap.org/ws/2004/08/discovery"
+                    xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
+            <e:Header>
+                <w:MessageID>uuid:{uuid.uuid4()}</w:MessageID>
+                <w:To>urn:schemas-xmlsoap-org:ws:2004:08:discovery</w:To>
+                <w:Action>http://schemas.xmlsoap.org/ws/2004/08/discovery/Probe</w:Action>
+            </e:Header>
+            <e:Body>
+                <d:Probe>
+                    <d:Types>dn:NetworkVideoTransmitter</d:Types>
+                </d:Probe>
+            </e:Body>
+        </e:Envelope>"""
+
+        onvif_ports = [3702, 80, 8080, 8888, 8000]
+        discovered = False
+
+        for port in onvif_ports:
+            try:
+                # Simple UDP probe for 3702
+                if port == 3702:
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                        s.settimeout(1.5)
+                        s.sendto(ws_discovery_xml.encode(), (target_ip, 3702))
+                        data, addr = s.recvfrom(4096)
+                        if data:
+                            print(f"    {OPEN} ONVIF WS-Discovery Response from {addr}")
+                            discovered = True
+    except Exception as e:
+        print(f"    {ERR} ONVIF Discovery Error: {str(e)}")
         return
-
-    # 1. WS-Discovery (Unicast Probe)
-    ws_discovery_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-    <e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
-                xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
-                xmlns:d="http://schemas.xmlsoap.org/ws/2004/08/discovery"
-                xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
-        <e:Header>
-            <w:MessageID>uuid:{uuid.uuid4()}</w:MessageID>
-            <w:To>urn:schemas-xmlsoap-org:ws:2004:08:discovery</w:To>
-            <w:Action>http://schemas.xmlsoap.org/ws/2004/08/discovery/Probe</w:Action>
-        </e:Header>
-        <e:Body>
-            <d:Probe>
-                <d:Types>dn:NetworkVideoTransmitter</d:Types>
-            </d:Probe>
-        </e:Body>
-    </e:Envelope>"""
-
-    onvif_ports = [3702, 80, 8080, 8888, 8000]
-    discovered = False
-
-    for port in onvif_ports:
-        try:
-            # Simple UDP probe for 3702
-            if port == 3702:
-                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                    s.settimeout(2)
-                    s.sendto(ws_discovery_xml.encode(), (target_ip, 3702))
-                    data, addr = s.recvfrom(4096)
-                    if data:
-                        print(f"    {OPEN} ONVIF WS-Discovery Response from {addr}")
-                        discovered = True
 
             # Try to initialize ONVIF client if we have reason to believe it's there
             # We try common credentials
