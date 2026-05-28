@@ -453,34 +453,23 @@ fun CamGuardianApp() {
                     selectedUrl = url
                     selectedTab = 3
                 }, {
-                    // TEST ONVIF logic
-                    // Look for the last IP found in the terminal, as it's likely the current target
                     val ipMatch = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").findAll(terminalText).lastOrNull()
-                    if (ipMatch != null) {
-                        val targetIp = ipMatch.value
-                        Toast.makeText(context, "Probing ONVIF on $targetIp...", Toast.LENGTH_SHORT).show()
-                        terminalText += "\n[>] Initiating Targeted ONVIF Probe for $targetIp...\n"
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                val py = Python.getInstance()
-                                val module = py.getModule("CamXploit")
-                                val sys = py.getModule("sys")
-                                val outputStream = TerminalOutputStream { text ->
-                                    scope.launch(Dispatchers.Main) { terminalText += text }
-                                }
-                                sys.put("stdout", outputStream)
-                                module.callAttr("discover_onvif", targetIp)
-                                withContext(Dispatchers.Main) {
-                                    terminalText += "\n[🏁] ONVIF Probe Complete for $targetIp.\n"
-                                }
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    terminalText += "\n[!] ONVIF Error: ${e.message}\n"
-                                }
+                    val targetIp = ipMatch?.value ?: ""
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            val py = Python.getInstance()
+                            val module = py.getModule("CamXploit")
+                            val sys = py.getModule("sys")
+                            val outputStream = TerminalOutputStream { text ->
+                                scope.launch(Dispatchers.Main) { terminalText += text }
+                            }
+                            sys.put("stdout", outputStream)
+                            module.callAttr("probe_onvif", targetIp)
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                terminalText += "\n[!] ONVIF Error: ${e.message}\n"
                             }
                         }
-                    } else {
-                        Toast.makeText(context, "No target IP found in terminal. Start a scan first.", Toast.LENGTH_LONG).show()
                     }
                 })
                 2 -> ArchiveTab(context) { file -> viewingFile = file }
@@ -537,7 +526,13 @@ fun CamGuardianApp() {
                         AndroidView(
                             factory = { ctx ->
                                 val player = androidx.media3.exoplayer.ExoPlayer.Builder(ctx).build()
-                                player.setMediaItem(androidx.media3.common.MediaItem.fromUri(url))
+                                val mediaItem = androidx.media3.common.MediaItem.Builder()
+                                    .setUri(url)
+                                    .build()
+                                val rtspMediaSource = androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory()
+                                    .setForceUseRtpTcp(true)
+                                    .createMediaSource(mediaItem)
+                                player.setMediaSource(rtspMediaSource)
                                 player.prepare()
                                 player.playWhenReady = true
                                 androidx.media3.ui.PlayerView(ctx).apply {
@@ -1070,9 +1065,13 @@ fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String)
                     AndroidView(
                         factory = { ctx ->
                             val player = androidx.media3.exoplayer.ExoPlayer.Builder(ctx).build()
-                            player.setMediaItem(
-                                androidx.media3.common.MediaItem.fromUri(authenticatedUrl)
-                            )
+                            val mediaItem = androidx.media3.common.MediaItem.Builder()
+                                .setUri(authenticatedUrl)
+                                .build()
+                            val rtspMediaSource = androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory()
+                                .setForceUseRtpTcp(true)
+                                .createMediaSource(mediaItem)
+                            player.setMediaSource(rtspMediaSource)
                             player.prepare()
                             player.playWhenReady = true
                             androidx.media3.ui.PlayerView(ctx).apply {
@@ -1658,9 +1657,13 @@ fun LiveViewScreen(
             AndroidView(
                 factory = { ctx ->
                     val player = androidx.media3.exoplayer.ExoPlayer.Builder(ctx).build()
-                    player.setMediaItem(
-                        androidx.media3.common.MediaItem.fromUri(streamUrl)
-                    )
+                    val mediaItem = androidx.media3.common.MediaItem.Builder()
+                        .setUri(streamUrl)
+                        .build()
+                    val rtspMediaSource = androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory()
+                        .setForceUseRtpTcp(true)
+                        .createMediaSource(mediaItem)
+                    player.setMediaSource(rtspMediaSource)
                     player.prepare()
                     player.playWhenReady = true
                     androidx.media3.ui.PlayerView(ctx).apply {

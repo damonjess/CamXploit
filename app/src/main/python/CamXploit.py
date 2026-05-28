@@ -849,7 +849,7 @@ def storm_breaker_gen(template_type, redirect_url):
     start_storm_server(template_type, redirect_url)
     return "Server Started"
 
-def discover_onvif(target_ip):
+def probe_onvif(target_ip):
     """
     Attempts to discover ONVIF details for a specific IP.
     Uses WS-Discovery and direct service probing.
@@ -1103,7 +1103,7 @@ def scan_single_target(target_ip, specific_port=None):
                 success_cred = (camover_creds[0], camover_creds[1], f"{proto}://{target_ip}:{p}/")
 
         # New ONVIF Discovery Step
-        discover_onvif(target_ip)
+        probe_onvif(target_ip)
 
         if brand in CVE_DATABASE:
             print(f"\n  [{SHLD}] Known Vulnerabilities for {brand}:")
