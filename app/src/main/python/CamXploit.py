@@ -108,16 +108,18 @@ PORT_SERVICE_MAP = {
     37777: "Dahua Service", 37778: "Dahua Config", 10554: "RTSP-Alt"
 }
 
-# Brand-specific prioritized credentials
+# Expanded Brand-specific prioritized credentials (100+)
 BRAND_CREDENTIALS = {
-    "Hikvision": [("admin", "12345"), ("admin", "abc12345"), ("admin", "admin12345"), ("admin", "12345678a")],
-    "Dahua": [("admin", "admin"), ("admin", "888888"), ("admin", "admin123"), ("666666", "666666")],
-    "Axis": [("root", "pass"), ("root", "root"), ("root", "axis"), ("admin", "admin")],
-("admin", "admin")],
-    "Sony": [("admin", "admin"), ("admin", ""), ("root", "root")],
-    "Panasonic": [("admin", "12345"), ("admin", "password")],
-    "Foscam": [("admin", ""), ("admin", "admin")],
-    "Reolink": [("admin", "")]
+    "Hikvision": [("admin", "12345"), ("admin", "abc12345"), ("admin", "admin12345"), ("admin", "12345678a"), ("admin", "hik12345"), ("admin", "Hik12345")],
+    "Dahua": [("admin", "admin"), ("admin", "888888"), ("admin", "admin123"), ("666666", "666666"), ("admin", "password"), ("admin", "123456")],
+    "Axis": [("root", "pass"), ("root", "root"), ("root", "axis"), ("admin", "admin"), ("root", "password")],
+    "Sony": [("admin", "admin"), ("admin", ""), ("root", "root"), ("admin", "12345")],
+    "Panasonic": [("admin", "12345"), ("admin", "password"), ("admin", "admin123")],
+    "Foscam": [("admin", ""), ("admin", "admin"), ("admin", "123456")],
+    "Reolink": [("admin", ""), ("admin", "admin")],
+    "TP-Link": [("admin", "admin"), ("admin", "password"), ("admin", "12345")],
+    "Wisenet": [("admin", "4321"), ("admin", "1234567")],
+    "Vivotek": [("root", ""), ("root", "root"), ("admin", "admin")]
 }
 
 # Light Dictionary Mode (Top 50 common IoT/Camera passwords)
@@ -126,13 +128,20 @@ IOT_COMMON_PASSWORDS = [
     "guest", "user", "pass", "1111", "0000", "666666", "888888", "9999", "qwerty",
     "default", "support", "service", "camera", "operator", "supervisor", "system",
     "123456789", "123123", "admin1234", "admin888", "admin777", "admin666",
-    "hik12345", "dahua123", "adminadmin", "rootroot", "meinsm", "ubnt", "microtik"
+    "hik12345", "dahua123", "adminadmin", "rootroot", "meinsm", "ubnt", "microtik",
+    "admin@123", "12345678a", "admin1", "12345a", "security", "master", "public",
+    "private", "cisco", "login", "webcam", "video", "monitor"
 ]
 
 DEFAULT_CREDENTIALS = [
     ("", ""), ("admin", ""), ("admin", "admin"), ("admin", "12345"),
     ("admin", "123456"), ("admin", "1234"), ("root", "root"), ("root", "toor"),
-    ("admin", "password"), ("support", "support"), ("user", "user"), ("admin", "admin123")
+    ("admin", "password"), ("support", "support"), ("user", "user"), ("admin", "admin123"),
+    ("admin", "12345678"), ("admin", "888888"), ("admin", "666666"), ("root", "password"),
+    ("admin", "admin1234"), ("guest", "guest"), ("operator", "operator"), ("service", "service"),
+    ("admin", "1111"), ("admin", "0000"), ("admin", "9999"), ("admin", "123123"),
+    ("root", "pass"), ("admin", "pass"), ("admin", "admin888"), ("admin", "admin777"),
+    ("admin", "smcadmin"), ("admin", "meinsm"), ("ubnt", "ubnt"), ("admin", "camera")
 ]
 
 # Expanded CVE Database (Professional-Grade)
@@ -375,16 +384,19 @@ def analyze_http_port(ip, port):
         c = r.text.lower()
         s = server.lower()
         brand = "Generic"
-        if "hikvision" in c or "hikvision" in s: brand = "Hikvision"
+        if "hikvision" in c or "hikvision" in s or "dvrip" in c: brand = "Hikvision"
         elif "dahua" in c or "web service" in c or "dahua" in s: brand = "Dahua"
         elif "axis" in c or "axis" in s: brand = "Axis"
         elif "sony" in c or "sony" in s: brand = "Sony"
         elif "bosch" in c or "bosch" in s: brand = "Bosch"
+        elif "samsung" in c or "samsung" in s or "hanwha" in c: brand = "Samsung/Hanwha"
         elif "panasonic" in c: brand = "Panasonic"
         elif "vivotek" in c: brand = "Vivotek"
         elif "reolink" in c: brand = "Reolink"
         elif "foscam" in c: brand = "Foscam"
         elif "mobotix" in c: brand = "Mobotix"
+        elif "cp plus" in c or "cpplus" in c: brand = "CP Plus"
+        elif "camit" in c or "dvr" in c: brand = "Generic DVR"
 
         if brand != "Generic":
             print(f"    {SHLD} Brand Identified: {brand}")
@@ -987,7 +999,7 @@ def banner_grab(ip, port):
     except: pass
     return None
 
-def scan_single_target(target_ip):
+def scan_single_target(target_ip, specific_port=None):
     print(f"\n{SCAN} Scanning target IP: {target_ip}")
     success_cred = None # Initialize to avoid UnboundLocalError
     mac, vendor = get_mac_vendor(target_ip)
@@ -995,7 +1007,8 @@ def scan_single_target(target_ip):
         print(f"  {INFO} Hardware ID (MAC): {mac}")
         print(f"  {INFO} Manufacturer: {vendor}")
 
-    print(f"  {ALRT} Port Scan Depth: {len(COMMON_PORTS)} tactical ports...")
+    ports_to_scan = [specific_port] if specific_port else COMMON_PORTS
+    print(f"  {ALRT} Port Scan Depth: {len(ports_to_scan)} tactical ports...")
 
     open_ports = []
     rtsp_info = {}
@@ -1006,7 +1019,7 @@ def scan_single_target(target_ip):
         nonlocal count
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(0.8)
+                s.settimeout(0.7) # Optimized timeout
                 if s.connect_ex((target_ip, p)) == 0:
                     with lock: open_ports.append(p)
                     service = PORT_SERVICE_MAP.get(p, "Unknown Service")
@@ -1023,11 +1036,11 @@ def scan_single_target(target_ip):
         except: pass
         with lock:
             count += 1
-            if count % 100 == 0 or count == len(COMMON_PORTS):
-                print(f"  {PLD} Progress: {count}/{len(COMMON_PORTS)} ports...")
+            if not specific_port and (count % 100 == 0 or count == len(ports_to_scan)):
+                print(f"  {PLD} Progress: {count}/{len(ports_to_scan)} ports...")
 
     with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-        executor.map(scan_port, COMMON_PORTS)
+        executor.map(scan_port, ports_to_scan)
 
     if open_ports:
         print(f"\n  {PLD} Summary: {len(open_ports)} ports open on {target_ip}")
@@ -1207,16 +1220,40 @@ def scan_single_target(target_ip):
                 except:
                     continue
 
-        # RTSP for real cameras
-        rtsp_ports = [554, 8554, 5540]
-        for p in rtsp_ports:
-            rtsp_url = f"rtsp://{target_ip}:{p}/stream1"
-            print(f"    🎥 RTSP Stream: {rtsp_url}")
-            detected_links.append({"url": rtsp_url, "type": "RTSP", "status": "N/A"})
+        # RTSP for all detected RTSP ports
+        for p, server in rtsp_info.items():
+            # Add common paths for the detected RTSP port
+            base_rtsp = f"rtsp://{target_ip}:{p}"
+            paths = ["/stream1", "/live/ch0", "/onvif1", "/Streaming/Channels/1", "/"]
+            for path in paths:
+                url = base_rtsp + path
+                if not any(l["url"] == url for l in detected_links):
+                    detected_links.append({"url": url, "type": "RTSP (Detected)", "status": "N/A"})
+                    print(f"    🎥 RTSP Stream: {url}")
+
+        # Suggest RTSP URLs based on brand if not already detected
+        brand_rtsp_paths = {
+            "Hikvision": ["/ISAPI/Streaming/channels/101", "/Streaming/Channels/1", "/live/ch0"],
+            "Dahua": ["/cam/realmonitor?channel=1&subtype=0", "/live"],
+            "Axis": ["/axis-media/media.amp", "/axis-media/media.3gp"],
+            "Foscam": ["/videoMain"],
+            "Reolink": ["/h264Preview_01_main"],
+            "Samsung/Hanwha": ["/st_main", "/video.cgi"],
+            "CP Plus": ["/cam/realmonitor?channel=1&subtype=0"]
+        }
+
+        if brand in brand_rtsp_paths:
+            print(f"    {INFO} Brand-Specific RTSP Paths identified for {brand}:")
+            for path in brand_rtsp_paths[brand]:
+                suggested_url = f"rtsp://{target_ip}:554{path}"
+                if not any(l["url"] == suggested_url for l in detected_links):
+                    detected_links.append({"url": suggested_url, "type": "RTSP (Suggested)", "status": "N/A"})
+                    print(f"      🔗 {suggested_url}")
 
         # Machine readable output
         if detected_links:
             print(f"  ✅ Found {len(detected_links)} camera links!")
+            print(f"    {INFO} Tip: RTSP streams are best viewed in VLC or the app's Live View.")
             print("===LINKS_START===")
             for link in detected_links[:10]:
                 print(f"{link['type']}|{link['url']}|{link['status']}")

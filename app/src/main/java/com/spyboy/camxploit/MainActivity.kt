@@ -106,6 +106,7 @@ fun CamGuardianApp() {
     var shodanQuery by remember { mutableStateOf("webcam") }
     var showShodanDialog by remember { mutableStateOf(false) }
     var lanScanResult by remember { mutableStateOf("Press Scan to discover devices on your network.") }
+    var selectedUrl by remember { mutableStateOf("") }
 
     val context = LocalContext.current
     val view = LocalView.current
@@ -401,21 +402,8 @@ fun CamGuardianApp() {
                         }
                     },
                     onStreamSelect = { url, type ->
-                        selectedStreamUrl = url
-                        selectedStreamType = type
-                        
-                        // Parse credentials from terminalText if they exist
-                        // Look for: "CRACKED (HTTP): admin:password"
-                        val credMatch = Regex("""CRACKED \(HTTP\): ([^:]+):([^ ]+)""").find(terminalText)
-                        if (credMatch != null) {
-                            detectedUsername = credMatch.groupValues[1]
-                            detectedPassword = credMatch.groupValues[2]
-                        } else {
-                            detectedUsername = ""
-                            detectedPassword = ""
-                        }
-                        
-                        showLiveView = true
+                        selectedUrl = url
+                        selectedTab = 3
                     }
                 )
                 1 -> IntelTab(terminalText, {
@@ -462,7 +450,8 @@ fun CamGuardianApp() {
                         }
                     }
                 }, { url ->
-                    activeStreamUrl = url
+                    selectedUrl = url
+                    selectedTab = 3
                 }, {
                     // TEST ONVIF logic
                     // Look for the last IP found in the terminal, as it's likely the current target
@@ -495,7 +484,7 @@ fun CamGuardianApp() {
                     }
                 })
                 2 -> ArchiveTab(context) { file -> viewingFile = file }
-                3 -> StreamTab(terminalText)
+                3 -> StreamTab(terminalText, selectedUrl, { selectedUrl = it })
                 4 -> LanScannerTab(
                     onScanComplete = { result -> lanScanResult = result },
                     onDeviceSelect = { ip ->
@@ -803,6 +792,7 @@ fun IntelTab(terminalText: String, onCaptureSnapshot: () -> Unit, onPreviewStrea
     val streams = terminalText.lines().filter { it.contains("http") || it.contains("rtsp") }
     val vulns = terminalText.lines().filter { it.contains("VULNERABILITY") || it.contains("CRITICAL") || it.contains("FIRE") }
     val deviceInfo = terminalText.lines().filter { it.contains("Model:") || it.contains("Firmware:") || it.contains("Manufacturer:") }
+    val context = LocalContext.current
 
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
         Text("CATEGORIZED INTEL", color = Color.Cyan, fontWeight = FontWeight.Bold, fontSize = 14.sp)
@@ -834,10 +824,67 @@ fun IntelTab(terminalText: String, onCaptureSnapshot: () -> Unit, onPreviewStrea
                 Text("CAPTURE SNAP", fontSize = 10.sp)
             }
         }
+
+        Spacer(modifier = Modifier.height(20.dp))
+        Text("EXTERNAL RECON LINKS", color = Color.Magenta, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        val ipMatch = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").find(terminalText)
+        val targetIp = ipMatch?.value ?: ""
+
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ReconButton("SHODAN", "https://www.shodan.io/host/$targetIp", context)
+            ReconButton("CENSYS", "https://search.censys.io/hosts/$targetIp", context)
+            ReconButton("ZOOMEYE", "https://www.zoomeye.org/searchResult?q=$targetIp", context)
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ReconButton("MAPS", "https://www.google.com/maps/search/$targetIp", context)
+            ReconButton("DORK", "https://www.google.com/search?q=inurl:\"/view/viewer_index.shtml\"+ip:$targetIp", context)
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+        Text("GOOGLE DORKING SUGGESTIONS", color = Color.Yellow, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        val dorks = listOf(
+            "inurl:\"/view/viewer_index.shtml\"",
+            "intitle:\"Live View / - AXIS\"",
+            "inurl:\"/mjpg/video.mjpg\"",
+            "inurl:\"view/index.shtml\"",
+            "inurl:\"top.htm?login\""
+        )
+        dorks.forEach { dork ->
+            Text(
+                text = dork,
+                color = Color.LightGray,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.padding(vertical = 4.dp).clickable {
+                    val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.google.com/search?q=$dork"))
+                    context.startActivity(intent)
+                }
+            )
+        }
         
         if (terminalText.isEmpty()) {
             Text("No intel collected yet. Start a scan first.", color = Color.Gray, modifier = Modifier.padding(20.dp))
         }
+    }
+}
+
+@Composable
+fun ReconButton(label: String, url: String, context: Context) {
+    Button(
+        onClick = {
+            val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+            context.startActivity(intent)
+        },
+        modifier = Modifier.height(36.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1A)),
+        border = BorderStroke(1.dp, Color.DarkGray),
+        shape = RoundedCornerShape(4.dp),
+        contentPadding = PaddingValues(horizontal = 8.dp)
+    ) {
+        Text(label, fontSize = 10.sp, color = Color.White)
     }
 }
 
@@ -857,7 +904,7 @@ fun buildAuthUrl(url: String, user: String, pass: String): String {
 }
 
 @Composable
-fun StreamTab(terminalText: String) {
+fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String) -> Unit) {
     // Auto-extract credentials if any were found in the console
     val credentials = remember(terminalText) {
         // Match either HTTP or RTSP cracked credentials
@@ -895,10 +942,13 @@ fun StreamTab(terminalText: String) {
         }
     }
 
-    // Auto-select first found URL
-    var selectedUrl by remember(streamUrls) {
-        mutableStateOf(streamUrls.firstOrNull() ?: "")
+    // Auto-select first found URL if none is selected
+    LaunchedEffect(streamUrls) {
+        if (selectedUrl.isEmpty() && streamUrls.isNotEmpty()) {
+            onUrlSelected(streamUrls.first())
+        }
     }
+
     var customUrl by remember { mutableStateOf("") }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -915,7 +965,7 @@ fun StreamTab(terminalText: String) {
             streamUrls.forEach { url ->
                 val isSelected = url == selectedUrl
                 TextButton(
-                    onClick = { selectedUrl = url },
+                    onClick = { onUrlSelected(url) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .border(
@@ -1001,7 +1051,7 @@ fun StreamTab(terminalText: String) {
                     )
                     IconButton(onClick = { 
                         if (customUrl.isNotEmpty()) {
-                            selectedUrl = customUrl 
+                            onUrlSelected(customUrl) 
                         }
                     }) {
                         Icon(Icons.Default.PlayArrow, "Play", tint = Color.Magenta)
@@ -1125,13 +1175,11 @@ fun IntelSection(
                                         .trim()
                             
                             if (url.startsWith("http") || url.startsWith("rtsp")) {
-                                Text(
-                                    text = "[VIEW]",
-                                    color = if (url.startsWith("rtsp")) Color.Magenta else Color.Green,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.clickable { onPreviewStream(url) }.padding(4.dp)
-                                )
+                                TextButton(
+                                    onClick = { onPreviewStream(url) }
+                                ) {
+                                    Text("[VIEW]", color = Color.Magenta)
+                                }
                             }
                         }
                     }
