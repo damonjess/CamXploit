@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +58,8 @@ import android.graphics.BitmapFactory
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.Image
 import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.*
 import java.net.URL
 
@@ -294,11 +297,29 @@ fun CamGuardianApp() {
                     icon = { Icon(Icons.Default.List, "Archive") },
                     label = { Text("ARCHIVE") }
                 )
-                NavigationBarItem(                    // ← New LAN Scanner Tab
+                NavigationBarItem(
                     selected = selectedTab == 3,
                     onClick = { selectedTab = 3 },
+                    icon = { Icon(Icons.Default.Videocam, "Stream") },
+                    label = { Text("STREAM") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color.Magenta,
+                        unselectedIconColor = Color.Gray,
+                        selectedTextColor = Color.Magenta,
+                        indicatorColor = Color(0xFF1E1E1E)
+                    )
+                )
+                NavigationBarItem(                    // ← New LAN Scanner Tab
+                    selected = selectedTab == 4,
+                    onClick = { selectedTab = 4 },
                     icon = { Icon(Icons.Default.Search, "LAN Scan") },
                     label = { Text("LAN SCAN") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 5,
+                    onClick = { selectedTab = 5 },
+                    icon = { Icon(Icons.Default.FlashOn, "Storm") },
+                    label = { Text("STORM") }
                 )
             }
         },
@@ -441,9 +462,43 @@ fun CamGuardianApp() {
                     }
                 }, { url ->
                     activeStreamUrl = url
+                }, {
+                    // TEST ONVIF logic
+                    val ipMatch = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").find(terminalText)
+                    if (ipMatch != null) {
+                        val targetIp = ipMatch.value
+                        terminalText += "\n[>] Initiating Targeted ONVIF Probe for $targetIp...\n"
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val py = Python.getInstance()
+                                val module = py.getModule("CamXploit")
+                                val sys = py.getModule("sys")
+                                val outputStream = TerminalOutputStream { text ->
+                                    scope.launch(Dispatchers.Main) { terminalText += text }
+                                }
+                                sys.put("stdout", outputStream)
+                                module.callAttr("discover_onvif", targetIp)
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    terminalText += "\n[!] ONVIF Error: ${e.message}"
+                                }
+                            }
+                        }
+                    } else {
+                        Toast.makeText(context, "No target IP found in terminal. Start a scan first.", Toast.LENGTH_LONG).show()
+                    }
                 })
                 2 -> ArchiveTab(context) { file -> viewingFile = file }
-                3 -> LanScannerTab(onScanComplete = { result -> lanScanResult = result })
+                3 -> StreamTab(terminalText)
+                4 -> LanScannerTab(
+                    onScanComplete = { result -> lanScanResult = result },
+                    onDeviceSelect = { ip ->
+                        ipInput = ip
+                        selectedTab = 0
+                        Toast.makeText(context, "Target set to $ip", Toast.LENGTH_SHORT).show()
+                    }
+                )
+                5 -> StormBreakerTab { text: String -> terminalText += text }
             }
 
             capturedBitmap?.let { bitmap ->
@@ -723,7 +778,7 @@ fun ConsoleTab(
 }
 
 @Composable
-fun IntelTab(terminalText: String, onCaptureSnapshot: () -> Unit, onPreviewStream: (String) -> Unit) {
+fun IntelTab(terminalText: String, onCaptureSnapshot: () -> Unit, onPreviewStream: (String) -> Unit, onTestOnvif: () -> Unit) {
     val streams = terminalText.lines().filter { it.contains("http") || it.contains("rtsp") }
     val vulns = terminalText.lines().filter { it.contains("VULNERABILITY") || it.contains("CRITICAL") || it.contains("FIRE") }
     val deviceInfo = terminalText.lines().filter { it.contains("Model:") || it.contains("Firmware:") || it.contains("Manufacturer:") }
@@ -742,7 +797,7 @@ fun IntelTab(terminalText: String, onCaptureSnapshot: () -> Unit, onPreviewStrea
         
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = { /* In a real app, this would trigger a specific ONVIF probe */ },
+                onClick = onTestOnvif,
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333)),
                 shape = RoundedCornerShape(4.dp)
@@ -761,6 +816,244 @@ fun IntelTab(terminalText: String, onCaptureSnapshot: () -> Unit, onPreviewStrea
         
         if (terminalText.isEmpty()) {
             Text("No intel collected yet. Start a scan first.", color = Color.Gray, modifier = Modifier.padding(20.dp))
+        }
+    }
+}
+
+fun buildAuthUrl(url: String, user: String, pass: String): String {
+    if (user.isBlank() || pass.isBlank()) return url
+    return try {
+        if (url.startsWith("rtsp://")) {
+            url.replace("rtsp://", "rtsp://$user:$pass@")
+        } else if (url.startsWith("http://")) {
+            url.replace("http://", "http://$user:$pass@")
+        } else {
+            url
+        }
+    } catch (e: Exception) {
+        url
+    }
+}
+
+@Composable
+fun StreamTab(terminalText: String) {
+    // Auto-extract credentials if any were found in the console
+    val credentials = remember(terminalText) {
+        // Match either HTTP or RTSP cracked credentials
+        val match = Regex("""CRACKED \((?:HTTP|RTSP)\): ([^:]+):([^\s\n]+)""").find(terminalText)
+        if (match != null) {
+            match.groupValues[1] to match.groupValues[2]
+        } else {
+            "" to ""
+        }
+    }
+
+    // Auto-extract ALL stream URLs from scan results
+    val streamUrls = remember(terminalText) {
+        val start = terminalText.indexOf("===LINKS_START===")
+        val end = terminalText.indexOf("===LINKS_END===")
+
+        if (start != -1 && end != -1) {
+            // Parse the structured block
+            terminalText.substring(start, end)
+                .lines()
+                .filter { it.contains("rtsp://") || it.contains("http://") }
+                .mapNotNull { line ->
+                    Regex("(rtsp://[^|\\s\\\\n]+|http://[^|\\s\\\\n]+)")
+                        .find(line)?.value?.trim()
+                }
+                .distinct()
+        } else {
+            // Fallback to raw scan for older results
+            terminalText.lines()
+                .mapNotNull { line ->
+                    Regex("(rtsp://[^\\s]+|http://[^\\s]+)")
+                        .find(line)?.value?.trim()
+                }
+                .distinct()
+        }
+    }
+
+    // Auto-select first found URL
+    var selectedUrl by remember(streamUrls) {
+        mutableStateOf(streamUrls.firstOrNull() ?: "")
+    }
+    var customUrl by remember { mutableStateOf("") }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Text("STREAM VIEWER", color = Color.Magenta,
+            fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (streamUrls.isNotEmpty()) {
+            Text("AUTO-DETECTED STREAMS (${streamUrls.size})",
+                color = Color.Gray, fontSize = 10.sp,
+                fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(4.dp))
+
+            streamUrls.forEach { url ->
+                val isSelected = url == selectedUrl
+                TextButton(
+                    onClick = { selectedUrl = url },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            1.dp,
+                            if (isSelected) Color.Magenta else Color(0xFF222222),
+                            RoundedCornerShape(4.dp)
+                        )
+                        .background(
+                            if (isSelected) Color(0xFF1A001A)
+                            else Color.Transparent
+                        )
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            if (url.startsWith("rtsp")) Icons.Default.Videocam
+                            else Icons.Default.Language,
+                            contentDescription = null,
+                            tint = if (isSelected) Color.Magenta else Color.Gray,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            url,
+                            color = if (isSelected) Color.Magenta else Color.Cyan,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFF222222), RoundedCornerShape(4.dp))
+                    .padding(12.dp)
+            ) {
+                Text(
+                    "No streams detected yet.\nRun a scan on the CONSOLE tab first.",
+                    color = Color.Gray,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Manual override
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp))
+                .background(Color(0xFF0A0A0A))
+                .padding(12.dp)
+        ) {
+            Column {
+                Text("MANUAL OVERRIDE", color = Color.Gray, fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    BasicTextField(
+                        value = customUrl,
+                        onValueChange = { customUrl = it },
+                        textStyle = TextStyle(
+                            color = Color.White, fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Magenta),
+                        decorationBox = { inner ->
+                            if (customUrl.isEmpty()) Text(
+                                "rtsp://user:pass@ip:port/stream",
+                                color = Color.DarkGray, fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            inner()
+                        }
+                    )
+                    IconButton(onClick = { 
+                        if (customUrl.isNotEmpty()) {
+                            selectedUrl = customUrl 
+                        }
+                    }) {
+                        Icon(Icons.Default.PlayArrow, "Play", tint = Color.Magenta)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Player - auto-plays selected URL
+        if (selectedUrl.isNotEmpty()) {
+            val authenticatedUrl = buildAuthUrl(selectedUrl, credentials.first, credentials.second)
+            key(authenticatedUrl) { // Recompose player when URL changes
+                if (authenticatedUrl.startsWith("rtsp")) {
+                    AndroidView(
+                        factory = { ctx ->
+                            val player = androidx.media3.exoplayer.ExoPlayer.Builder(ctx).build()
+                            player.setMediaItem(
+                                androidx.media3.common.MediaItem.fromUri(authenticatedUrl)
+                            )
+                            player.prepare()
+                            player.playWhenReady = true
+                            androidx.media3.ui.PlayerView(ctx).apply {
+                                this.player = player
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .border(1.dp, Color(0xFF333333))
+                    )
+                } else {
+                    // HTTP Stream / Snapshot
+                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    settings.javaScriptEnabled = true
+                                    settings.loadWithOverviewMode = true
+                                    settings.useWideViewPort = true
+                                    webViewClient = object : WebViewClient() {
+                                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {
+                                            handler?.proceed()
+                                        }
+                                    }
+                                    loadUrl(authenticatedUrl)
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color(0xFF050505))
+                    .border(1.dp, Color(0xFF1A1A1A)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Videocam, null,
+                        tint = Color(0xFF333333),
+                        modifier = Modifier.size(48.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Awaiting stream source...",
+                        color = Color(0xFF333333),
+                        fontFamily = FontFamily.Monospace)
+                }
+            }
         }
     }
 }
@@ -799,12 +1092,21 @@ fun IntelSection(
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier.weight(1f)
                         )
-                        if (title == "STREAMS FOUND" && item.contains("http")) {
-                            val url = item.substringAfter("🔗 ").substringAfter("ACTIVE MJPEG STREAM: ").substringAfter("POTENTIAL VIDEO STREAM: ").trim()
-                            if (url.startsWith("http")) {
+                        if (title == "STREAMS FOUND") {
+                            // Extract URL from various possible formats
+                            val url = item.substringAfter("🔗 ")
+                                        .substringAfter("ACTIVE MJPEG STREAM: ")
+                                        .substringAfter("POTENTIAL VIDEO STREAM: ")
+                                        .substringAfter("RTSP URL: ")
+                                        .substringAfter("RTSP Stream: ")
+                                        .substringAfter("🔗 ") // Handle nested or duplicated symbols
+                                        .split("|").first() // Handle structured link format
+                                        .trim()
+                            
+                            if (url.startsWith("http") || url.startsWith("rtsp")) {
                                 Text(
-                                    text = "[PREVIEW]",
-                                    color = Color.Green,
+                                    text = "[VIEW]",
+                                    color = if (url.startsWith("rtsp")) Color.Magenta else Color.Green,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.clickable { onPreviewStream(url) }.padding(4.dp)
@@ -883,70 +1185,150 @@ fun ArchiveTab(context: Context, onFileClick: (File) -> Unit) {
 }
 
 @Composable
-fun LanScannerTab(onScanComplete: (String) -> Unit) {
+fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> Unit) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var isScanning by remember { mutableStateOf(false) }
     var scanOutput by remember { mutableStateOf("Ready to scan local network...") }
+    var discoveredDevices by remember { mutableStateOf<List<String>>(emptyList()) }
+    var selectedSubTab by remember { mutableIntStateOf(0) }
+    val subTabs = listOf("RADAR", "DEVICES", "LOGS")
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("🔍 LAN Scanner", color = Color.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text("Discover devices on your local network", color = Color.Gray)
+        Text("🔍 LAN Scanner", color = Color.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Black)
+        Text("Discover devices on your local network", color = Color.Gray, fontSize = 12.sp)
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        Button(
-            onClick = {
-                isScanning = true
-                scanOutput = "Scanning network...\nThis may take 10-20 seconds."
-
-                scope.launch(Dispatchers.IO) {
-                    try {
-                        val py = Python.getInstance()
-                        val module = py.getModule("CamXploit")
-                        val pyFunc = module.get("lan_scan")
-                        
-                        if (pyFunc != null) {
-                            val result = pyFunc.call()
-                            val output = result?.toString() ?: "Scan completed but returned no output."
-                            withContext(Dispatchers.Main) {
-                                scanOutput = output
-                                isScanning = false
-                            }
-                        } else {
-                            withContext(Dispatchers.Main) {
-                                scanOutput = "Error: lan_scan() function not found in Python file."
-                                isScanning = false
-                            }
-                        }
-                    } catch (e: Exception) {
-                        withContext(Dispatchers.Main) {
-                            scanOutput = "Error during scan: ${e.message}"
-                            isScanning = false
-                        }
-                    }
-                }
-            },
-            enabled = !isScanning,
-            modifier = Modifier.fillMaxWidth()
+        TabRow(
+            selectedTabIndex = selectedSubTab,
+            containerColor = Color.Transparent,
+            contentColor = Color.Cyan,
+            divider = { HorizontalDivider(color = Color.DarkGray) },
+            indicator = { tabPositions ->
+                TabRowDefaults.SecondaryIndicator(
+                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedSubTab]),
+                    color = Color.Cyan
+                )
+            }
         ) {
-            Text(if (isScanning) "Scanning..." else "Start LAN Scan")
+            subTabs.forEachIndexed { index, title ->
+                Tab(
+                    selected = selectedSubTab == index,
+                    onClick = { selectedSubTab = index },
+                    text = { Text(title, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Card(
-            modifier = Modifier.fillMaxSize(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F0F0F))
-        ) {
-            Text(
-                scanOutput,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp)
-                    .verticalScroll(rememberScrollState()),
-                color = Color.White,
-                lineHeight = 18.sp
-            )
+        when (selectedSubTab) {
+            0 -> { // RADAR View
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    Box(
+                        modifier = Modifier
+                            .size(150.dp)
+                            .border(2.dp, if (isScanning) Color.Green else Color.DarkGray, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isScanning) {
+                            CircularProgressIndicator(modifier = Modifier.size(120.dp), color = Color.Green, strokeWidth = 2.dp)
+                        }
+                        Icon(
+                            Icons.Default.SettingsInputAntenna,
+                            contentDescription = null,
+                            tint = if (isScanning) Color.Green else Color.Gray,
+                            modifier = Modifier.size(48.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Button(
+                        onClick = {
+                            isScanning = true
+                            scanOutput = "> Initializing ARP & SSDP Scan...\n"
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    val py = Python.getInstance()
+                                    val module = py.getModule("CamXploit")
+                                    val result = module.callAttr("lan_scan").toString()
+                                    withContext(Dispatchers.Main) {
+                                        scanOutput += result
+                                        // Extract IPs for the devices tab
+                                        discoveredDevices = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").findAll(result).map { it.value }.distinct().toList()
+                                        isScanning = false
+                                        onScanComplete(result)
+                                        // Auto-save LAN scan logs
+                                        saveContentToFile(context, result, "LAN_Scan", "txt")
+                                    }
+                                } catch (e: Exception) {
+                                    withContext(Dispatchers.Main) {
+                                        scanOutput += "\n[!] Scan Error: ${e.message}"
+                                        isScanning = false
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !isScanning,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20))
+                    ) {
+                        Text(if (isScanning) "SCANNING..." else "INITIATE NETWORK SCAN")
+                    }
+                }
+            }
+            1 -> { // DEVICES View
+                if (discoveredDevices.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("No devices discovered yet.", color = Color.Gray)
+                    }
+                } else {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        discoveredDevices.forEach { ip ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
+                                border = BorderStroke(1.dp, Color(0xFF1A1A1A))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Router, null, tint = Color.Cyan, modifier = Modifier.size(20.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Text(ip, color = Color.White, fontFamily = FontFamily.Monospace)
+                                    }
+                                    Button(
+                                        onClick = { onDeviceSelect(ip) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(30.dp)
+                                    ) {
+                                        Text("SELECT", fontSize = 10.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            2 -> { // LOGS View
+                Surface(
+                    modifier = Modifier.fillMaxSize().border(1.dp, Color(0xFF1A1A1A), RoundedCornerShape(4.dp)),
+                    color = Color(0xFF050505)
+                ) {
+                    SelectionContainer {
+                        Text(
+                            text = scanOutput,
+                            color = Color(0xFF00FF41),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(10.dp).verticalScroll(rememberScrollState())
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -1048,6 +1430,137 @@ fun saveJsonReport(context: Context, terminalText: String, target: String) {
 }
 
 
+@Composable
+fun StormBreakerTab(onLogUpdate: (String) -> Unit) {
+    var template by remember { mutableStateOf("NearYou") }
+    var redirectUrl by remember { mutableStateOf("https://www.youtube.com/watch?v=dQw4w9WgXcQ") }
+    val scope = rememberCoroutineScope()
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
+        Text("⚡ STORMBREAKER", color = Color.Red, fontSize = 24.sp, fontWeight = FontWeight.Black)
+        Text("Social Engineering & Tracking Link Generator", color = Color.Gray, fontSize = 12.sp)
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text("Select Template", color = Color.White, fontWeight = FontWeight.Bold)
+        val templates = listOf("NearYou", "Webcam", "Google-Drive", "WhatsApp")
+        templates.forEach { t ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { template = t }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RadioButton(
+                    selected = (template == t),
+                    onClick = { template = t },
+                    colors = RadioButtonDefaults.colors(selectedColor = Color.Red)
+                )
+                Text(t, color = Color.LightGray, modifier = Modifier.padding(start = 8.dp))
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        OutlinedTextField(
+            value = redirectUrl,
+            onValueChange = { redirectUrl = it },
+            label = { Text("Redirect URL (After capture)") },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = TextStyle(color = Color.White)
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Button(
+            onClick = {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val py = Python.getInstance()
+                        val module = py.getModule("CamXploit")
+                        val sys = py.getModule("sys")
+                        val outputStream = TerminalOutputStream { text ->
+                            scope.launch(Dispatchers.Main) { onLogUpdate(text) }
+                        }
+                        sys.put("stdout", outputStream)
+                        module.callAttr("storm_breaker_gen", template, redirectUrl)
+                    } catch (e: Exception) {
+                        scope.launch(Dispatchers.Main) { onLogUpdate("\n[!] Storm Error: ${e.message}") }
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+        ) {
+            Text("GENERATE TRACKING LINK", fontWeight = FontWeight.Bold)
+        }
+        
+        Spacer(modifier = Modifier.height(20.dp))
+        Text("Active Results", color = Color.Cyan, fontWeight = FontWeight.Bold)
+        
+        var results by remember { mutableStateOf<List<Map<String, String>>>(emptyList()) }
+        
+        LaunchedEffect(Unit) {
+            while(true) {
+                try {
+                    val py = Python.getInstance()
+                    val module = py.getModule("CamXploit")
+                    val jsonStr = module.callAttr("get_storm_results").toString()
+                    val array = JSONArray(jsonStr)
+                    val newList = mutableListOf<Map<String, String>>()
+                    for (i in 0 until array.length()) {
+                        val obj = array.getJSONObject(i)
+                        val map = mutableMapOf<String, String>()
+                        obj.keys().forEach { key -> map[key] = obj.get(key).toString() }
+                        newList.add(map)
+                    }
+                    results = newList.reversed()
+                } catch (e: Exception) {}
+                delay(3000)
+            }
+        }
+
+        if (results.isEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF111111))
+            ) {
+                Text(
+                    "No data captured yet. Waiting for target click...",
+                    modifier = Modifier.padding(16.dp),
+                    color = Color.Gray,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        } else {
+            results.forEach { result ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0A1F0A)),
+                    border = BorderStroke(1.dp, Color.Green)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                            Text("TARGET: ${result["ip"]}", color = Color.Green, fontWeight = FontWeight.Bold)
+                            Text(result["time"] ?: "", color = Color.Gray, fontSize = 10.sp)
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Device: ${result["ua"]?.take(40)}...", color = Color.LightGray, fontSize = 11.sp)
+                        if (result.containsKey("lat")) {
+                            Text("📍 Location: ${result["lat"]}, ${result["lon"]}", color = Color.Cyan, fontSize = 12.sp)
+                        }
+                        if (result.containsKey("image")) {
+                            Text("📸 Webcam Capture Received!", color = Color.Magenta, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LiveViewScreen(
@@ -1068,38 +1581,55 @@ fun LiveViewScreen(
             }
         )
 
-        if (isLoading) {
+        if (isLoading && !streamUrl.startsWith("rtsp")) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
 
-        AndroidView(
-            factory = { context ->
-                WebView(context).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.loadWithOverviewMode = true
-                    settings.useWideViewPort = true
-                    settings.builtInZoomControls = true
+        if (streamUrl.startsWith("rtsp")) {
+            AndroidView(
+                factory = { ctx ->
+                    val player = androidx.media3.exoplayer.ExoPlayer.Builder(ctx).build()
+                    player.setMediaItem(
+                        androidx.media3.common.MediaItem.fromUri(streamUrl)
+                    )
+                    player.prepare()
+                    player.playWhenReady = true
+                    androidx.media3.ui.PlayerView(ctx).apply {
+                        this.player = player
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            AndroidView(
+                factory = { context ->
+                    WebView(context).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.loadWithOverviewMode = true
+                        settings.useWideViewPort = true
+                        settings.builtInZoomControls = true
 
-                    webViewClient = object : WebViewClient() {
-                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                            handler?.proceed()
-                        }
+                        webViewClient = object : WebViewClient() {
+                            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                                handler?.proceed()
+                            }
 
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            isLoading = false
-                        }
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                isLoading = false
+                            }
 
-                        override fun onReceivedError(view: WebView?, request: WebResourceRequest?, err: WebResourceError?) {
-                            isLoading = false
-                            error = "Failed to load - Try another link"
+                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, err: WebResourceError?) {
+                                isLoading = false
+                                error = "Failed to load - Try another link"
+                            }
                         }
                     }
-                }
-            },
-            update = { it.loadUrl(streamUrl) },
-            modifier = Modifier.fillMaxSize()
-        )
+                },
+                update = { it.loadUrl(streamUrl) },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     }
 }
 
