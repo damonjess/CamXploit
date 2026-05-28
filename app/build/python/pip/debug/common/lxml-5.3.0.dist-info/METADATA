@@ -40,8 +40,8 @@ Provides-Extra: htmlsoup
 Requires-Dist: BeautifulSoup4; extra == "htmlsoup"
 Provides-Extra: source
 Requires-Dist: Cython>=3.0.11; extra == "source"
-Requires-Dist: chaquopy-libxml2 (>=2.9.8)
 Requires-Dist: chaquopy-libxslt (>=1.1.32)
+Requires-Dist: chaquopy-libxml2 (>=2.9.8)
 Download-URL: 
 
 lxml is a Pythonic, mature binding for the libxml2 and libxslt libraries.  It

@@ -1,4 +1,4 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: shodan
 Version: 1.31.0
 Summary: Python library and command-line utility for Shodan (https://developer.shodan.io)
@@ -26,10 +26,20 @@ License-File: AUTHORS
 Requires-Dist: click
 Requires-Dist: click-plugins
 Requires-Dist: colorama
-Requires-Dist: requests (>=2.2.1)
+Requires-Dist: requests>=2.2.1
 Requires-Dist: XlsxWriter
+Requires-Dist: ipaddress; python_version <= "2.7"
 Requires-Dist: tldextract
-Requires-Dist: ipaddress ; python_version <= "2.7"
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: license-file
+Dynamic: requires-dist
+Dynamic: summary
 
 shodan: The official Python library and CLI for Shodan
 ======================================================

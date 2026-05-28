@@ -1,10 +1,31 @@
-from onvif.client import ONVIFService, ONVIFCamera, SERVICES
-from onvif.exceptions import ONVIFError, ERR_ONVIF_UNKNOWN, \
-        ERR_ONVIF_PROTOCOL, ERR_ONVIF_WSDL, ERR_ONVIF_BUILD
-#from onvif import cli
+"""Initialize onvif."""
+import zeep
 
-__all__ = ( 'ONVIFService', 'ONVIFCamera', 'ONVIFError',
-            'ERR_ONVIF_UNKNOWN', 'ERR_ONVIF_PROTOCOL',
-            'ERR_ONVIF_WSDL', 'ERR_ONVIF_BUILD',
-            'SERVICES'#, 'cli'
-           )
+from onvif.client import SERVICES, ONVIFCamera, ONVIFService
+from onvif.exceptions import (
+    ERR_ONVIF_BUILD,
+    ERR_ONVIF_PROTOCOL,
+    ERR_ONVIF_UNKNOWN,
+    ERR_ONVIF_WSDL,
+    ONVIFError,
+)
+
+
+def zeep_pythonvalue(self, xmlvalue):
+    """Monkey patch zeep."""
+    return xmlvalue
+
+
+# pylint: disable=no-member
+zeep.xsd.simple.AnySimpleType.pythonvalue = zeep_pythonvalue
+
+__all__ = (
+    "ONVIFService",
+    "ONVIFCamera",
+    "ONVIFError",
+    "ERR_ONVIF_UNKNOWN",
+    "ERR_ONVIF_PROTOCOL",
+    "ERR_ONVIF_WSDL",
+    "ERR_ONVIF_BUILD",
+    "SERVICES",
+)

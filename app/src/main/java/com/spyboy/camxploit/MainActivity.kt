@@ -389,6 +389,7 @@ fun CamGuardianApp() {
                                     withContext(Dispatchers.Main) { 
                                         isScanning = false 
                                         saveJsonReport(context, terminalText, ipInput)
+                                        saveContentToFile(context, terminalText, "Scan_Log", "txt")
                                     }
                                 } catch (e: Exception) {
                                     withContext(Dispatchers.Main) {
@@ -464,9 +465,11 @@ fun CamGuardianApp() {
                     activeStreamUrl = url
                 }, {
                     // TEST ONVIF logic
-                    val ipMatch = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").find(terminalText)
+                    // Look for the last IP found in the terminal, as it's likely the current target
+                    val ipMatch = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").findAll(terminalText).lastOrNull()
                     if (ipMatch != null) {
                         val targetIp = ipMatch.value
+                        Toast.makeText(context, "Probing ONVIF on $targetIp...", Toast.LENGTH_SHORT).show()
                         terminalText += "\n[>] Initiating Targeted ONVIF Probe for $targetIp...\n"
                         scope.launch(Dispatchers.IO) {
                             try {
@@ -478,9 +481,12 @@ fun CamGuardianApp() {
                                 }
                                 sys.put("stdout", outputStream)
                                 module.callAttr("discover_onvif", targetIp)
+                                withContext(Dispatchers.Main) {
+                                    terminalText += "\n[🏁] ONVIF Probe Complete for $targetIp.\n"
+                                }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
-                                    terminalText += "\n[!] ONVIF Error: ${e.message}"
+                                    terminalText += "\n[!] ONVIF Error: ${e.message}\n"
                                 }
                             }
                         }
@@ -538,24 +544,39 @@ fun CamGuardianApp() {
                         .border(1.dp, Color.Green, RoundedCornerShape(8.dp))
                         .background(Color.Black)
                 ) {
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                settings.loadWithOverviewMode = true
-                                settings.useWideViewPort = true
-                                
-                                webViewClient = object : WebViewClient() {
-                                    override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                                        handler?.proceed()
-                                    }
+                    if (url.startsWith("rtsp")) {
+                        AndroidView(
+                            factory = { ctx ->
+                                val player = androidx.media3.exoplayer.ExoPlayer.Builder(ctx).build()
+                                player.setMediaItem(androidx.media3.common.MediaItem.fromUri(url))
+                                player.prepare()
+                                player.playWhenReady = true
+                                androidx.media3.ui.PlayerView(ctx).apply {
+                                    this.player = player
                                 }
-                                loadUrl(url)
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    settings.loadWithOverviewMode = true
+                                    settings.useWideViewPort = true
+                                    
+                                    webViewClient = object : WebViewClient() {
+                                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                                            handler?.proceed()
+                                        }
+                                    }
+                                    loadUrl(url)
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                     IconButton(
                         onClick = { activeStreamUrl = null },
                         modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape)
