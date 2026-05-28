@@ -971,6 +971,22 @@ def cam_over_exploit(ip, port, proto):
         pass
     return None
 
+def banner_grab(ip, port):
+    """Attempts to grab service banner from open ports."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1.5)
+            s.connect((ip, port))
+            # Some services require a small delay or a newline
+            if port == 80:
+                s.sendall(b"HEAD / HTTP/1.1\r\nHost: " + ip.encode() + b"\r\n\r\n")
+            banner = s.recv(1024).decode(errors="ignore").strip()
+            if banner:
+                print(f"    {INFO} Banner ({port}): {banner[:100]}")
+                return banner
+    except: pass
+    return None
+
 def scan_single_target(target_ip):
     print(f"\n{SCAN} Scanning target IP: {target_ip}")
     success_cred = None # Initialize to avoid UnboundLocalError
@@ -994,6 +1010,10 @@ def scan_single_target(target_ip):
                 if s.connect_ex((target_ip, p)) == 0:
                     with lock: open_ports.append(p)
                     service = PORT_SERVICE_MAP.get(p, "Unknown Service")
+
+                    # Banner Grabbing for more info
+                    banner = banner_grab(target_ip, p)
+
                     is_rtsp, server = probe_rtsp(target_ip, p)
                     if is_rtsp:
                         with lock: rtsp_info[p] = server
@@ -1214,6 +1234,15 @@ def main(target_input=None):
 
     targets = []
     try:
+        # Support for IP:PORT format
+        if ":" in target_input and "/" not in target_input and "-" not in target_input:
+            parts = target_input.split(":")
+            ip = parts[0].strip()
+            port = int(parts[1].strip())
+            print(f"{INFO} Target: {ip} | Targeted Port: {port}")
+            scan_single_target(ip, specific_port=port)
+            return
+
         if "/" in target_input:
             # CIDR notation (e.g., 192.168.1.0/24)
             print(f"{RADR} Expanding CIDR Range: {target_input}")
