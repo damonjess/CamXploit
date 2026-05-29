@@ -1,6 +1,7 @@
 plugins {
     id 'com.android.application'
     id 'com.chaquo.python'
+    id 'org.jetbrains.kotlin.plugin.compose'
 }
 
 android {
@@ -15,19 +16,23 @@ android {
         versionName "2.0.2"
 
         ndk {
-            abiFilters "arm64-v8a", "armeabi-v7a"
+            abiFilters "arm64-v8a"
         }
 
         python {
-            buildPython "python3"
+            version "3.13"
             pip {
                 install "requests"
                 install "beautifulsoup4"
                 install "lxml"
-                install "onvif-zeep"
-                install "shodan"
+                // install "onvif-zeep" // Currently unavailable for Python 3.13
+                // install "shodan"     // Currently unavailable for Python 3.13
             }
         }
+    }
+
+    buildFeatures {
+        compose true
     }
 
     buildTypes {
@@ -52,6 +57,7 @@ dependencies {
     implementation 'androidx.compose.ui:ui-graphics'
     implementation 'androidx.compose.ui:ui-tooling-preview'
     implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-extended'
     implementation 'com.google.android.material:material:1.12.0'
     implementation 'androidx.media3:media3-exoplayer:1.5.1'
     implementation 'androidx.media3:media3-exoplayer-rtsp:1.5.1'

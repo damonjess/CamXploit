@@ -868,13 +868,11 @@ fun buildAuthUrl(url: String, user: String, pass: String): String {
 fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String) -> Unit) {
     // Auto-extract credentials if any were found in the console
     val credentials = remember(terminalText) {
-        // Match either HTTP or RTSP cracked credentials
-        val match = Regex("""CRACKED \((?:HTTP|RTSP)\): ([^:]+):([^\s\n]+)""").find(terminalText)
-        if (match != null) {
-            match.groupValues[1] to match.groupValues[2]
-        } else {
-            "" to ""
-        }
+        val credMatch = Regex("(?:CRACKED|Success)[^\\n]*?(\\w+):(\\w+)\\s*@")
+            .find(terminalText)
+        val user = credMatch?.groupValues?.get(1) ?: "admin"
+        val pass = credMatch?.groupValues?.get(2) ?: "admin"
+        user to pass
     }
 
     // Auto-extract ALL stream URLs from scan results
@@ -1025,7 +1023,15 @@ fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String)
 
         // Player - auto-plays selected URL
         if (selectedUrl.isNotEmpty()) {
-            val authenticatedUrl = buildAuthUrl(selectedUrl, credentials.first, credentials.second)
+            val (user, pass) = credentials
+            val authUrl = selectedUrl
+                .replace("http://", "http://$user:$pass@")
+                .replace("https://", "https://$user:$pass@")
+            val authenticatedUrl = if (selectedUrl.startsWith("rtsp")) {
+                buildAuthUrl(selectedUrl, user, pass)
+            } else {
+                authUrl
+            }
             key(authenticatedUrl) { // Recompose player when URL changes
                 val isRtsp = authenticatedUrl.startsWith("rtsp")
                 val isMjpeg = authenticatedUrl.contains("mjpeg", ignoreCase = true) || 
@@ -1062,14 +1068,15 @@ fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String)
                             factory = { ctx ->
                                 WebView(ctx).apply {
                                     settings.javaScriptEnabled = true
-                                    settings.loadWithOverviewMode = true
+                                    settings.domStorageEnabled = true
                                     settings.useWideViewPort = true
+                                    settings.loadWithOverviewMode = true
                                     webViewClient = object : WebViewClient() {
                                         override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {
                                             handler?.proceed()
                                         }
                                     }
-                                    loadUrl(authenticatedUrl)
+                                    loadUrl(authUrl)
                                 }
                             },
                             modifier = Modifier.fillMaxSize()
@@ -1115,14 +1122,15 @@ fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String)
                             factory = { ctx ->
                                 WebView(ctx).apply {
                                     settings.javaScriptEnabled = true
-                                    settings.loadWithOverviewMode = true
+                                    settings.domStorageEnabled = true
                                     settings.useWideViewPort = true
+                                    settings.loadWithOverviewMode = true
                                     webViewClient = object : WebViewClient() {
                                         override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {
                                             handler?.proceed()
                                         }
                                     }
-                                    loadUrl(authenticatedUrl)
+                                    loadUrl(authUrl)
                                 }
                             },
                             modifier = Modifier.fillMaxSize()
