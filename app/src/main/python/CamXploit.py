@@ -862,7 +862,7 @@ def storm_breaker_gen(template_type, redirect_url):
     start_storm_server(template_type, redirect_url)
     return "Server Started"
 
-def probe_onvif(target_ip):
+def discover_onvif(target_ip):
     """
     Attempts to discover ONVIF details for a specific IP.
     Uses WS-Discovery and direct service probing.
@@ -1120,7 +1120,7 @@ def scan_single_target(target_ip, specific_port=None):
                 success_cred = (camover_creds[0], camover_creds[1], f"{proto}://{target_ip}:{p}/")
 
         # New ONVIF Discovery Step
-        probe_onvif(target_ip)
+        discover_onvif(target_ip)
 
         if brand in CVE_DATABASE:
             print(f"\n  [{SHLD}] Known Vulnerabilities for {brand}:")
@@ -1278,85 +1278,6 @@ def scan_single_target(target_ip, specific_port=None):
     else:
         print(f"  {ERR} No open ports found on {target_ip}.")
 
-def main(target_input=None):
-    if not target_input: return
-
-    print(f"{SCAN} Initiating CamVigil Reconnaissance...")
-
-    # 1. Broad Discovery (UPnP/SSDP)
-    upnp_results = discover_upnp_ssdp()
-
-    targets = []
-    try:
-        # Support for IP:PORT format
-        if ":" in target_input and "/" not in target_input and "-" not in target_input:
-            parts = target_input.split(":")
-            ip = parts[0].strip()
-            port = int(parts[1].strip())
-            print(f"{INFO} Target: {ip} | Targeted Port: {port}")
-            scan_single_target(ip, specific_port=port)
-            return
-
-        if "/" in target_input:
-            # CIDR notation (e.g., 192.168.1.0/24)
-            print(f"{RADR} Expanding CIDR Range: {target_input}")
-            network = ipaddress.ip_network(target_input, strict=False)
-            targets = [str(ip) for ip in network.hosts()]
-        elif "-" in target_input:
-            # Range notation (e.g., 192.168.1.1-192.168.1.50 or 192.168.1.1-50)
-            print(f"{RADR} Expanding IP Range: {target_input}")
-            parts = target_input.split("-")
-            start_ip = ipaddress.ip_address(parts[0].strip())
-
-            if "." in parts[1]:
-                end_ip = ipaddress.ip_address(parts[1].strip())
-            else:
-                # Handle 192.168.1.1-50 format
-                start_str = str(start_ip)
-                prefix = start_str[:start_str.rfind(".") + 1]
-                end_ip = ipaddress.ip_address(prefix + parts[1].strip())
-
-            curr = start_ip
-            while curr <= end_ip:
-                targets.append(str(curr))
-                curr += 1
-        else:
-            targets = [target_input]
-
-        if len(targets) > 1:
-            print(f"  {INFO} Total Targets Identified: {len(targets)}")
-            print(f"  {ALRT} Large range detected. Fast discovery enabled.")
-    except Exception as e:
-        print(f"{ERR} Error parsing target range: {str(e)}")
-        return
-
-    for ip in targets:
-        # For ranges, we do a quick check first to see if the host is alive
-        if len(targets) > 1:
-            is_alive = False
-            # Quick check on common web/rtsp ports
-            for p in [80, 443, 554, 8080, 8000, 37777]:
-                try:
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                        s.settimeout(0.3)
-                        if s.connect_ex((ip, p)) == 0:
-                            is_alive = True
-                            break
-                except: pass
-
-            if is_alive:
-                scan_single_target(ip)
-            else:
-                # Just a small status line for skipped hosts to show progress
-                pass
-        else:
-            scan_single_target(ip)
-
-    print(f"\n{DONE} ALL SCANS COMPLETE.")
-
-if __name__ == "__main__":
-    main()
-
 def discover_mdns():
     """
     Simple mDNS (Multicast DNS) discovery for local devices.
@@ -1480,3 +1401,82 @@ def get_local_ip():
         return ip
     except:
         return "127.0.0.1"
+
+def main(target_input=None):
+    if not target_input: return
+
+    print(f"{SCAN} Initiating CamVigil Reconnaissance...")
+
+    # 1. Broad Discovery (UPnP/SSDP)
+    upnp_results = discover_upnp_ssdp()
+
+    targets = []
+    try:
+        # Support for IP:PORT format
+        if ":" in target_input and "/" not in target_input and "-" not in target_input:
+            parts = target_input.split(":")
+            ip = parts[0].strip()
+            port = int(parts[1].strip())
+            print(f"{INFO} Target: {ip} | Targeted Port: {port}")
+            scan_single_target(ip, specific_port=port)
+            return
+
+        if "/" in target_input:
+            # CIDR notation (e.g., 192.168.1.0/24)
+            print(f"{RADR} Expanding CIDR Range: {target_input}")
+            network = ipaddress.ip_network(target_input, strict=False)
+            targets = [str(ip) for ip in network.hosts()]
+        elif "-" in target_input:
+            # Range notation (e.g., 192.168.1.1-192.168.1.50 or 192.168.1.1-50)
+            print(f"{RADR} Expanding IP Range: {target_input}")
+            parts = target_input.split("-")
+            start_ip = ipaddress.ip_address(parts[0].strip())
+
+            if "." in parts[1]:
+                end_ip = ipaddress.ip_address(parts[1].strip())
+            else:
+                # Handle 192.168.1.1-50 format
+                start_str = str(start_ip)
+                prefix = start_str[:start_str.rfind(".") + 1]
+                end_ip = ipaddress.ip_address(prefix + parts[1].strip())
+
+            curr = start_ip
+            while curr <= end_ip:
+                targets.append(str(curr))
+                curr += 1
+        else:
+            targets = [target_input]
+
+        if len(targets) > 1:
+            print(f"  {INFO} Total Targets Identified: {len(targets)}")
+            print(f"  {ALRT} Large range detected. Fast discovery enabled.")
+    except Exception as e:
+        print(f"{ERR} Error parsing target range: {str(e)}")
+        return
+
+    for ip in targets:
+        # For ranges, we do a quick check first to see if the host is alive
+        if len(targets) > 1:
+            is_alive = False
+            # Quick check on common web/rtsp ports
+            for p in [80, 443, 554, 8080, 8000, 37777]:
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.settimeout(0.3)
+                        if s.connect_ex((ip, p)) == 0:
+                            is_alive = True
+                            break
+                except: pass
+
+            if is_alive:
+                scan_single_target(ip)
+            else:
+                # Just a small status line for skipped hosts to show progress
+                pass
+        else:
+            scan_single_target(ip)
+
+    print(f"\n{DONE} ALL SCANS COMPLETE.")
+
+if __name__ == "__main__":
+    main()

@@ -62,6 +62,14 @@ import java.util.Date
 import java.util.Locale
 import java.util.*
 import java.net.URL
+import java.net.Inet4Address
+import java.net.NetworkInterface
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.rtsp.RtspMediaSource
+import androidx.media3.ui.PlayerView
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -96,16 +104,12 @@ fun CamGuardianApp() {
     var selectedTab by remember { mutableIntStateOf(0) }
     var showDisclaimer by remember { mutableStateOf(true) }
     var capturedBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var activeStreamUrl by remember { mutableStateOf<String?>(null) }
     var showLiveView by remember { mutableStateOf(false) }
     var selectedStreamUrl by remember { mutableStateOf("") }
     var selectedStreamType by remember { mutableStateOf("") }
-    var detectedUsername by remember { mutableStateOf("") }
-    var detectedPassword by remember { mutableStateOf("") }
     var shodanApiKey by remember { mutableStateOf("") }
     var shodanQuery by remember { mutableStateOf("webcam") }
     var showShodanDialog by remember { mutableStateOf(false) }
-    var lanScanResult by remember { mutableStateOf("Press Scan to discover devices on your network.") }
     var selectedUrl by remember { mutableStateOf("") }
 
     val context = LocalContext.current
@@ -320,7 +324,12 @@ fun CamGuardianApp() {
                     selected = selectedTab == 5,
                     onClick = { selectedTab = 5 },
                     icon = { Icon(Icons.Default.FlashOn, "Storm") },
-                    label = { Text("STORM") }
+                    label = { Text("STORM") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color(0xFFFFBF00),
+                        selectedTextColor = Color(0xFFFFBF00),
+                        indicatorColor = Color(0xFF1E1E1E)
+                    )
                 )
             }
         },
@@ -402,7 +411,8 @@ fun CamGuardianApp() {
                         }
                     },
                     onStreamSelect = { url, type ->
-                        selectedUrl = url
+                        val (user, pass) = extractCredentials(terminalText)
+                        selectedUrl = buildAuthUrl(url, user, pass)
                         selectedTab = 3
                     }
                 )
@@ -450,11 +460,17 @@ fun CamGuardianApp() {
                         }
                     }
                 }, { url ->
-                    selectedUrl = url
+                    val (user, pass) = extractCredentials(terminalText)
+                    selectedUrl = buildAuthUrl(url, user, pass)
                     selectedTab = 3
                 }, {
-                    val ipMatch = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").findAll(terminalText).lastOrNull()
-                    val targetIp = ipMatch?.value ?: ""
+                    val targetIp = ipInput.ifEmpty {
+                        Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").findAll(terminalText).lastOrNull()?.value ?: ""
+                    }
+                    if (targetIp.isBlank()) {
+                        Toast.makeText(context, "No active target IP. Run a scan first.", Toast.LENGTH_SHORT).show()
+                        return@IntelTab
+                    }
                     scope.launch(Dispatchers.IO) {
                         try {
                             val py = Python.getInstance()
@@ -464,7 +480,7 @@ fun CamGuardianApp() {
                                 scope.launch(Dispatchers.Main) { terminalText += text }
                             }
                             sys.put("stdout", outputStream)
-                            module.callAttr("probe_onvif", targetIp)
+                            module.callAttr("discover_onvif", targetIp)
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
                                 terminalText += "\n[!] ONVIF Error: ${e.message}\n"
@@ -475,19 +491,19 @@ fun CamGuardianApp() {
                 2 -> ArchiveTab(context) { file -> viewingFile = file }
                 3 -> StreamTab(terminalText, selectedUrl, { selectedUrl = it })
                 4 -> LanScannerTab(
-                    onScanComplete = { result -> lanScanResult = result },
+                    onScanComplete = { },
                     onDeviceSelect = { ip ->
                         ipInput = ip
                         selectedTab = 0
                         Toast.makeText(context, "Target set to $ip", Toast.LENGTH_SHORT).show()
                     }
                 )
-                5 -> StormBreakerTab { text: String -> terminalText += text }
+                5 -> StormTab(terminalText) { text: String -> terminalText += text }
             }
 
             capturedBitmap?.let { bitmap ->
                 Spacer(modifier = Modifier.height(20.dp))
-                Text("LAST CAPTURED SNAPSHOT", color = Color.Yellow, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text("LAST CAPTURED SNAPSHOT", color = Color.Yellow, fontWeight = FontWeight.Black, fontSize = 14.sp)
                 Spacer(modifier = Modifier.height(8.dp))
                 Box(
                     modifier = Modifier
@@ -504,65 +520,6 @@ fun CamGuardianApp() {
                     )
                     IconButton(
                         onClick = { capturedBitmap = null },
-                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                    ) {
-                        Icon(Icons.Default.Close, "Close", tint = Color.White)
-                    }
-                }
-            }
-
-            activeStreamUrl?.let { url ->
-                Spacer(modifier = Modifier.height(20.dp))
-                Text("LIVE STREAM PREVIEW", color = Color.Green, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(240.dp)
-                        .border(1.dp, Color.Green, RoundedCornerShape(8.dp))
-                        .background(Color.Black)
-                ) {
-                    if (url.startsWith("rtsp")) {
-                        AndroidView(
-                            factory = { ctx ->
-                                val player = androidx.media3.exoplayer.ExoPlayer.Builder(ctx).build()
-                                val mediaItem = androidx.media3.common.MediaItem.Builder()
-                                    .setUri(url)
-                                    .build()
-                                val rtspMediaSource = androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory()
-                                    .setForceUseRtpTcp(true)
-                                    .createMediaSource(mediaItem)
-                                player.setMediaSource(rtspMediaSource)
-                                player.prepare()
-                                player.playWhenReady = true
-                                androidx.media3.ui.PlayerView(ctx).apply {
-                                    this.player = player
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        AndroidView(
-                            factory = { ctx ->
-                                WebView(ctx).apply {
-                                    settings.javaScriptEnabled = true
-                                    settings.domStorageEnabled = true
-                                    settings.loadWithOverviewMode = true
-                                    settings.useWideViewPort = true
-                                    
-                                    webViewClient = object : WebViewClient() {
-                                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                                            handler?.proceed()
-                                        }
-                                    }
-                                    loadUrl(url)
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                    IconButton(
-                        onClick = { activeStreamUrl = null },
                         modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape)
                     ) {
                         Icon(Icons.Default.Close, "Close", tint = Color.White)
@@ -739,7 +696,7 @@ fun ConsoleTab(
                                             containerColor = if (linkType.contains("SNAPSHOT")) Color.Magenta else Color.Green
                                         )
                                     ) {
-                                        Text(if (linkType.contains("SNAPSHOT")) "📸 View" else "▶️ Live")
+                                        Text("[VIEW]")
                                     }
                                 }
                             }
@@ -883,8 +840,17 @@ fun ReconButton(label: String, url: String, context: Context) {
     }
 }
 
+fun extractCredentials(terminalText: String): Pair<String, String> {
+    val match = Regex("""CRACKED \((?:HTTP|RTSP)\): ([^:]+):([^\s\n]+)""").find(terminalText)
+    return if (match != null) {
+        match.groupValues[1] to match.groupValues[2]
+    } else {
+        "" to ""
+    }
+}
+
 fun buildAuthUrl(url: String, user: String, pass: String): String {
-    if (user.isBlank() || pass.isBlank()) return url
+    if (user.isBlank() || pass.isBlank() || url.contains("@")) return url
     return try {
         if (url.startsWith("rtsp://")) {
             url.replace("rtsp://", "rtsp://$user:$pass@")
@@ -1061,20 +1027,26 @@ fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String)
         if (selectedUrl.isNotEmpty()) {
             val authenticatedUrl = buildAuthUrl(selectedUrl, credentials.first, credentials.second)
             key(authenticatedUrl) { // Recompose player when URL changes
-                if (authenticatedUrl.startsWith("rtsp")) {
+                val isRtsp = authenticatedUrl.startsWith("rtsp")
+                val isMjpeg = authenticatedUrl.contains("mjpeg", ignoreCase = true) || 
+                             authenticatedUrl.contains("mjpg", ignoreCase = true) ||
+                             authenticatedUrl.contains("videostream.cgi", ignoreCase = true) ||
+                             authenticatedUrl.contains("faststream", ignoreCase = true)
+                val isSnapshot = authenticatedUrl.contains("snapshot", ignoreCase = true) || 
+                                authenticatedUrl.contains(".jpg", ignoreCase = true)
+
+                if (isRtsp) {
                     AndroidView(
                         factory = { ctx ->
-                            val player = androidx.media3.exoplayer.ExoPlayer.Builder(ctx).build()
-                            val mediaItem = androidx.media3.common.MediaItem.Builder()
-                                .setUri(authenticatedUrl)
-                                .build()
-                            val rtspMediaSource = androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory()
+                            val player = ExoPlayer.Builder(ctx).build()
+                            val mediaItem = MediaItem.fromUri(authenticatedUrl)
+                            val rtspMediaSource = RtspMediaSource.Factory()
                                 .setForceUseRtpTcp(true)
                                 .createMediaSource(mediaItem)
                             player.setMediaSource(rtspMediaSource)
                             player.prepare()
-                            player.playWhenReady = true
-                            androidx.media3.ui.PlayerView(ctx).apply {
+                            player.play()
+                            PlayerView(ctx).apply {
                                 this.player = player
                             }
                         },
@@ -1083,8 +1055,61 @@ fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String)
                             .weight(1f)
                             .border(1.dp, Color(0xFF333333))
                     )
+                } else if (isMjpeg) {
+                    // MJPEG Stream via WebView
+                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    settings.javaScriptEnabled = true
+                                    settings.loadWithOverviewMode = true
+                                    settings.useWideViewPort = true
+                                    webViewClient = object : WebViewClient() {
+                                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {
+                                            handler?.proceed()
+                                        }
+                                    }
+                                    loadUrl(authenticatedUrl)
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                } else if (isSnapshot) {
+                    var snapshotBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+                    var refreshCount by remember { mutableIntStateOf(0) }
+
+                    LaunchedEffect(authenticatedUrl, refreshCount) {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                val bytes = java.net.URL(authenticatedUrl).readBytes()
+                                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                snapshotBitmap = bitmap?.asImageBitmap()
+                            } catch (e: Exception) {}
+                        }
+                        delay(2000)
+                        refreshCount++
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .border(1.dp, Color(0xFF333333))
+                            .background(Color.Black),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        snapshotBitmap?.let {
+                            Image(
+                                bitmap = it,
+                                contentDescription = "Snapshot",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit
+                            )
+                        } ?: CircularProgressIndicator(color = Color.Magenta)
+                    }
                 } else {
-                    // HTTP Stream / Snapshot
+                    // Fallback for other HTTP links
                     Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                         AndroidView(
                             factory = { ctx ->
@@ -1259,8 +1284,9 @@ fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> 
     var isScanning by remember { mutableStateOf(false) }
     var scanOutput by remember { mutableStateOf("Ready to scan local network...") }
     var discoveredDevices by remember { mutableStateOf<List<String>>(emptyList()) }
+    var discoveredRangeDevices by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var selectedSubTab by remember { mutableIntStateOf(0) }
-    val subTabs = listOf("RADAR", "DEVICES", "LOGS")
+    val subTabs = listOf("RADAR", "RANGE", "DEVICES", "LOGS")
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("🔍 LAN Scanner", color = Color.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Black)
@@ -1345,7 +1371,83 @@ fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> 
                     }
                 }
             }
-            1 -> { // DEVICES View
+            1 -> { // RANGE View
+                Column(modifier = Modifier.fillMaxSize()) {
+                    val subnet = remember { getLocalSubnet() }
+                    Text("Detected Subnet: $subnet", color = Color.Yellow, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            isScanning = true
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    val process = Runtime.getRuntime().exec(arrayOf("nmap", "-sn", subnet))
+                                    val reader = BufferedReader(InputStreamReader(process.inputStream))
+                                    var line: String?
+                                    val results = mutableListOf<Pair<String, String>>()
+                                    while (reader.readLine().also { line = it } != null) {
+                                        val l = line ?: ""
+                                        if (l.contains("Nmap scan report for")) {
+                                            if (l.contains("(") && l.contains(")")) {
+                                                val host = l.substringAfter("for ").substringBefore(" (").trim()
+                                                val ip = l.substringAfter("(").substringBefore(")").trim()
+                                                results.add(ip to host)
+                                            } else {
+                                                val ip = l.substringAfter("for ").trim()
+                                                results.add(ip to "Unknown")
+                                            }
+                                        }
+                                    }
+                                    process.waitFor()
+                                    withContext(Dispatchers.Main) {
+                                        discoveredRangeDevices = results
+                                        isScanning = false
+                                        scanOutput += "\nRange Scan Complete: ${results.size} devices found."
+                                    }
+                                } catch (e: Exception) {
+                                    withContext(Dispatchers.Main) {
+                                        scanOutput += "\n[!] Nmap Error: ${e.message}"
+                                        isScanning = false
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !isScanning,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))
+                    ) {
+                        Text(if (isScanning) "SCANNING..." else "SCAN SUBNET")
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (discoveredRangeDevices.isEmpty() && !isScanning) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("No devices found. Tap SCAN SUBNET.", color = Color.Gray)
+                        }
+                    } else {
+                        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                            discoveredRangeDevices.forEach { (ip, host) ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onDeviceSelect(ip) },
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
+                                    border = BorderStroke(1.dp, Color(0xFF1A1A1A))
+                                ) {
+                                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Router, null, tint = Color.Green, modifier = Modifier.size(24.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Column {
+                                            Text(ip, color = Color.White, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                            Text(host, color = Color.Gray, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            2 -> { // DEVICES View
                 if (discoveredDevices.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("No devices discovered yet.", color = Color.Gray)
@@ -1381,7 +1483,7 @@ fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> 
                     }
                 }
             }
-            2 -> { // LOGS View
+            3 -> { // LOGS View
                 Surface(
                     modifier = Modifier.fillMaxSize().border(1.dp, Color(0xFF1A1A1A), RoundedCornerShape(4.dp)),
                     color = Color(0xFF050505)
@@ -1499,131 +1601,142 @@ fun saveJsonReport(context: Context, terminalText: String, target: String) {
 
 
 @Composable
-fun StormBreakerTab(onLogUpdate: (String) -> Unit) {
-    var template by remember { mutableStateOf("NearYou") }
-    var redirectUrl by remember { mutableStateOf("https://www.youtube.com/watch?v=dQw4w9WgXcQ") }
+fun StormTab(terminalText: String, onLogUpdate: (String) -> Unit) {
+    var targetIp by remember { mutableStateOf("") }
+    var selectedType by remember { mutableStateOf("DOS_RESILIENCE") }
+    var stormOutput by remember { mutableStateOf("> Ready for stress testing...\n") }
+    var expanded by remember { mutableStateOf(false) }
+    val options = listOf("DOS_RESILIENCE", "SSDP_FLOOD", "PORT_STRESS")
     val scope = rememberCoroutineScope()
 
+    // Auto-fill IP from terminalText
+    LaunchedEffect(terminalText) {
+        val ipMatch = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").findAll(terminalText).lastOrNull()
+        if (ipMatch != null && targetIp.isEmpty()) {
+            targetIp = ipMatch.value
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
-        Text("⚡ STORMBREAKER", color = Color.Red, fontSize = 24.sp, fontWeight = FontWeight.Black)
-        Text("Social Engineering & Tracking Link Generator", color = Color.Gray, fontSize = 12.sp)
+        Text("⚡ STORM MODULE", color = Color(0xFFFFBF00), fontSize = 24.sp, fontWeight = FontWeight.Black)
+        Text("Network Stress & Resilience Testing", color = Color.Gray, fontSize = 12.sp)
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        Text("Select Template", color = Color.White, fontWeight = FontWeight.Bold)
-        val templates = listOf("NearYou", "Webcam", "Google-Drive", "WhatsApp")
-        templates.forEach { t ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { template = t }
-                    .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
+        // Warning Box
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF332200)),
+            border = BorderStroke(1.dp, Color(0xFFFFBF00)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                "⚠️ WARNING: Only use on your own devices or authorized targets. Stress testing can cause network instability.",
+                color = Color(0xFFFFBF00),
+                modifier = Modifier.padding(12.dp),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Target IP Input
+        OutlinedTextField(
+            value = targetIp,
+            onValueChange = { targetIp = it },
+            label = { Text("Target IP", color = Color(0xFFFFBF00)) },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(0xFFFFBF00),
+                unfocusedBorderColor = Color.DarkGray,
+                focusedLabelColor = Color(0xFFFFBF00)
+            )
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Attack Type Dropdown
+        Box(modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(
+                onClick = { expanded = true },
+                modifier = Modifier.fillMaxWidth(),
+                border = BorderStroke(1.dp, Color.DarkGray)
             ) {
-                RadioButton(
-                    selected = (template == t),
-                    onClick = { template = t },
-                    colors = RadioButtonDefaults.colors(selectedColor = Color.Red)
-                )
-                Text(t, color = Color.LightGray, modifier = Modifier.padding(start = 8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(selectedType, color = Color.White)
+                    Icon(Icons.Default.ArrowDropDown, null, tint = Color(0xFFFFBF00))
+                }
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.fillMaxWidth(0.9f).background(Color(0xFF111111))
+            ) {
+                options.forEach { type ->
+                    DropdownMenuItem(
+                        text = { Text(type, color = Color.White) },
+                        onClick = {
+                            selectedType = type
+                            expanded = false
+                        }
+                    )
+                }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        OutlinedTextField(
-            value = redirectUrl,
-            onValueChange = { redirectUrl = it },
-            label = { Text("Redirect URL (After capture)") },
-            modifier = Modifier.fillMaxWidth(),
-            textStyle = TextStyle(color = Color.White)
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
         Button(
             onClick = {
-                scope.launch(Dispatchers.IO) {
-                    try {
-                        val py = Python.getInstance()
-                        val module = py.getModule("CamXploit")
-                        val sys = py.getModule("sys")
-                        val outputStream = TerminalOutputStream { text ->
-                            scope.launch(Dispatchers.Main) { onLogUpdate(text) }
+                if (targetIp.isNotBlank()) {
+                    stormOutput += "> Initiating $selectedType on $targetIp...\n"
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            val py = Python.getInstance()
+                            val module = py.getModule("CamXploit")
+                            val sys = py.getModule("sys")
+                            val outputStream = TerminalOutputStream { text ->
+                                scope.launch(Dispatchers.Main) { stormOutput += text }
+                            }
+                            sys.put("stdout", outputStream)
+                            // Assuming port 80 for basic test
+                            module.callAttr("test_dos_resilience", targetIp, 80)
+                            withContext(Dispatchers.Main) {
+                                stormOutput += "\n> $selectedType Complete.\n"
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                stormOutput += "\n[!] Storm Error: ${e.message}\n"
+                            }
                         }
-                        sys.put("stdout", outputStream)
-                        module.callAttr("storm_breaker_gen", template, redirectUrl)
-                    } catch (e: Exception) {
-                        scope.launch(Dispatchers.Main) { onLogUpdate("\n[!] Storm Error: ${e.message}") }
                     }
                 }
             },
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFBF00))
         ) {
-            Text("GENERATE TRACKING LINK", fontWeight = FontWeight.Bold)
-        }
-        
-        Spacer(modifier = Modifier.height(20.dp))
-        Text("Active Results", color = Color.Cyan, fontWeight = FontWeight.Bold)
-        
-        var results by remember { mutableStateOf<List<Map<String, String>>>(emptyList()) }
-        
-        LaunchedEffect(Unit) {
-            while(true) {
-                try {
-                    val py = Python.getInstance()
-                    val module = py.getModule("CamXploit")
-                    val jsonStr = module.callAttr("get_storm_results").toString()
-                    val array = JSONArray(jsonStr)
-                    val newList = mutableListOf<Map<String, String>>()
-                    for (i in 0 until array.length()) {
-                        val obj = array.getJSONObject(i)
-                        val map = mutableMapOf<String, String>()
-                        obj.keys().forEach { key -> map[key] = obj.get(key).toString() }
-                        newList.add(map)
-                    }
-                    results = newList.reversed()
-                } catch (e: Exception) {}
-                delay(3000)
-            }
+            Text("START STRESS TEST", color = Color.Black, fontWeight = FontWeight.Bold)
         }
 
-        if (results.isEmpty()) {
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF111111))
-            ) {
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Results Terminal
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp)
+                .border(1.dp, Color(0xFF332200), RoundedCornerShape(4.dp)),
+            color = Color(0xFF050505)
+        ) {
+            SelectionContainer {
                 Text(
-                    "No data captured yet. Waiting for target click...",
-                    modifier = Modifier.padding(16.dp),
-                    color = Color.Gray,
+                    text = stormOutput,
+                    color = Color(0xFFFFBF00), // Amber
+                    fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace
+                    modifier = Modifier.padding(10.dp).verticalScroll(rememberScrollState())
                 )
-            }
-        } else {
-            results.forEach { result ->
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0A1F0A)),
-                    border = BorderStroke(1.dp, Color.Green)
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                            Text("TARGET: ${result["ip"]}", color = Color.Green, fontWeight = FontWeight.Bold)
-                            Text(result["time"] ?: "", color = Color.Gray, fontSize = 10.sp)
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Device: ${result["ua"]?.take(40)}...", color = Color.LightGray, fontSize = 11.sp)
-                        if (result.containsKey("lat")) {
-                            Text("📍 Location: ${result["lat"]}, ${result["lon"]}", color = Color.Cyan, fontSize = 12.sp)
-                        }
-                        if (result.containsKey("image")) {
-                            Text("📸 Webcam Capture Received!", color = Color.Magenta, fontSize = 12.sp)
-                        }
-                    }
-                }
             }
         }
     }
@@ -1656,17 +1769,15 @@ fun LiveViewScreen(
         if (streamUrl.startsWith("rtsp")) {
             AndroidView(
                 factory = { ctx ->
-                    val player = androidx.media3.exoplayer.ExoPlayer.Builder(ctx).build()
-                    val mediaItem = androidx.media3.common.MediaItem.Builder()
-                        .setUri(streamUrl)
-                        .build()
-                    val rtspMediaSource = androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory()
+                    val player = ExoPlayer.Builder(ctx).build()
+                    val mediaItem = MediaItem.fromUri(streamUrl)
+                    val rtspMediaSource = RtspMediaSource.Factory()
                         .setForceUseRtpTcp(true)
                         .createMediaSource(mediaItem)
                     player.setMediaSource(rtspMediaSource)
                     player.prepare()
-                    player.playWhenReady = true
-                    androidx.media3.ui.PlayerView(ctx).apply {
+                    player.play()
+                    PlayerView(ctx).apply {
                         this.player = player
                     }
                 },
@@ -1745,4 +1856,20 @@ fun SnapshotViewer(imageUrl: String, onBack: () -> Unit) {
             Text("Failed to load snapshot", color = Color.Red, modifier = Modifier.padding(16.dp))
         }
     }
+}
+
+fun getLocalSubnet(): String {
+    try {
+        val interfaces = NetworkInterface.getNetworkInterfaces()
+        for (inf in Collections.list(interfaces)) {
+            if (inf.isLoopback || !inf.isUp) continue
+            for (addr in Collections.list(inf.inetAddresses)) {
+                if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                    val ip = addr.hostAddress ?: continue
+                    return ip.substringBeforeLast(".") + ".0/24"
+                }
+            }
+        }
+    } catch (e: Exception) {}
+    return "192.168.1.0/24"
 }
