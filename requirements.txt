@@ -1,5 +1,7 @@
 requests
 beautifulsoup4
 lxml
-onvif-zeep
+onvif-python
 shodan
+flask
+flask-cors

@@ -22,11 +22,11 @@ android {
         python {
             version "3.13"
             pip {
+                install "onvif-python"
                 install "requests"
                 install "beautifulsoup4"
-                install "lxml"
-                // install "onvif-zeep" // Currently unavailable for Python 3.13
-                // install "shodan"     // Currently unavailable for Python 3.13
+                install "flask"
+                install "flask-cors"
             }
         }
     }

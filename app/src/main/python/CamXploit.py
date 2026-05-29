@@ -30,7 +30,10 @@ import uuid
 import ssl
 from datetime import datetime
 from bs4 import BeautifulSoup
-import shodan
+try:
+    import shodan
+except ImportError:
+    shodan = None
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 from concurrent.futures import ThreadPoolExecutor
 
@@ -501,6 +504,10 @@ def quick_test_url(url, timeout=5):
 
 def shodan_search(api_key, query):
     """Searches Shodan for cameras based on a query."""
+    if shodan is None:
+        print(f"  {ERR} Shodan library not available. Install it with 'pip install shodan'.")
+        return
+
     print(f"\n[{GLOB}] Initiating Global Shodan Search: {query}")
     try:
         api = shodan.Shodan(api_key)
@@ -906,9 +913,8 @@ def discover_onvif(target_ip):
                         if data:
                             print(f"    {OPEN} ONVIF WS-Discovery Response from {addr}")
                             discovered = True
-    except Exception as e:
-        print(f"    {ERR} ONVIF Discovery Error: {str(e)}")
-        return
+            except Exception as e:
+                print(f"    {ERR} ONVIF Discovery Error: {str(e)}")
 
             # Try to initialize ONVIF client if we have reason to believe it's there
             # We try common credentials
@@ -969,8 +975,8 @@ def discover_onvif(target_ip):
                         break # Likely not an ONVIF service on this port
 
             if discovered: break
-        except:
-            pass
+    except:
+        pass
 
     if not discovered:
         print(f"    {INFO} No active ONVIF services detected via standard probes.")
