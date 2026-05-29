@@ -64,12 +64,20 @@ import java.util.*
 import java.net.URL
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.net.InetAddress
+import java.net.Socket
+import java.net.InetSocketAddress
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -116,6 +124,27 @@ fun CamGuardianApp() {
     val view = LocalView.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+        val coarseLocationGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
+        if (!fineLocationGranted && !coarseLocationGranted) {
+            Toast.makeText(context, "Location permission is required for LAN scanning", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val fineLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+        val coarseLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (fineLocation != PackageManager.PERMISSION_GRANTED || coarseLocation != PackageManager.PERMISSION_GRANTED) {
+            permissionLauncher.launch(arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ))
+        }
+    }
 
     if (showDisclaimer) {
         AlertDialog(
@@ -1285,6 +1314,12 @@ fun ArchiveTab(context: Context, onFileClick: (File) -> Unit) {
     }
 }
 
+data class ScannedDevice(
+    val ip: String,
+    val hostname: String?,
+    val openPorts: List<Int>
+)
+
 @Composable
 fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> Unit) {
     val scope = rememberCoroutineScope()
@@ -1292,7 +1327,8 @@ fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> 
     var isScanning by remember { mutableStateOf(false) }
     var scanOutput by remember { mutableStateOf("Ready to scan local network...") }
     var discoveredDevices by remember { mutableStateOf<List<String>>(emptyList()) }
-    var discoveredRangeDevices by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var discoveredRangeDevices by remember { mutableStateOf<List<ScannedDevice>>(emptyList()) }
+    var scanProgress by remember { mutableFloatStateOf(0f) }
     var selectedSubTab by remember { mutableIntStateOf(0) }
     val subTabs = listOf("RADAR", "RANGE", "DEVICES", "LOGS")
 
@@ -1381,42 +1417,68 @@ fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> 
             }
             1 -> { // RANGE View
                 Column(modifier = Modifier.fillMaxSize()) {
-                    val subnet = remember { getLocalSubnet() }
-                    Text("Detected Subnet: $subnet", color = Color.Yellow, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    val subnets = listOf("192.168.1", "192.168.0")
+                    Text("Scanning Subnets: ${subnets.joinToString(", ")}", color = Color.Yellow, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                     Spacer(modifier = Modifier.height(8.dp))
+                    
+                    if (isScanning) {
+                        LinearProgressIndicator(
+                            progress = scanProgress,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            color = Color.Cyan,
+                            trackColor = Color.DarkGray
+                        )
+                    }
+
                     Button(
                         onClick = {
                             isScanning = true
+                            discoveredRangeDevices = emptyList()
+                            scanProgress = 0f
                             scope.launch(Dispatchers.IO) {
-                                try {
-                                    val process = Runtime.getRuntime().exec(arrayOf("nmap", "-sn", subnet))
-                                    val reader = BufferedReader(InputStreamReader(process.inputStream))
-                                    var line: String?
-                                    val results = mutableListOf<Pair<String, String>>()
-                                    while (reader.readLine().also { line = it } != null) {
-                                        val l = line ?: ""
-                                        if (l.contains("Nmap scan report for")) {
-                                            if (l.contains("(") && l.contains(")")) {
-                                                val host = l.substringAfter("for ").substringBefore(" (").trim()
-                                                val ip = l.substringAfter("(").substringBefore(")").trim()
-                                                results.add(ip to host)
-                                            } else {
-                                                val ip = l.substringAfter("for ").trim()
-                                                results.add(ip to "Unknown")
+                                val results = mutableListOf<ScannedDevice>()
+                                val portsToCheck = listOf(80, 554, 8080, 8000)
+                                val totalIps = subnets.size * 254
+                                var scannedCount = 0
+
+                                subnets.forEach { subnet ->
+                                    val jobs = (1..254).map { i ->
+                                        async {
+                                            val ip = "$subnet.$i"
+                                            try {
+                                                val address = InetAddress.getByName(ip)
+                                                if (address.isReachable(300)) {
+                                                    val hostname = try {
+                                                        val host = address.canonicalHostName
+                                                        if (host != ip) host else null
+                                                    } catch (e: Exception) { null }
+                                                    
+                                                    val openPorts = mutableListOf<Int>()
+                                                    for (port in portsToCheck) {
+                                                        try {
+                                                            Socket().use { socket ->
+                                                                socket.connect(InetSocketAddress(ip, port), 200)
+                                                                openPorts.add(port)
+                                                            }
+                                                        } catch (e: Exception) {}
+                                                    }
+                                                    synchronized(results) {
+                                                        results.add(ScannedDevice(ip, hostname, openPorts))
+                                                    }
+                                                }
+                                            } catch (e: Exception) {}
+                                            synchronized(this@launch) {
+                                                scannedCount++
+                                                scanProgress = scannedCount.toFloat() / totalIps
                                             }
                                         }
                                     }
-                                    process.waitFor()
-                                    withContext(Dispatchers.Main) {
-                                        discoveredRangeDevices = results
-                                        isScanning = false
-                                        scanOutput += "\nRange Scan Complete: ${results.size} devices found."
-                                    }
-                                } catch (e: Exception) {
-                                    withContext(Dispatchers.Main) {
-                                        scanOutput += "\n[!] Nmap Error: ${e.message}"
-                                        isScanning = false
-                                    }
+                                    jobs.awaitAll()
+                                }
+                                withContext(Dispatchers.Main) {
+                                    discoveredRangeDevices = results.sortedBy { it.ip }
+                                    isScanning = false
+                                    scanOutput += "\nRange Scan Complete: ${results.size} devices found."
                                 }
                             }
                         },
@@ -1435,18 +1497,30 @@ fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> 
                         }
                     } else {
                         Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                            discoveredRangeDevices.forEach { (ip, host) ->
+                            discoveredRangeDevices.forEach { device ->
                                 Card(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onDeviceSelect(ip) },
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                     colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
                                     border = BorderStroke(1.dp, Color(0xFF1A1A1A))
                                 ) {
                                     Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                         Icon(Icons.Default.Router, null, tint = Color.Green, modifier = Modifier.size(24.dp))
                                         Spacer(Modifier.width(12.dp))
-                                        Column {
-                                            Text(ip, color = Color.White, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                            Text(host, color = Color.Gray, fontSize = 11.sp)
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(device.ip, color = Color.White, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                            if (!device.hostname.isNullOrBlank()) {
+                                                Text(device.hostname, color = Color.Gray, fontSize = 11.sp)
+                                            }
+                                            if (device.openPorts.isNotEmpty()) {
+                                                Text("Open Ports: ${device.openPorts.joinToString(", ")}", color = Color.Cyan, fontSize = 11.sp)
+                                            }
+                                        }
+                                        Button(
+                                            onClick = { onDeviceSelect(device.ip) },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20)),
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text("SCAN", fontSize = 10.sp)
                                         }
                                     }
                                 }

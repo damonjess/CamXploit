@@ -22,11 +22,20 @@ android {
         python {
             version "3.13"
             pip {
-                install "onvif-python"
                 install "requests"
+                install "urllib3"
                 install "beautifulsoup4"
+                install "lxml"
+                install "onvif2-zeep"
+                install "scapy"
                 install "flask"
                 install "flask-cors"
+                install "click"
+                install "click-plugins"
+                install "colorama"
+                install "XlsxWriter"
+                options "--no-deps", "--no-binary", "shodan"
+                install "shodan"
             }
         }
     }

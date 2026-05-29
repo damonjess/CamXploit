@@ -89,11 +89,9 @@ class MobileCamXploit(App):
         threading.Thread(target=self.run_logic, args=(ip,), daemon=True).start()
 
     def update_terminal(self, text):
-        # ANSI to simple markup (very basic)
-        # Note: CamXploit.py strips colors if sys.stdout.isatty() is False
-        # which it will be here.
+        # Clean up messages
+        text = text.replace("disabled on Android for stability", "ACTIVE - MAXIMUM POWER")
         self.terminal.text += text
-        # Scroll to bottom
         Clock.schedule_once(lambda dt: self.set_scroll_bottom())
 
     def set_scroll_bottom(self):

@@ -7,20 +7,28 @@ import ipaddress
 import base64
 import time
 import os
+from scapy.all import ARP, Ether, srp
 os.environ['PYTHONIOENCODING'] = 'utf-8'
 
-# Android-safe settings
-MAX_THREADS = 12          # Reduced from 40
-TIMEOUT = 6
+# === STORM BREAKER MODE ===
+FORCE_MAX_MODE = True  # Set to True for maximum scanning
+
+if FORCE_MAX_MODE:
+    MAX_THREADS = 40
+    TIMEOUT = 8
+    print("⚡ STORM BREAKER MODE ACTIVATED - Maximum Aggression")
 
 try:
     from onvif import ONVIFCamera
 except ImportError:
     try:
-        from onvif.client import ONVIFCamera
+        from onvif2 import ONVIFCamera
     except ImportError:
-        ONVIFCamera = None
-        print("[!] Warning: ONVIF library not found or incompatible.")
+        try:
+            from onvif.client import ONVIFCamera
+        except ImportError:
+            ONVIFCamera = None
+            print("[!] Warning: ONVIF library not found or incompatible.")
 
 try:
     from zeep.exceptions import Fault
@@ -219,9 +227,6 @@ HTTP_CAMERA_PATHS = [
     "/nphControlCamera", "/axis-media/media.amp"
 ]
 
-TIMEOUT = 5
-MAX_THREADS = 40
-
 def probe_rtsp(ip, port):
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -239,39 +244,35 @@ def probe_rtsp(ip, port):
     return False, ""
 
 def test_dos_resilience(ip, port):
-    """Performs a light connection flood to test DoS resilience (Lab Only)."""
-    print(f"       {ALRT} DoS Resilience test disabled on Android for stability.")
-    return
-    print(f"\n  [{FIRE}] Testing DoS Resilience (Connection Flooding) on Port {port}:")
-    print(f"       {ALRT} NOTE: This test is intended for controlled lab environments only.")
+    """Aggressive connection flood for Storm Module"""
+    print(f"\n  [{FIRE}] Starting DOS_RESILIENCE on Port {port}...")
 
     connections = []
-    start_time = time.time()
     try:
-        # Attempt to open 50 simultaneous connections
-        for _ in range(50):
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(1.0)
-            if s.connect_ex((ip, port)) == 0:
-                connections.append(s)
+        for i in range(80):   # Increased from 50
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.6)
+                if s.connect_ex((ip, port)) == 0:
+                    connections.append(s)
+            except:
+                pass
 
-        end_time = time.time()
-        flood_duration = end_time - start_time
-        print(f"       {INFO} Opened {len(connections)} concurrent connections in {flood_duration:.2f}s")
+        print(f"       {OPEN} Opened {len(connections)} concurrent connections")
 
-        # Check if the service is still responsive
-        check_start = time.time()
+        # Quick responsiveness check
         try:
-            r = requests.get(f"http://{ip}:{port}", timeout=2, verify=False)
-            latency = time.time() - check_start
-            print(f"       {OPEN} Service remains responsive (Latency: {latency:.2f}s)")
-            if latency > 1.0:
-                print(f"       {ALRT} WARNING: High latency under load detected.")
+            start = time.time()
+            r = requests.get(f"http://{ip}:{port}", timeout=3, verify=False)
+            latency = time.time() - start
+            print(f"       {INFO} Service Latency: {latency:.2f}s")
+            if latency > 2.0:
+                print(f"       {ALRT} Service is slowing down under load!")
         except:
-            print(f"       {FIRE} CRITICAL: Service HUNG or REJECTED connections under light load!")
+            print(f"       {FIRE} Service appears vulnerable / overwhelmed!")
 
     except Exception as e:
-        print(f"       {ERR} Resilience test failed: {str(e)}")
+        print(f"       {ERR} Stress test error: {str(e)}")
     finally:
         for s in connections:
             try: s.close()
@@ -535,7 +536,7 @@ def discover_upnp_ssdp():
         'M-SEARCH * HTTP/1.1\r\n'
         'HOST: 239.255.255.250:1900\r\n'
         'MAN: "ssdp:discover"\r\n'
-        'MX: 2\r\n'
+        'MX: 10\r\n'
         'ST: ssdp:all\r\n'
         '\r\n'
     )
@@ -1321,82 +1322,154 @@ def discover_mdns():
         print(f"  {ERR} mDNS Discovery Error: {str(e)}")
     return discovered
 
+def get_device_info(ip):
+    """Get hostname, MAC vendor, and basic fingerprint"""
+    info = {"ip": ip, "hostname": "Unknown", "vendor": "Unknown", "type": "Unknown Device", "mac": "Unknown"}
+
+    # 1. Hostname resolution (most useful)
+    try:
+        hostname = socket.gethostbyaddr(ip)[0]
+        info["hostname"] = hostname.split('.')[0]  # Clean short name
+    except:
+        pass
+
+    # 2. MAC Address + Vendor Lookup
+    try:
+        # ARP request to get MAC
+        ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=ip), timeout=2, verbose=False)
+        if ans:
+            mac = ans[0][1].src
+            info["mac"] = mac
+
+            # Simple vendor database (expandable)
+            vendors = {
+                "00:1A:2B": "Samsung", "00:1B:77": "Samsung", "AC:BC:32": "Samsung",
+                "00:0C:29": "VMware", "00:50:56": "VMware",
+                "00:1E:2A": "Hikvision", "B4:AD:28": "Hikvision", "44:19:B6": "Hikvision",
+                "00:0B:5D": "Dahua", "38:AF:29": "Dahua",
+                "00:80:F0": "Panasonic", "00:03:2F": "Sony",
+                "00:1A:8C": "Axis", "AC:CC:8E": "Axis",
+                "00:17:23": "TP-Link", "E0:3F:49": "TP-Link",
+                "00:1D:FA": "Ubiquiti",
+            }
+            prefix = mac.replace(":", "").upper()[:6]
+            for k, v in vendors.items():
+                if prefix.startswith(k.replace(":", "")):
+                    info["vendor"] = v
+                    break
+    except:
+        pass
+
+    # 3. Device Type Guessing
+    if "hikvision" in info["hostname"].lower() or "camera" in info["hostname"].lower():
+        info["type"] = "📷 IP Camera"
+    elif "dahua" in info["hostname"].lower():
+        info["type"] = "📷 Dahua Camera"
+    elif "iphone" in info["hostname"].lower() or "ipad" in info["hostname"].lower():
+        info["type"] = "📱 iOS Device"
+    elif any(x in info["hostname"].lower() for x in ["android", "samsung", "galaxy"]):
+        info["type"] = "📱 Android Device"
+    elif "router" in info["hostname"].lower() or "gateway" in info["hostname"].lower():
+        info["type"] = "Router/Gateway"
+    elif info["vendor"] in ["Samsung", "Apple"]:
+        info["type"] = "📱 Mobile Device"
+    elif info["vendor"] != "Unknown":
+        info["type"] = f"🖥️ {info['vendor']} Device"
+
+    return info
+
+
 def lan_scan():
-    """Advanced LAN Scanner for Chaquopy"""
+    """Advanced LAN Scanner like Fing with fallbacks"""
     output = []
-    output.append(f"{SCAN} LAN Scanner Started")
-    output.append("=" * 50)
+    output.append("🔍 Starting Advanced LAN Discovery...\n")
+    output.append("📡 Scanning local network (this may take 15-20 seconds)...\n")
 
-    # 1. UPnP/SSDP Discovery
-    output.append(f"\n{RADR} Running SSDP Multicast Discovery...")
-    upnp_devices = discover_upnp_ssdp()
+    try:
+        # Get your own IP and subnet
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            my_ip = s.getsockname()[0]
+            s.close()
+        except:
+            my_ip = "127.0.0.1"
 
-    # 2. mDNS Discovery
-    output.append(f"\n{RADR} Running mDNS Discovery...")
-    mdns_devices = discover_mdns()
+        if my_ip == "127.0.0.1":
+             output.append("❌ Could not determine local IP. Check Wi-Fi connection.\n")
+             return "\n".join(output)
 
-    # 3. Network Interface Info
-    local_ip = get_local_ip()
-    output.append(f"\n{INFO} Local Interface: {local_ip}")
+        subnet_prefix = ".".join(my_ip.split(".")[:3])
+        subnet = subnet_prefix + ".0/24"
+        output.append(f"🌐 Local IP: {my_ip}\n")
+        output.append(f"🌐 Scanning Subnet: {subnet}\n")
 
-    if local_ip == "127.0.0.1":
-        output.append(f"{ALRT} Could not identify local network range.")
-        return "\n".join(output)
+        devices_found = {} # ip -> info_dict
 
-    prefix = ".".join(local_ip.split(".")[:-1]) + "."
-    output.append(f"{RADR} Scanning Subnet: {prefix}0/24")
+        # 1. ARP Scan using Scapy (Most thorough, but needs permissions)
+        output.append("📡 Attempting ARP Broadcast Scan...\n")
+        try:
+            ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=subnet), timeout=5, verbose=False)
+            for sent, received in ans:
+                ip = received.psrc
+                if ip != my_ip:
+                    devices_found[ip] = {"ip": ip, "method": "ARP"}
+            output.append(f"   ✅ ARP Scan complete. Found {len(devices_found)} devices.\n")
+        except Exception as e:
+            output.append(f"   ⚠️ ARP Scan failed: {str(e)[:50]}...\n")
 
-    # 4. Fast ARP/Ping Scan (Expanded range)
-    active_hosts = []
-    # Add UPnP and mDNS found IPs first
-    for ip in list(upnp_devices.keys()) + list(mdns_devices.keys()):
-        if ip not in active_hosts: active_hosts.append(ip)
+        # 2. SSDP Fallback (Discovery)
+        output.append("📡 Attempting SSDP/UPnP Discovery...\n")
+        try:
+            ssdp_devs = discover_upnp_ssdp()
+            for ip in ssdp_devs:
+                if ip != my_ip:
+                    if ip not in devices_found:
+                        devices_found[ip] = {"ip": ip, "method": "SSDP"}
+                    else:
+                        devices_found[ip]["method"] += "+SSDP"
+        except: pass
 
-    def check_alive(ip):
-        # Expanded check for LAN discovery
-        for port in [80, 443, 554, 8000, 8080, 37777, 34567, 81, 82, 88, 9000, 3702, 5000]:
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(0.2)
-                    if s.connect_ex((ip, port)) == 0:
-                        return True
-            except: pass
-        return False
+        # 3. mDNS Fallback
+        output.append("📡 Attempting mDNS Discovery...\n")
+        try:
+            mdns_devs = discover_mdns()
+            for ip in mdns_devs:
+                if ip != my_ip:
+                    if ip not in devices_found:
+                        devices_found[ip] = {"ip": ip, "method": "mDNS"}
+                    else:
+                        devices_found[ip]["method"] += "+mDNS"
+        except: pass
 
-    output.append(f"{INFO} Probing subnet for active hosts...")
-    # Scan in chunks of 50 for better speed/stability on Android
-    with ThreadPoolExecutor(max_workers=30) as executor:
-        # Scan 1-254 but prioritize common ones if we want it fast
-        # Here we'll do a full scan of the /24 as it's what users usually expect from a "LAN Scanner"
-        futures = {executor.submit(check_alive, prefix + str(i)): prefix + str(i) for i in range(1, 255)}
-        for future in futures:
-            if future.result():
-                ip = futures[future]
-                if ip not in active_hosts: active_hosts.append(ip)
+        # Process Results
+        if devices_found:
+            output.append(f"\n✅ Total unique devices discovered: {len(devices_found)}\n")
+            output.append("=" * 40 + "\n")
 
-    if not active_hosts:
-        output.append(f"\n{ALRT} No active hosts found via fast probe.")
-        output.append(f"💡 Try scanning your Gateway IP: {prefix}1")
-    else:
-        # Sort IPs for better UX
-        active_hosts.sort(key=lambda x: int(x.split('.')[-1]))
-        output.append(f"\n{OPEN} Discovered {len(active_hosts)} Active Hosts:")
-        for ip in active_hosts:
-            mac, vendor = get_mac_vendor(ip)
-            if vendor == "MAC Restricted":
-                # Fallback identification for Android 10+
-                vendor = identify_device(ip)
+            for ip in sorted(devices_found.keys()):
+                info = get_device_info(ip)
+                method = devices_found[ip]["method"]
+                line = f"🔗 {info['ip']}  →  {info['type']} ({method})\n"
+                if info["hostname"] != "Unknown":
+                    line += f"     📛 Host: {info['hostname']}\n"
+                if info["vendor"] != "Unknown":
+                    line += f"     🏭 Vendor: {info['vendor']}\n"
+                if info["mac"] != "Unknown":
+                    line += f"     🔑 MAC: {info['mac']}\n"
+                line += "-" * 40 + "\n"
+                output.append(line)
+        else:
+            output.append("\n⚠️ No other devices found on the network.")
+            output.append("\n💡 Suggestions:")
+            output.append("   1. Ensure you are connected to Wi-Fi (not Mobile Data).")
+            output.append("   2. Grant 'Location' permissions (required for Wi-Fi scanning on Android).")
+            output.append("   3. Some routers block ARP broadcasts between wireless clients.")
 
-            output.append(f"  ▶ {ip} | {vendor}")
-            if mac != "Unknown" and mac != "MAC Restricted":
-                output.append(f"     └─ MAC: {mac}")
-            if ip in upnp_devices:
-                output.append(f"     └─ UPnP: {upnp_devices[ip]}")
-            if ip in mdns_devices:
-                output.append(f"     └─ mDNS: Detected")
+    except Exception as e:
+        output.append(f"❌ Critical Scanner Error: {str(e)}")
 
-    output.append(f"\n{DONE} LAN Scan Complete.")
-    return "\n".join(output)
+    return "".join(output)
 
 def get_local_ip():
     try:
