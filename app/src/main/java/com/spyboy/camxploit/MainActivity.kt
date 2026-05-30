@@ -73,6 +73,16 @@ import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
+import androidx.compose.animation.core.*
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
@@ -1071,7 +1081,7 @@ fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String)
                                 authenticatedUrl.contains(".jpg", ignoreCase = true)
 
                 if (isRtsp) {
-                    AndroidView(
+                    AndroidView<PlayerView>(
                         factory = { ctx ->
                             val player = ExoPlayer.Builder(ctx).build()
                             val mediaItem = MediaItem.fromUri(authenticatedUrl)
@@ -1326,11 +1336,24 @@ fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> 
     val context = LocalContext.current
     var isScanning by remember { mutableStateOf(false) }
     var scanOutput by remember { mutableStateOf("Ready to scan local network...") }
+    val discoveredRadarDevices = remember { mutableStateListOf<ScannedDevice>() }
     var discoveredDevices by remember { mutableStateOf<List<String>>(emptyList()) }
     var discoveredRangeDevices by remember { mutableStateOf<List<ScannedDevice>>(emptyList()) }
     var scanProgress by remember { mutableFloatStateOf(0f) }
     var selectedSubTab by remember { mutableIntStateOf(0) }
     val subTabs = listOf("RADAR", "RANGE", "DEVICES", "LOGS")
+
+    // Radar Animation
+    val infiniteTransition = rememberInfiniteTransition(label = "RadarTransition")
+    val radarRotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "RadarRotation"
+    )
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("🔍 LAN Scanner", color = Color.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Black)
@@ -1366,13 +1389,46 @@ fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> 
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                     Box(
                         modifier = Modifier
-                            .size(150.dp)
-                            .border(2.dp, if (isScanning) Color.Green else Color.DarkGray, CircleShape),
+                            .size(200.dp)
+                            .padding(10.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (isScanning) {
-                            CircularProgressIndicator(modifier = Modifier.size(120.dp), color = Color.Green, strokeWidth = 2.dp)
+                        // Background Circles
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val center = size / 2f
+                            val radius = size.minDimension / 2f
+                            drawCircle(color = Color.DarkGray, radius = radius, style = Stroke(1f))
+                            drawCircle(color = Color.DarkGray, radius = radius * 0.66f, style = Stroke(1f))
+                            drawCircle(color = Color.DarkGray, radius = radius * 0.33f, style = Stroke(1f))
+                            
+                            // Crosshairs
+                            drawLine(Color.DarkGray, start = androidx.compose.ui.geometry.Offset(center.width, 0f), end = androidx.compose.ui.geometry.Offset(center.width, size.height), strokeWidth = 1f)
+                            drawLine(Color.DarkGray, start = androidx.compose.ui.geometry.Offset(0f, center.height), end = androidx.compose.ui.geometry.Offset(size.width, center.height), strokeWidth = 1f)
                         }
+
+                        // Rotating Sweep
+                        if (isScanning) {
+                            Canvas(modifier = Modifier.fillMaxSize().rotate(radarRotation)) {
+                                val radius = size.minDimension / 2f
+                                drawArc(
+                                    brush = Brush.sweepGradient(
+                                        0.0f to Color.Transparent,
+                                        0.25f to Color.Green.copy(alpha = 0.4f),
+                                        0.5f to Color.Transparent
+                                    ),
+                                    startAngle = 0f,
+                                    sweepAngle = 90f,
+                                    useCenter = true
+                                )
+                                drawLine(
+                                    color = Color.Green,
+                                    start = center,
+                                    end = androidx.compose.ui.geometry.Offset(center.x + radius, center.y),
+                                    strokeWidth = 2f
+                                )
+                            }
+                        }
+                        
                         Icon(
                             Icons.Default.SettingsInputAntenna,
                             contentDescription = null,
@@ -1380,29 +1436,109 @@ fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> 
                             modifier = Modifier.size(48.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.height(24.dp))
+
+                    if (isScanning) {
+                        Text(
+                            text = "Scanning... ${(scanProgress * 100).toInt()}%",
+                            color = Color.Green,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        LinearProgressIndicator(
+                            progress = { scanProgress },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 8.dp),
+                            color = Color.Green,
+                            trackColor = Color.DarkGray,
+                            strokeCap = StrokeCap.Round
+                        )
+                    } else if (discoveredRadarDevices.isNotEmpty()) {
+                        Text(
+                            text = "Scan Complete: ${discoveredRadarDevices.size} devices found",
+                            color = Color.Cyan,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
                     Button(
                         onClick = {
                             isScanning = true
-                            scanOutput = "> Initializing ARP & SSDP Scan...\n"
+                            discoveredRadarDevices.clear()
+                            scanProgress = 0f
+                            scanOutput = "> Starting native ping sweep...\n"
+                            
                             scope.launch(Dispatchers.IO) {
                                 try {
-                                    val py = Python.getInstance()
-                                    val module = py.getModule("CamXploit")
-                                    val result = module.callAttr("lan_scan").toString()
+                                    val subnets = mutableSetOf<String>()
+                                    // 1. Get local IP and determine primary subnet
+                                    val interfaces = NetworkInterface.getNetworkInterfaces()
+                                    for (inf in Collections.list(interfaces)) {
+                                        if (inf.isLoopback || !inf.isUp) continue
+                                        for (addr in Collections.list(inf.inetAddresses)) {
+                                            if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                                                val ip = addr.hostAddress ?: continue
+                                                subnets.add(ip.substringBeforeLast("."))
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Add 192.168.0 as fallback if not present
+                                    subnets.add("192.168.1")
+                                    subnets.add("192.168.0")
+                                    
+                                    val targetSubnets = subnets.take(3)
+                                    val totalIps = targetSubnets.size * 254
+                                    var scannedCount = 0
+                                    val portsToCheck = listOf(80, 554, 8080, 8000, 443, 37777)
+
+                                    targetSubnets.forEach { subnet ->
+                                        val jobs = (1..254).map { i ->
+                                            async {
+                                                val ip = "$subnet.$i"
+                                                try {
+                                                    val address = InetAddress.getByName(ip)
+                                                    if (address.isReachable(300)) {
+                                                        val hostname = try {
+                                                            val host = address.canonicalHostName
+                                                            if (host != ip) host else null
+                                                        } catch (e: Exception) { null }
+
+                                                        val openPorts = mutableListOf<Int>()
+                                                        for (port in portsToCheck) {
+                                                            try {
+                                                                Socket().use { socket ->
+                                                                    socket.connect(InetSocketAddress(ip, port), 150)
+                                                                    openPorts.add(port)
+                                                                }
+                                                            } catch (e: Exception) {}
+                                                        }
+                                                        
+                                                        withContext(Dispatchers.Main) {
+                                                            discoveredRadarDevices.add(ScannedDevice(ip, hostname, openPorts))
+                                                            scanOutput += "Discovered: $ip ${hostname ?: ""}\n"
+                                                        }
+                                                    }
+                                                } catch (e: Exception) {}
+                                                
+                                                synchronized(this) {
+                                                    scannedCount++
+                                                    scanProgress = scannedCount.toFloat() / totalIps
+                                                }
+                                            }
+                                        }
+                                        jobs.awaitAll()
+                                    }
+                                    
                                     withContext(Dispatchers.Main) {
-                                        scanOutput += result
-                                        // Extract IPs for the devices tab
-                                        discoveredDevices = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").findAll(result).map { it.value }.distinct().toList()
                                         isScanning = false
-                                        onScanComplete(result)
-                                        // Auto-save LAN scan logs
-                                        saveContentToFile(context, result, "LAN_Scan", "txt")
+                                        scanOutput += "\nScan finished. Found ${discoveredRadarDevices.size} devices.\n"
                                     }
                                 } catch (e: Exception) {
                                     withContext(Dispatchers.Main) {
-                                        scanOutput += "\n[!] Scan Error: ${e.message}"
                                         isScanning = false
+                                        scanOutput += "\n[!] Native Scan Error: ${e.message}\n"
                                     }
                                 }
                             }
@@ -1412,6 +1548,52 @@ fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> 
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20))
                     ) {
                         Text(if (isScanning) "SCANNING..." else "INITIATE NETWORK SCAN")
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Found Devices List for RADAR tab
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(discoveredRadarDevices) { device ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
+                                border = BorderStroke(1.dp, Color(0xFF1A1A1A))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = if (device.openPorts.contains(554) || device.openPorts.contains(8000)) Icons.Default.Videocam else Icons.Default.Router,
+                                        contentDescription = null,
+                                        tint = if (device.openPorts.isNotEmpty()) Color.Green else Color.Cyan,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(device.ip, color = Color.White, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                        if (!device.hostname.isNullOrBlank()) {
+                                            Text(device.hostname, color = Color.Gray, fontSize = 11.sp)
+                                        }
+                                        if (device.openPorts.isNotEmpty()) {
+                                            Text("Ports: ${device.openPorts.joinToString(", ")}", color = Color.Green, fontSize = 10.sp)
+                                        }
+                                    }
+                                    Button(
+                                        onClick = { onDeviceSelect(device.ip) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(30.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20))
+                                    ) {
+                                        Text("SCAN", fontSize = 10.sp)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1849,7 +2031,7 @@ fun LiveViewScreen(
         }
 
         if (streamUrl.startsWith("rtsp")) {
-            AndroidView(
+            AndroidView<PlayerView>(
                 factory = { ctx ->
                     val player = ExoPlayer.Builder(ctx).build()
                     val mediaItem = MediaItem.fromUri(streamUrl)
