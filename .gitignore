@@ -26,6 +26,7 @@ app/build/python/
 
 # Gradle
 .gradle/
+.kotlin/
 gradle-app.setting
 !gradle-wrapper.jar
 .navigation/
