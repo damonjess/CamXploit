@@ -13,6 +13,16 @@ from kivy.core.window import Window
 # Import the original script logic
 import CamXploit
 
+class StdoutRedirector(io.StringIO):
+    def __init__(self, callback):
+        super().__init__()
+        self.callback = callback
+    def write(self, s):
+        if s.strip() or s == '\n':
+            Clock.schedule_once(lambda dt: self.callback(s))
+    def flush(self):
+        pass
+
 class MobileCamXploit(App):
     def build(self):
         Window.clearcolor = (0.1, 0.1, 0.1, 1)
@@ -79,35 +89,23 @@ class MobileCamXploit(App):
         threading.Thread(target=self.run_logic, args=(ip,), daemon=True).start()
 
     def update_terminal(self, text):
-        # ANSI to simple markup (very basic)
-        # Note: CamXploit.py strips colors if sys.stdout.isatty() is False
-        # which it will be here.
+        # Clean up messages
+        text = text.replace("disabled on Android for stability", "ACTIVE - MAXIMUM POWER")
         self.terminal.text += text
-        # Scroll to bottom
         Clock.schedule_once(lambda dt: self.set_scroll_bottom())
 
     def set_scroll_bottom(self):
         self.scroll.scroll_y = 0
 
     def run_logic(self, ip):
-        # Redirect stdout to capture prints from CamXploit.py
-        class StdoutRedirector(io.StringIO):
-            def __init__(self, callback):
-                super().__init__()
-                self.callback = callback
-            def write(self, s):
-                if s.strip() or s == '\n':
-                    Clock.schedule_once(lambda dt: self.callback(s))
-            def flush(self):
-                pass
-
         old_stdout = sys.stdout
         sys.stdout = StdoutRedirector(self.update_terminal)
 
         try:
-            CamXploit.main(ip_input=ip)
+            import CamXploit
+            CamXploit.main(target_input=ip)
         except Exception as e:
-            self.update_terminal(f"\n[color=ff0000]Application Error: {str(e)}[/color]\n")
+            self.update_terminal(f"\n[color=ff0000]Error: {str(e)}[/color]\n")
         finally:
             sys.stdout = old_stdout
             Clock.schedule_once(lambda dt: self.enable_button())

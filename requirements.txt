@@ -1,2 +1,8 @@
 requests
-ipaddress
+beautifulsoup4
+lxml
+onvif-zeep
+shodan
+scapy
+flask
+flask-cors

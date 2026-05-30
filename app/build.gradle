@@ -1,89 +1,98 @@
 plugins {
     id 'com.android.application'
-    id 'org.jetbrains.kotlin.android'
     id 'com.chaquo.python'
+    id 'org.jetbrains.kotlin.plugin.compose'
 }
 
 android {
     namespace 'com.spyboy.camxploit'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
         applicationId "com.spyboy.camxploit"
         minSdk 24
-        targetSdk 34
-        versionCode 1
+        targetSdk 35
+        versionCode 2
         versionName "2.0.2"
 
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        multiDexEnabled true
-        vectorDrawables {
-            useSupportLibrary true
+        ndk {
+            abiFilters "arm64-v8a"
         }
 
-        ndk {
-            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
-        }
         python {
-            version "3.10"
+            version "3.13"
             pip {
                 install "requests"
-                install "onvif-zeep"
+                install "idna"
+                install "charset-normalizer"
+                install "urllib3"
+                install "certifi"
+                install "typing-extensions"
+                install "werkzeug"
+                install "markupsafe"
+                install "jinja2"
+                install "itsdangerous"
+                install "blinker"
+                install "isodate"
+                install "pytz"
+                install "requests-toolbelt"
                 install "beautifulsoup4"
+                install "zeep"
+                install "cryptography"
+                install "pyOpenSSL"
+                install "lxml"
+                install "onvif2-zeep"
+                install "scapy"
+                install "flask"
+                install "flask-cors"
+                install "click"
+                install "click-plugins"
+                install "colorama"
+                install "XlsxWriter"
+                options "--no-deps", "--no-binary", "shodan"
                 install "shodan"
             }
         }
     }
 
-    buildTypes {
-        release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        }
-    }
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
-    }
-    kotlinOptions {
-        jvmTarget = '1.8'
-    }
     buildFeatures {
         compose true
     }
-    composeOptions {
-        kotlinCompilerExtensionVersion '1.5.8'
-    }
-    packagingOptions {
-        resources {
-            excludes += '/META-INF/{AL2.0,LGPL2.1}'
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 }
 
 dependencies {
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.appcompat:appcompat:1.7.1'
-    implementation 'com.google.android.material:material:1.12.0'
-    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
-    implementation 'androidx.activity:activity-compose:1.8.2'
-    implementation platform('androidx.compose:compose-bom:2023.08.00')
+    implementation 'androidx.core:core-ktx:1.15.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
+    implementation 'androidx.activity:activity-compose:1.10.0'
+    implementation platform('androidx.compose:compose-bom:2024.04.01')
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.ui:ui-graphics'
     implementation 'androidx.compose.ui:ui-tooling-preview'
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.compose.material:material-icons-extended'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.media3:media3-exoplayer:1.5.1'
+    implementation 'androidx.media3:media3-exoplayer-rtsp:1.5.1'
+    implementation 'androidx.media3:media3-ui:1.5.1'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.5.1'
+    implementation 'androidx.media3:media3-datasource:1.5.1'
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
-    androidTestImplementation platform('androidx.compose:compose-bom:2023.08.00')
+    androidTestImplementation platform('androidx.compose:compose-bom:2024.04.01')
     androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
     debugImplementation 'androidx.compose.ui:ui-tooling'
     debugImplementation 'androidx.compose.ui:ui-test-manifest'
-
-    implementation 'androidx.media3:media3-exoplayer:1.3.1'
-    implementation 'androidx.media3:media3-exoplayer-rtsp:1.3.1'
-    implementation 'androidx.media3:media3-ui:1.3.1'
-    implementation 'androidx.media3:media3-exoplayer-hls:1.3.1'  // for HLS streams
-    implementation 'androidx.media3:media3-datasource:1.3.1'
 }

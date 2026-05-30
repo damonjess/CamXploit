@@ -1,0 +1,33 @@
+*.iml
+.gradle
+/local.properties
+/.idea/
+.DS_Store
+/build
+/app/build
+/captures
+.externalNativeBuild
+.cxx
+/google-services.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+*.so
+
+# Chaquopy
+/app/src/main/python/build/
+app/build/python/
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+.navigation/
+captures/
+gradle/gradle-daemon-jvm.properties

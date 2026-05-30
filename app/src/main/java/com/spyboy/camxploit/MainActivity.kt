@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,9 +59,36 @@ import android.graphics.BitmapFactory
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.Image
 import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.*
 import java.net.URL
 import android.net.wifi.WifiManager
+import java.net.Inet4Address
+import java.net.NetworkInterface
+import java.net.InetAddress
+import java.net.Socket
+import java.net.InetSocketAddress
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.rtsp.RtspMediaSource
+import androidx.media3.ui.PlayerView
+import androidx.compose.animation.core.*
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 
 @OptIn(UnstableApi::class)
 class MainActivity : ComponentActivity() {
@@ -98,21 +126,39 @@ fun CamGuardianApp() {
     var selectedTab by remember { mutableIntStateOf(0) }
     var showDisclaimer by remember { mutableStateOf(true) }
     var capturedBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var activeStreamUrl by remember { mutableStateOf<String?>(null) }
     var showLiveView by remember { mutableStateOf(false) }
     var selectedStreamUrl by remember { mutableStateOf("") }
     var selectedStreamType by remember { mutableStateOf("") }
-    var detectedUsername by remember { mutableStateOf("") }
-    var detectedPassword by remember { mutableStateOf("") }
     var shodanApiKey by remember { mutableStateOf("") }
     var shodanQuery by remember { mutableStateOf("webcam") }
     var showShodanDialog by remember { mutableStateOf(false) }
-    var lanScanResult by remember { mutableStateOf("Press Scan to discover devices on your network.") }
+    var selectedUrl by remember { mutableStateOf("") }
 
     val context = LocalContext.current
     val view = LocalView.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+        val coarseLocationGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
+        if (!fineLocationGranted && !coarseLocationGranted) {
+            Toast.makeText(context, "Location permission is required for LAN scanning", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val fineLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+        val coarseLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (fineLocation != PackageManager.PERMISSION_GRANTED || coarseLocation != PackageManager.PERMISSION_GRANTED) {
+            permissionLauncher.launch(arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ))
+        }
+    }
 
     if (showDisclaimer) {
         AlertDialog(
@@ -299,11 +345,34 @@ fun CamGuardianApp() {
                     icon = { Icon(Icons.Default.List, "Archive") },
                     label = { Text("ARCHIVE") }
                 )
-                NavigationBarItem(                    // ← New LAN Scanner Tab
+                NavigationBarItem(
                     selected = selectedTab == 3,
                     onClick = { selectedTab = 3 },
+                    icon = { Icon(Icons.Default.Videocam, "Stream") },
+                    label = { Text("STREAM") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color.Magenta,
+                        unselectedIconColor = Color.Gray,
+                        selectedTextColor = Color.Magenta,
+                        indicatorColor = Color(0xFF1E1E1E)
+                    )
+                )
+                NavigationBarItem(                    // ← New LAN Scanner Tab
+                    selected = selectedTab == 4,
+                    onClick = { selectedTab = 4 },
                     icon = { Icon(Icons.Default.Search, "LAN Scan") },
                     label = { Text("LAN SCAN") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 5,
+                    onClick = { selectedTab = 5 },
+                    icon = { Icon(Icons.Default.FlashOn, "Storm") },
+                    label = { Text("STORM") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color(0xFFFFBF00),
+                        selectedTextColor = Color(0xFFFFBF00),
+                        indicatorColor = Color(0xFF1E1E1E)
+                    )
                 )
             }
         },
@@ -373,6 +442,7 @@ fun CamGuardianApp() {
                                     withContext(Dispatchers.Main) { 
                                         isScanning = false 
                                         saveJsonReport(context, terminalText, ipInput)
+                                        saveContentToFile(context, terminalText, "Scan_Log", "txt")
                                     }
                                 } catch (e: Exception) {
                                     withContext(Dispatchers.Main) {
@@ -384,14 +454,9 @@ fun CamGuardianApp() {
                         }
                     },
                     onStreamSelect = { url, type ->
-                        if (type.contains("SNAPSHOT")) {
-                            selectedStreamUrl = url
-                            selectedStreamType = type
-                            showLiveView = true
-                        } else {
-                            val ip = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").find(url)?.value ?: ipInput
-                            StreamViewerActivity.launch(context, url, ip)
-                        }
+                        val (user, pass) = extractCredentials(terminalText)
+                        selectedUrl = buildAuthUrl(url, user, pass)
+                        selectedTab = 3
                     }
                 )
                 1 -> IntelTab(terminalText, {
@@ -438,15 +503,50 @@ fun CamGuardianApp() {
                         }
                     }
                 }, { url ->
-                    activeStreamUrl = url
+                    val (user, pass) = extractCredentials(terminalText)
+                    selectedUrl = buildAuthUrl(url, user, pass)
+                    selectedTab = 3
+                }, {
+                    val targetIp = ipInput.ifEmpty {
+                        Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").findAll(terminalText).lastOrNull()?.value ?: ""
+                    }
+                    if (targetIp.isBlank()) {
+                        Toast.makeText(context, "No active target IP. Run a scan first.", Toast.LENGTH_SHORT).show()
+                        return@IntelTab
+                    }
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            val py = Python.getInstance()
+                            val module = py.getModule("CamXploit")
+                            val sys = py.getModule("sys")
+                            val outputStream = TerminalOutputStream { text ->
+                                scope.launch(Dispatchers.Main) { terminalText += text }
+                            }
+                            sys.put("stdout", outputStream)
+                            module.callAttr("discover_onvif", targetIp)
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                terminalText += "\n[!] ONVIF Error: ${e.message}\n"
+                            }
+                        }
+                    }
                 })
                 2 -> ArchiveTab(context, selectedTab) { file -> viewingFile = file }
-                3 -> LanScannerTab(onScanComplete = { result -> lanScanResult = result })
+                3 -> StreamTab(terminalText, selectedUrl, { selectedUrl = it })
+                4 -> LanScannerTab(
+                    onScanComplete = { },
+                    onDeviceSelect = { ip ->
+                        ipInput = ip
+                        selectedTab = 0
+                        Toast.makeText(context, "Target set to $ip", Toast.LENGTH_SHORT).show()
+                    }
+                )
+                5 -> StormTab(terminalText) { text: String -> terminalText += text }
             }
 
             capturedBitmap?.let { bitmap ->
                 Spacer(modifier = Modifier.height(20.dp))
-                Text("LAST CAPTURED SNAPSHOT", color = Color.Yellow, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text("LAST CAPTURED SNAPSHOT", color = Color.Yellow, fontWeight = FontWeight.Black, fontSize = 14.sp)
                 Spacer(modifier = Modifier.height(8.dp))
                 Box(
                     modifier = Modifier
@@ -463,44 +563,6 @@ fun CamGuardianApp() {
                     )
                     IconButton(
                         onClick = { capturedBitmap = null },
-                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                    ) {
-                        Icon(Icons.Default.Close, "Close", tint = Color.White)
-                    }
-                }
-            }
-
-            activeStreamUrl?.let { url ->
-                Spacer(modifier = Modifier.height(20.dp))
-                Text("LIVE STREAM PREVIEW", color = Color.Green, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(240.dp)
-                        .border(1.dp, Color.Green, RoundedCornerShape(8.dp))
-                        .background(Color.Black)
-                ) {
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                settings.loadWithOverviewMode = true
-                                settings.useWideViewPort = true
-                                
-                                webViewClient = object : WebViewClient() {
-                                    override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                                        handler?.proceed()
-                                    }
-                                }
-                                loadUrl(url)
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    IconButton(
-                        onClick = { activeStreamUrl = null },
                         modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape)
                     ) {
                         Icon(Icons.Default.Close, "Close", tint = Color.White)
@@ -677,7 +739,7 @@ fun ConsoleTab(
                                             containerColor = if (linkType.contains("SNAPSHOT")) Color.Magenta else Color.Green
                                         )
                                     ) {
-                                        Text(if (linkType.contains("SNAPSHOT")) "📸 View" else "▶️ Live")
+                                        Text("[VIEW]")
                                     }
                                 }
                             }
@@ -724,7 +786,8 @@ fun ConsoleTab(
 fun IntelTab(
     terminalText: String,
     onCaptureSnapshot: () -> Unit,
-    onPreviewStream: (String) -> Unit
+    onPreviewStream: (String) -> Unit,
+    onTestOnvif: () -> Unit
 ) {
     val context = LocalContext.current
     val scope   = rememberCoroutineScope()
@@ -940,12 +1003,386 @@ fun IntelTab(
             }
         }
 
+        Spacer(modifier = Modifier.height(20.dp))
+        Text("EXTERNAL RECON LINKS", color = Color.Magenta, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ReconButton("SHODAN", "https://www.shodan.io/host/$targetIp", context)
+            ReconButton("CENSYS", "https://search.censys.io/hosts/$targetIp", context)
+            ReconButton("ZOOMEYE", "https://www.zoomeye.org/searchResult?q=$targetIp", context)
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ReconButton("MAPS", "https://www.google.com/maps/search/$targetIp", context)
+            ReconButton("DORK", "https://www.google.com/search?q=inurl:\"/view/viewer_index.shtml\"+ip:$targetIp", context)
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+        Text("GOOGLE DORKING SUGGESTIONS", color = Color.Yellow, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        val dorks = listOf(
+            "inurl:\"/view/viewer_index.shtml\"",
+            "intitle:\"Live View / - AXIS\"",
+            "inurl:\"/mjpg/video.mjpg\"",
+            "inurl:\"view/index.shtml\"",
+            "inurl:\"top.htm?login\""
+        )
+        dorks.forEach { dork ->
+            Text(
+                text = dork,
+                color = Color.LightGray,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.padding(vertical = 4.dp).clickable {
+                    val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.google.com/search?q=$dork"))
+                    context.startActivity(intent)
+                }
+            )
+        }
         if (terminalText.isEmpty()) {
             Text(
                 "No intel collected yet. Start a scan first.",
                 color = Color.Gray,
                 modifier = Modifier.padding(20.dp)
             )
+        }
+    }
+}
+
+@Composable
+fun ReconButton(label: String, url: String, context: Context) {
+    Button(
+        onClick = {
+            val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+            context.startActivity(intent)
+        },
+        modifier = Modifier.height(36.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1A)),
+        border = BorderStroke(1.dp, Color.DarkGray),
+        shape = RoundedCornerShape(4.dp),
+        contentPadding = PaddingValues(horizontal = 8.dp)
+    ) {
+        Text(label, fontSize = 10.sp, color = Color.White)
+    }
+}
+
+fun extractCredentials(terminalText: String): Pair<String, String> {
+    val match = Regex("""CRACKED \((?:HTTP|RTSP)\): ([^:]+):([^\s\n]+)""").find(terminalText)
+    return if (match != null) {
+        match.groupValues[1] to match.groupValues[2]
+    } else {
+        "" to ""
+    }
+}
+
+fun buildAuthUrl(url: String, user: String, pass: String): String {
+    if (user.isBlank() || pass.isBlank() || url.contains("@")) return url
+    return try {
+        if (url.startsWith("rtsp://")) {
+            url.replace("rtsp://", "rtsp://$user:$pass@")
+        } else if (url.startsWith("http://")) {
+            url.replace("http://", "http://$user:$pass@")
+        } else {
+            url
+        }
+    } catch (e: Exception) {
+        url
+    }
+}
+
+@Composable
+fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String) -> Unit) {
+    // Auto-extract credentials if any were found in the console
+    val credentials = remember(terminalText) {
+        val credMatch = Regex("(?:CRACKED|Success)[^\\n]*?(\\w+):(\\w+)\\s*@")
+            .find(terminalText)
+        val user = credMatch?.groupValues?.get(1) ?: "admin"
+        val pass = credMatch?.groupValues?.get(2) ?: "admin"
+        user to pass
+    }
+
+    // Auto-extract ALL stream URLs from scan results
+    val streamUrls = remember(terminalText) {
+        val start = terminalText.indexOf("===LINKS_START===")
+        val end = terminalText.indexOf("===LINKS_END===")
+
+        if (start != -1 && end != -1) {
+            // Parse the structured block
+            terminalText.substring(start, end)
+                .lines()
+                .filter { it.contains("rtsp://") || it.contains("http://") }
+                .mapNotNull { line ->
+                    Regex("(rtsp://[^|\\s\\\\n]+|http://[^|\\s\\\\n]+)")
+                        .find(line)?.value?.trim()
+                }
+                .distinct()
+        } else {
+            // Fallback to raw scan for older results
+            terminalText.lines()
+                .mapNotNull { line ->
+                    Regex("(rtsp://[^\\s]+|http://[^\\s]+)")
+                        .find(line)?.value?.trim()
+                }
+                .distinct()
+        }
+    }
+
+    // Auto-select first found URL if none is selected
+    LaunchedEffect(streamUrls) {
+        if (selectedUrl.isEmpty() && streamUrls.isNotEmpty()) {
+            onUrlSelected(streamUrls.first())
+        }
+    }
+
+    var customUrl by remember { mutableStateOf("") }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Text("STREAM VIEWER", color = Color.Magenta,
+            fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (streamUrls.isNotEmpty()) {
+            Text("AUTO-DETECTED STREAMS (${streamUrls.size})",
+                color = Color.Gray, fontSize = 10.sp,
+                fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(4.dp))
+
+            streamUrls.forEach { url ->
+                val isSelected = url == selectedUrl
+                TextButton(
+                    onClick = { onUrlSelected(url) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            1.dp,
+                            if (isSelected) Color.Magenta else Color(0xFF222222),
+                            RoundedCornerShape(4.dp)
+                        )
+                        .background(
+                            if (isSelected) Color(0xFF1A001A)
+                            else Color.Transparent
+                        )
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            if (url.startsWith("rtsp")) Icons.Default.Videocam
+                            else Icons.Default.Language,
+                            contentDescription = null,
+                            tint = if (isSelected) Color.Magenta else Color.Gray,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            url,
+                            color = if (isSelected) Color.Magenta else Color.Cyan,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFF222222), RoundedCornerShape(4.dp))
+                    .padding(12.dp)
+            ) {
+                Text(
+                    "No streams detected yet.\nRun a scan on the CONSOLE tab first.",
+                    color = Color.Gray,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Manual override
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp))
+                .background(Color(0xFF0A0A0A))
+                .padding(12.dp)
+        ) {
+            Column {
+                Text("MANUAL OVERRIDE", color = Color.Gray, fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    BasicTextField(
+                        value = customUrl,
+                        onValueChange = { customUrl = it },
+                        textStyle = TextStyle(
+                            color = Color.White, fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Magenta),
+                        decorationBox = { inner ->
+                            if (customUrl.isEmpty()) Text(
+                                "rtsp://user:pass@ip:port/stream",
+                                color = Color.DarkGray, fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            inner()
+                        }
+                    )
+                    IconButton(onClick = { 
+                        if (customUrl.isNotEmpty()) {
+                            onUrlSelected(customUrl) 
+                        }
+                    }) {
+                        Icon(Icons.Default.PlayArrow, "Play", tint = Color.Magenta)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Player - auto-plays selected URL
+        if (selectedUrl.isNotEmpty()) {
+            val (user, pass) = credentials
+            val authUrl = selectedUrl
+                .replace("http://", "http://$user:$pass@")
+                .replace("https://", "https://$user:$pass@")
+            val authenticatedUrl = if (selectedUrl.startsWith("rtsp")) {
+                buildAuthUrl(selectedUrl, user, pass)
+            } else {
+                authUrl
+            }
+            key(authenticatedUrl) { // Recompose player when URL changes
+                val isRtsp = authenticatedUrl.startsWith("rtsp")
+                val isMjpeg = authenticatedUrl.contains("mjpeg", ignoreCase = true) || 
+                             authenticatedUrl.contains("mjpg", ignoreCase = true) ||
+                             authenticatedUrl.contains("videostream.cgi", ignoreCase = true) ||
+                             authenticatedUrl.contains("faststream", ignoreCase = true)
+                val isSnapshot = authenticatedUrl.contains("snapshot", ignoreCase = true) || 
+                                authenticatedUrl.contains(".jpg", ignoreCase = true)
+
+                if (isRtsp) {
+                    AndroidView<PlayerView>(
+                        factory = { ctx ->
+                            val player = ExoPlayer.Builder(ctx).build()
+                            val mediaItem = MediaItem.fromUri(authenticatedUrl)
+                            val rtspMediaSource = RtspMediaSource.Factory()
+                                .setForceUseRtpTcp(true)
+                                .createMediaSource(mediaItem)
+                            player.setMediaSource(rtspMediaSource)
+                            player.prepare()
+                            player.play()
+                            PlayerView(ctx).apply {
+                                this.player = player
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .border(1.dp, Color(0xFF333333))
+                    )
+                } else if (isMjpeg) {
+                    // MJPEG Stream via WebView
+                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    settings.useWideViewPort = true
+                                    settings.loadWithOverviewMode = true
+                                    webViewClient = object : WebViewClient() {
+                                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {
+                                            handler?.proceed()
+                                        }
+                                    }
+                                    loadUrl(authUrl)
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                } else if (isSnapshot) {
+                    var snapshotBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+                    var refreshCount by remember { mutableIntStateOf(0) }
+
+                    LaunchedEffect(authenticatedUrl, refreshCount) {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                val bytes = java.net.URL(authenticatedUrl).readBytes()
+                                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                snapshotBitmap = bitmap?.asImageBitmap()
+                            } catch (e: Exception) {}
+                        }
+                        delay(2000)
+                        refreshCount++
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .border(1.dp, Color(0xFF333333))
+                            .background(Color.Black),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        snapshotBitmap?.let {
+                            Image(
+                                bitmap = it,
+                                contentDescription = "Snapshot",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit
+                            )
+                        } ?: CircularProgressIndicator(color = Color.Magenta)
+                    }
+                } else {
+                    // Fallback for other HTTP links
+                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    settings.useWideViewPort = true
+                                    settings.loadWithOverviewMode = true
+                                    webViewClient = object : WebViewClient() {
+                                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {
+                                            handler?.proceed()
+                                        }
+                                    }
+                                    loadUrl(authUrl)
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color(0xFF050505))
+                    .border(1.dp, Color(0xFF1A1A1A)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Videocam, null,
+                        tint = Color(0xFF333333),
+                        modifier = Modifier.size(48.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Awaiting stream source...",
+                        color = Color(0xFF333333),
+                        fontFamily = FontFamily.Monospace)
+                }
+            }
         }
     }
 }
@@ -984,16 +1421,23 @@ fun IntelSection(
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier.weight(1f)
                         )
-                        if (title == "STREAMS FOUND" && item.contains("http")) {
-                            val url = item.substringAfter("🔗 ").substringAfter("ACTIVE MJPEG STREAM: ").substringAfter("POTENTIAL VIDEO STREAM: ").trim()
-                            if (url.startsWith("http")) {
-                                Text(
-                                    text = "[PREVIEW]",
-                                    color = Color.Green,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.clickable { onPreviewStream(url) }.padding(4.dp)
-                                )
+                        if (title == "STREAMS FOUND") {
+                            // Extract URL from various possible formats
+                            val url = item.substringAfter("🔗 ")
+                                        .substringAfter("ACTIVE MJPEG STREAM: ")
+                                        .substringAfter("POTENTIAL VIDEO STREAM: ")
+                                        .substringAfter("RTSP URL: ")
+                                        .substringAfter("RTSP Stream: ")
+                                        .substringAfter("🔗 ") // Handle nested or duplicated symbols
+                                        .split("|").first() // Handle structured link format
+                                        .trim()
+                            
+                            if (url.startsWith("http") || url.startsWith("rtsp")) {
+                                TextButton(
+                                    onClick = { onPreviewStream(url) }
+                                ) {
+                                    Text("[VIEW]", color = Color.Magenta)
+                                }
                             }
                         }
                     }
@@ -1243,149 +1687,445 @@ fun formatFileSize(bytes: Long): String = when {
     else                -> "${"%.1f".format(bytes / (1024.0 * 1024))}MB"
 }
 
+data class ScannedDevice(
+    val ip: String,
+    val hostname: String?,
+    val openPorts: List<Int>
+)
+
 @Composable
-fun LanScannerTab(onScanComplete: (String) -> Unit) {
+fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> Unit) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var isScanning by remember { mutableStateOf(false) }
     var scanOutput by remember { mutableStateOf("Ready to scan local network...") }
+    val discoveredRadarDevices = remember { mutableStateListOf<ScannedDevice>() }
+    var discoveredDevices by remember { mutableStateOf<List<String>>(emptyList()) }
+    var discoveredRangeDevices by remember { mutableStateOf<List<ScannedDevice>>(emptyList()) }
+    var scanProgress by remember { mutableFloatStateOf(0f) }
+    var selectedSubTab by remember { mutableIntStateOf(0) }
+    val subTabs = listOf("RADAR", "RANGE", "DEVICES", "LOGS")
+
+    // Radar Animation
+    val infiniteTransition = rememberInfiniteTransition(label = "RadarTransition")
+    val radarRotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "RadarRotation"
+    )
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        val context = LocalContext.current
-        val scanner = remember { LanScanner(context) }
-        Text("🔍 LAN Scanner", color = Color.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text("Discover devices on your local network", color = Color.Gray)
+        Text("🔍 LAN Scanner", color = Color.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Black)
+        Text("Discover devices on your local network", color = Color.Gray, fontSize = 12.sp)
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        // First Row: Python Scans
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = {
-                    isScanning = true
-                    scanOutput = "Scanning network...\nThis may take 10-20 seconds."
-
-                    scope.launch(Dispatchers.IO) {
-                        try {
-                            val py = Python.getInstance()
-                            val module = py.getModule("CamXploit")
-                            val pyFunc = module.get("lan_scan")
-
-                            if (pyFunc != null) {
-                                val result = pyFunc.call()
-                                val output = result?.toString() ?: "Scan completed but returned no output."
-                                withContext(Dispatchers.Main) {
-                                    scanOutput = output
-                                    isScanning = false
-                                }
-                            } else {
-                                withContext(Dispatchers.Main) {
-                                    scanOutput = "Error: lan_scan() function not found in Python file."
-                                    isScanning = false
-                                }
-                            }
-                        } catch (e: Exception) {
-                            withContext(Dispatchers.Main) {
-                                scanOutput = "Error during scan: ${e.message}"
-                                isScanning = false
-                            }
-                        }
-                    }
-                },
-                enabled = !isScanning,
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(if (isScanning) "Scanning..." else "Port Scan", fontSize = 11.sp)
+        TabRow(
+            selectedTabIndex = selectedSubTab,
+            containerColor = Color.Transparent,
+            contentColor = Color.Cyan,
+            divider = { Divider(color = Color.DarkGray) },
+            indicator = { tabPositions ->
+                TabRowDefaults.Indicator(
+                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedSubTab]),
+                    color = Color.Cyan
+                )
             }
-
-            Button(
-                onClick = {
-                    isScanning = true
-                    scanOutput = "Broadcasting SSDP M-SEARCH...\nDiscovering UPnP devices..."
-
-                    scope.launch(Dispatchers.IO) {
-                        var lock: WifiManager.MulticastLock? = null
-                        try {
-                            // Acquire Multicast Lock
-                            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                            lock = wifiManager.createMulticastLock("ssdp_scan")
-                            lock.setReferenceCounted(true)
-                            lock.acquire()
-
-                            val py = Python.getInstance()
-                            val module = py.getModule("CamXploit")
-                            val result = module.callAttr("discover_upnp_ssdp").toString()
-
-                            withContext(Dispatchers.Main) {
-                                scanOutput = result
-                                onScanComplete(result)
-                                isScanning = false
-                            }
-                        } catch (e: Exception) {
-                            withContext(Dispatchers.Main) {
-                                scanOutput = "Error during UPnP scan: ${e.message}"
-                                isScanning = false
-                            }
-                        } finally {
-                            lock?.let {
-                                if (it.isHeld) it.release()
-                            }
-                        }
-                    }
-                },
-                enabled = !isScanning,
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE))
-            ) {
-                Text(if (isScanning) "Searching..." else "UPnP Scan", fontSize = 11.sp)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Second Row: Native Kotlin Scan
-        Button(
-            onClick = {
-                isScanning = true
-                val outputLines = StringBuilder()
-                scanOutput = "Starting Native Scan..."
-                
-                scope.launch(Dispatchers.Main) {
-                    scanner.scanNetwork(
-                        onProgress = { line ->
-                            outputLines.appendLine(line)
-                            scanOutput = outputLines.toString()
-                        },
-                        onDeviceFound = { /* Optional: handle device list */ }
-                    )
-                    outputLines.appendLine("\n✅ Scan complete")
-                    scanOutput = outputLines.toString()
-                    isScanning = false
-                }
-            },
-            enabled = !isScanning,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20))
         ) {
-            Icon(Icons.Default.Dns, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(if (isScanning) "Scanning..." else "Deep Native Scan (Faster)")
+            subTabs.forEachIndexed { index, title ->
+                Tab(
+                    selected = selectedSubTab == index,
+                    onClick = { selectedSubTab = index },
+                    text = { Text(title, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Card(
-            modifier = Modifier.fillMaxSize(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F0F0F))
-        ) {
-            Text(
-                scanOutput,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp)
-                    .verticalScroll(rememberScrollState()),
-                color = Color.White,
-                lineHeight = 18.sp
-            )
+        when (selectedSubTab) {
+            0 -> { // RADAR View
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    Box(
+                        modifier = Modifier
+                            .size(200.dp)
+                            .padding(10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        // Background Circles
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val center = size / 2f
+                            val radius = size.minDimension / 2f
+                            drawCircle(color = Color.DarkGray, radius = radius, style = Stroke(1f))
+                            drawCircle(color = Color.DarkGray, radius = radius * 0.66f, style = Stroke(1f))
+                            drawCircle(color = Color.DarkGray, radius = radius * 0.33f, style = Stroke(1f))
+                            
+                            // Crosshairs
+                            drawLine(Color.DarkGray, start = androidx.compose.ui.geometry.Offset(center.width, 0f), end = androidx.compose.ui.geometry.Offset(center.width, size.height), strokeWidth = 1f)
+                            drawLine(Color.DarkGray, start = androidx.compose.ui.geometry.Offset(0f, center.height), end = androidx.compose.ui.geometry.Offset(size.width, center.height), strokeWidth = 1f)
+                        }
+
+                        // Rotating Sweep
+                        if (isScanning) {
+                            Canvas(modifier = Modifier.fillMaxSize().rotate(radarRotation)) {
+                                val radius = size.minDimension / 2f
+                                drawArc(
+                                    brush = Brush.sweepGradient(
+                                        0.0f to Color.Transparent,
+                                        0.25f to Color.Green.copy(alpha = 0.4f),
+                                        0.5f to Color.Transparent
+                                    ),
+                                    startAngle = 0f,
+                                    sweepAngle = 90f,
+                                    useCenter = true
+                                )
+                                drawLine(
+                                    color = Color.Green,
+                                    start = center,
+                                    end = androidx.compose.ui.geometry.Offset(center.x + radius, center.y),
+                                    strokeWidth = 2f
+                                )
+                            }
+                        }
+                        
+                        Icon(
+                            Icons.Default.SettingsInputAntenna,
+                            contentDescription = null,
+                            tint = if (isScanning) Color.Green else Color.Gray,
+                            modifier = Modifier.size(48.dp)
+                        )
+                    }
+
+                    if (isScanning) {
+                        Text(
+                            text = "Scanning... ${(scanProgress * 100).toInt()}%",
+                            color = Color.Green,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        LinearProgressIndicator(
+                            progress = scanProgress,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 8.dp),
+                            color = Color.Green,
+                            trackColor = Color.DarkGray,
+                            strokeCap = StrokeCap.Round
+                        )
+                    } else if (discoveredRadarDevices.isNotEmpty()) {
+                        Text(
+                            text = "Scan Complete: ${discoveredRadarDevices.size} devices found",
+                            color = Color.Cyan,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Button(
+                        onClick = {
+                            isScanning = true
+                            discoveredRadarDevices.clear()
+                            scanProgress = 0f
+                            scanOutput = "> Starting native ping sweep...\n"
+                            
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    val subnets = mutableSetOf<String>()
+                                    // 1. Get local IP and determine primary subnet
+                                    val interfaces = NetworkInterface.getNetworkInterfaces()
+                                    for (inf in Collections.list(interfaces)) {
+                                        if (inf.isLoopback || !inf.isUp) continue
+                                        for (addr in Collections.list(inf.inetAddresses)) {
+                                            if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                                                val ip = addr.hostAddress ?: continue
+                                                subnets.add(ip.substringBeforeLast("."))
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Add 192.168.0 as fallback if not present
+                                    subnets.add("192.168.1")
+                                    subnets.add("192.168.0")
+                                    
+                                    val targetSubnets = subnets.take(3)
+                                    val totalIps = targetSubnets.size * 254
+                                    var scannedCount = 0
+                                    val portsToCheck = listOf(80, 554, 8080, 8000, 443, 37777)
+
+                                    targetSubnets.forEach { subnet ->
+                                        val jobs = (1..254).map { i ->
+                                            async {
+                                                val ip = "$subnet.$i"
+                                                try {
+                                                    val address = InetAddress.getByName(ip)
+                                                    if (address.isReachable(300)) {
+                                                        val hostname = try {
+                                                            val host = address.canonicalHostName
+                                                            if (host != ip) host else null
+                                                        } catch (e: Exception) { null }
+
+                                                        val openPorts = mutableListOf<Int>()
+                                                        for (port in portsToCheck) {
+                                                            try {
+                                                                Socket().use { socket ->
+                                                                    socket.connect(InetSocketAddress(ip, port), 150)
+                                                                    openPorts.add(port)
+                                                                }
+                                                            } catch (e: Exception) {}
+                                                        }
+                                                        
+                                                        withContext(Dispatchers.Main) {
+                                                            discoveredRadarDevices.add(ScannedDevice(ip, hostname, openPorts))
+                                                            scanOutput += "Discovered: $ip ${hostname ?: ""}\n"
+                                                        }
+                                                    }
+                                                } catch (e: Exception) {}
+                                                
+                                                synchronized(this) {
+                                                    scannedCount++
+                                                    scanProgress = scannedCount.toFloat() / totalIps
+                                                }
+                                            }
+                                        }
+                                        jobs.awaitAll()
+                                    }
+                                    
+                                    withContext(Dispatchers.Main) {
+                                        isScanning = false
+                                        scanOutput += "\nScan finished. Found ${discoveredRadarDevices.size} devices.\n"
+                                    }
+                                } catch (e: Exception) {
+                                    withContext(Dispatchers.Main) {
+                                        isScanning = false
+                                        scanOutput += "\n[!] Native Scan Error: ${e.message}\n"
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !isScanning,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20))
+                    ) {
+                        Text(if (isScanning) "SCANNING..." else "INITIATE NETWORK SCAN")
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Found Devices List for RADAR tab
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(discoveredRadarDevices) { device ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
+                                border = BorderStroke(1.dp, Color(0xFF1A1A1A))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = if (device.openPorts.contains(554) || device.openPorts.contains(8000)) Icons.Default.Videocam else Icons.Default.Router,
+                                        contentDescription = null,
+                                        tint = if (device.openPorts.isNotEmpty()) Color.Green else Color.Cyan,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(device.ip, color = Color.White, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                        if (!device.hostname.isNullOrBlank()) {
+                                            Text(device.hostname, color = Color.Gray, fontSize = 11.sp)
+                                        }
+                                        if (device.openPorts.isNotEmpty()) {
+                                            Text("Ports: ${device.openPorts.joinToString(", ")}", color = Color.Green, fontSize = 10.sp)
+                                        }
+                                    }
+                                    Button(
+                                        onClick = { onDeviceSelect(device.ip) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(30.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20))
+                                    ) {
+                                        Text("SCAN", fontSize = 10.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            1 -> { // RANGE View
+                Column(modifier = Modifier.fillMaxSize()) {
+                    val subnets = listOf("192.168.1", "192.168.0")
+                    Text("Scanning Subnets: ${subnets.joinToString(", ")}", color = Color.Yellow, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    if (isScanning) {
+                        LinearProgressIndicator(
+                            progress = scanProgress,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            color = Color.Cyan,
+                            trackColor = Color.DarkGray
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            isScanning = true
+                            discoveredRangeDevices = emptyList()
+                            scanProgress = 0f
+                            scope.launch(Dispatchers.IO) {
+                                val results = mutableListOf<ScannedDevice>()
+                                val portsToCheck = listOf(80, 554, 8080, 8000)
+                                val totalIps = subnets.size * 254
+                                var scannedCount = 0
+
+                                subnets.forEach { subnet ->
+                                    val jobs = (1..254).map { i ->
+                                        async {
+                                            val ip = "$subnet.$i"
+                                            try {
+                                                val address = InetAddress.getByName(ip)
+                                                if (address.isReachable(300)) {
+                                                    val hostname = try {
+                                                        val host = address.canonicalHostName
+                                                        if (host != ip) host else null
+                                                    } catch (e: Exception) { null }
+                                                    
+                                                    val openPorts = mutableListOf<Int>()
+                                                    for (port in portsToCheck) {
+                                                        try {
+                                                            Socket().use { socket ->
+                                                                socket.connect(InetSocketAddress(ip, port), 200)
+                                                                openPorts.add(port)
+                                                            }
+                                                        } catch (e: Exception) {}
+                                                    }
+                                                    synchronized(results) {
+                                                        results.add(ScannedDevice(ip, hostname, openPorts))
+                                                    }
+                                                }
+                                            } catch (e: Exception) {}
+                                            synchronized(this@launch) {
+                                                scannedCount++
+                                                scanProgress = scannedCount.toFloat() / totalIps
+                                            }
+                                        }
+                                    }
+                                    jobs.awaitAll()
+                                }
+                                withContext(Dispatchers.Main) {
+                                    discoveredRangeDevices = results.sortedBy { it.ip }
+                                    isScanning = false
+                                    scanOutput += "\nRange Scan Complete: ${results.size} devices found."
+                                }
+                            }
+                        },
+                        enabled = !isScanning,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))
+                    ) {
+                        Text(if (isScanning) "SCANNING..." else "SCAN SUBNET")
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (discoveredRangeDevices.isEmpty() && !isScanning) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("No devices found. Tap SCAN SUBNET.", color = Color.Gray)
+                        }
+                    } else {
+                        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                            discoveredRangeDevices.forEach { device ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
+                                    border = BorderStroke(1.dp, Color(0xFF1A1A1A))
+                                ) {
+                                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Router, null, tint = Color.Green, modifier = Modifier.size(24.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(device.ip, color = Color.White, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                            if (!device.hostname.isNullOrBlank()) {
+                                                Text(device.hostname, color = Color.Gray, fontSize = 11.sp)
+                                            }
+                                            if (device.openPorts.isNotEmpty()) {
+                                                Text("Open Ports: ${device.openPorts.joinToString(", ")}", color = Color.Cyan, fontSize = 11.sp)
+                                            }
+                                        }
+                                        Button(
+                                            onClick = { onDeviceSelect(device.ip) },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20)),
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text("SCAN", fontSize = 10.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            2 -> { // DEVICES View
+                if (discoveredDevices.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("No devices discovered yet.", color = Color.Gray)
+                    }
+                } else {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        discoveredDevices.forEach { ip ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
+                                border = BorderStroke(1.dp, Color(0xFF1A1A1A))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Router, null, tint = Color.Cyan, modifier = Modifier.size(20.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Text(ip, color = Color.White, fontFamily = FontFamily.Monospace)
+                                    }
+                                    Button(
+                                        onClick = { onDeviceSelect(ip) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(30.dp)
+                                    ) {
+                                        Text("SELECT", fontSize = 10.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            3 -> { // LOGS View
+                Surface(
+                    modifier = Modifier.fillMaxSize().border(1.dp, Color(0xFF1A1A1A), RoundedCornerShape(4.dp)),
+                    color = Color(0xFF050505)
+                ) {
+                    SelectionContainer {
+                        Text(
+                            text = scanOutput,
+                            color = Color(0xFF00FF41),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(10.dp).verticalScroll(rememberScrollState())
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -1487,6 +2227,148 @@ fun saveJsonReport(context: Context, terminalText: String, target: String) {
 }
 
 
+@Composable
+fun StormTab(terminalText: String, onLogUpdate: (String) -> Unit) {
+    var targetIp by remember { mutableStateOf("") }
+    var selectedType by remember { mutableStateOf("DOS_RESILIENCE") }
+    var stormOutput by remember { mutableStateOf("> Ready for stress testing...\n") }
+    var expanded by remember { mutableStateOf(false) }
+    val options = listOf("DOS_RESILIENCE", "SSDP_FLOOD", "PORT_STRESS")
+    val scope = rememberCoroutineScope()
+
+    // Auto-fill IP from terminalText
+    LaunchedEffect(terminalText) {
+        val ipMatch = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").findAll(terminalText).lastOrNull()
+        if (ipMatch != null && targetIp.isEmpty()) {
+            targetIp = ipMatch.value
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
+        Text("⚡ STORM MODULE", color = Color(0xFFFFBF00), fontSize = 24.sp, fontWeight = FontWeight.Black)
+        Text("Network Stress & Resilience Testing", color = Color.Gray, fontSize = 12.sp)
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Warning Box
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF332200)),
+            border = BorderStroke(1.dp, Color(0xFFFFBF00)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                "⚠️ WARNING: Only use on your own devices or authorized targets. Stress testing can cause network instability.",
+                color = Color(0xFFFFBF00),
+                modifier = Modifier.padding(12.dp),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Target IP Input
+        OutlinedTextField(
+            value = targetIp,
+            onValueChange = { targetIp = it },
+            label = { Text("Target IP", color = Color(0xFFFFBF00)) },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(0xFFFFBF00),
+                unfocusedBorderColor = Color.DarkGray,
+                focusedLabelColor = Color(0xFFFFBF00)
+            )
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Attack Type Dropdown
+        Box(modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(
+                onClick = { expanded = true },
+                modifier = Modifier.fillMaxWidth(),
+                border = BorderStroke(1.dp, Color.DarkGray)
+            ) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(selectedType, color = Color.White)
+                    Icon(Icons.Default.ArrowDropDown, null, tint = Color(0xFFFFBF00))
+                }
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.fillMaxWidth(0.9f).background(Color(0xFF111111))
+            ) {
+                options.forEach { type ->
+                    DropdownMenuItem(
+                        text = { Text(type, color = Color.White) },
+                        onClick = {
+                            selectedType = type
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = {
+                if (targetIp.isNotBlank()) {
+                    stormOutput += "> Initiating $selectedType on $targetIp...\n"
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            val py = Python.getInstance()
+                            val module = py.getModule("CamXploit")
+                            val sys = py.getModule("sys")
+                            val outputStream = TerminalOutputStream { text ->
+                                scope.launch(Dispatchers.Main) { stormOutput += text }
+                            }
+                            sys.put("stdout", outputStream)
+                            // Assuming port 80 for basic test
+                            module.callAttr("test_dos_resilience", targetIp, 80)
+                            withContext(Dispatchers.Main) {
+                                stormOutput += "\n> $selectedType Complete.\n"
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                stormOutput += "\n[!] Storm Error: ${e.message}\n"
+                            }
+                        }
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFBF00))
+        ) {
+            Text("START STRESS TEST", color = Color.Black, fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Results Terminal
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp)
+                .border(1.dp, Color(0xFF332200), RoundedCornerShape(4.dp)),
+            color = Color(0xFF050505)
+        ) {
+            SelectionContainer {
+                Text(
+                    text = stormOutput,
+                    color = Color(0xFFFFBF00), // Amber
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(10.dp).verticalScroll(rememberScrollState())
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LiveViewScreen(
@@ -1507,38 +2389,57 @@ fun LiveViewScreen(
             }
         )
 
-        if (isLoading) {
+        if (isLoading && !streamUrl.startsWith("rtsp")) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
 
-        AndroidView(
-            factory = { context ->
-                WebView(context).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.loadWithOverviewMode = true
-                    settings.useWideViewPort = true
-                    settings.builtInZoomControls = true
+        if (streamUrl.startsWith("rtsp")) {
+            AndroidView<PlayerView>(
+                factory = { ctx ->
+                    val player = ExoPlayer.Builder(ctx).build()
+                    val mediaItem = MediaItem.fromUri(streamUrl)
+                    val rtspMediaSource = RtspMediaSource.Factory()
+                        .setForceUseRtpTcp(true)
+                        .createMediaSource(mediaItem)
+                    player.setMediaSource(rtspMediaSource)
+                    player.prepare()
+                    player.play()
+                    PlayerView(ctx).apply {
+                        this.player = player
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            AndroidView(
+                factory = { context ->
+                    WebView(context).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.loadWithOverviewMode = true
+                        settings.useWideViewPort = true
+                        settings.builtInZoomControls = true
 
-                    webViewClient = object : WebViewClient() {
-                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                            handler?.proceed()
-                        }
+                        webViewClient = object : WebViewClient() {
+                            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                                handler?.proceed()
+                            }
 
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            isLoading = false
-                        }
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                isLoading = false
+                            }
 
-                        override fun onReceivedError(view: WebView?, request: WebResourceRequest?, err: WebResourceError?) {
-                            isLoading = false
-                            error = "Failed to load - Try another link"
+                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, err: WebResourceError?) {
+                                isLoading = false
+                                error = "Failed to load - Try another link"
+                            }
                         }
                     }
-                }
-            },
-            update = { it.loadUrl(streamUrl) },
-            modifier = Modifier.fillMaxSize()
-        )
+                },
+                update = { it.loadUrl(streamUrl) },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     }
 }
 
@@ -1582,4 +2483,20 @@ fun SnapshotViewer(imageUrl: String, onBack: () -> Unit) {
             Text("Failed to load snapshot", color = Color.Red, modifier = Modifier.padding(16.dp))
         }
     }
+}
+
+fun getLocalSubnet(): String {
+    try {
+        val interfaces = NetworkInterface.getNetworkInterfaces()
+        for (inf in Collections.list(interfaces)) {
+            if (inf.isLoopback || !inf.isUp) continue
+            for (addr in Collections.list(inf.inetAddresses)) {
+                if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                    val ip = addr.hostAddress ?: continue
+                    return ip.substringBeforeLast(".") + ".0/24"
+                }
+            }
+        }
+    } catch (e: Exception) {}
+    return "192.168.1.0/24"
 }
