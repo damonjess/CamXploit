@@ -1,33 +1,54 @@
 package com.spyboy.camxploit
 
-import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.content.Intent
-import android.os.Bundle
-import android.os.Environment
-import android.webkit.MimeTypeMap
+import android.Manifest
+import android.content.*
+import android.content.pm.PackageManager
+import android.graphics.*
+import android.media.ImageReader
+import android.net.Uri
+import android.net.wifi.WifiManager
+import android.os.*
+import android.provider.MediaStore
+import android.media.projection.MediaProjectionManager
+import android.graphics.pdf.PdfDocument
+import android.graphics.pdf.PdfDocument.PageInfo
+import android.util.Base64
+import android.view.TextureView
+import android.webkit.*
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.core.content.FileProvider
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
+import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
@@ -36,64 +57,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.chaquo.python.Python
-import com.chaquo.python.android.AndroidPlatform
-import kotlinx.coroutines.*
-import android.content.ClipboardManager
-import android.content.ClipData
-import androidx.media3.common.util.UnstableApi
-import org.json.JSONObject
-import org.json.JSONArray
-import androidx.compose.foundation.BorderStroke
-import android.util.Base64
-import androidx.compose.foundation.shape.CircleShape
-import java.io.File
-import java.io.FileOutputStream
-import java.io.OutputStream
-import android.webkit.*
-import android.net.http.SslError
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.layout.ContentScale
-import android.graphics.BitmapFactory
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.foundation.Image
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.*
-import java.net.URL
-import android.net.wifi.WifiManager
-import java.net.Inet4Address
-import java.net.NetworkInterface
-import java.net.InetAddress
-import java.net.Socket
-import java.net.InetSocketAddress
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.media3.common.MediaItem
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
-import androidx.compose.animation.core.*
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.foundation.Canvas
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.core.content.ContextCompat
+import com.chaquo.python.Python
+import com.chaquo.python.android.AndroidPlatform
+import kotlinx.coroutines.*
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.*
+import java.net.*
+import java.text.SimpleDateFormat
+import java.util.*
 
 @OptIn(UnstableApi::class)
 class MainActivity : ComponentActivity() {
-    private var multicastLock: WifiManager.MulticastLock? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (!Python.isStarted()) {
@@ -105,6 +88,38 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Boolean {
+    val filename = "CamVigil_${System.currentTimeMillis()}.png"
+    var fos: OutputStream? = null
+    val contentResolver = context.contentResolver
+
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val contentValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/CamVigil")
+            }
+            val imageUri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            fos = imageUri?.let { contentResolver.openOutputStream(it) }
+        } else {
+            val imagesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES).toString() + "/CamVigil"
+            val dir = File(imagesDir)
+            if (!dir.exists()) dir.mkdirs()
+            val image = File(dir, filename)
+            fos = FileOutputStream(image)
+        }
+
+        fos?.use {
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            return true
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+    return false
+}
+
 class TerminalOutputStream(val onUpdate: (String) -> Unit) : OutputStream() {
     override fun write(b: Int) {
         onUpdate(b.toChar().toString())
@@ -112,7 +127,6 @@ class TerminalOutputStream(val onUpdate: (String) -> Unit) : OutputStream() {
     override fun write(b: ByteArray, off: Int, len: Int) {
         onUpdate(String(b, off, len))
     }
-    @Suppress("unused")
     fun write(s: String) { onUpdate(s) }
     override fun flush() {}
 }
@@ -124,8 +138,12 @@ fun CamGuardianApp() {
     var isScanning by remember { mutableStateOf(false) }
     var viewingFile by remember { mutableStateOf<File?>(null) }
     var selectedTab by remember { mutableIntStateOf(0) }
+    var lanScanResults by remember { mutableStateOf<List<DeviceInfo>>(emptyList()) }
+    var lanIsScanning by remember { mutableStateOf(false) }
+    var lanProgress by remember { mutableStateOf(0f) }
+    var lanSubnet by remember { mutableStateOf("") }
     var showDisclaimer by remember { mutableStateOf(true) }
-    var capturedBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var showLiveView by remember { mutableStateOf(false) }
     var selectedStreamUrl by remember { mutableStateOf("") }
     var selectedStreamType by remember { mutableStateOf("") }
@@ -134,29 +152,97 @@ fun CamGuardianApp() {
     var showShodanDialog by remember { mutableStateOf(false) }
     var selectedUrl by remember { mutableStateOf("") }
 
+    var isRecording by remember { mutableStateOf(false) }
+    var recordingDuration by remember { mutableLongStateOf(0L) }
+
     val context = LocalContext.current
     val view = LocalView.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
+
+    val projectionManager = remember { context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager }
+
+    val recordLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == ComponentActivity.RESULT_OK && result.data != null) {
+            val serviceIntent = Intent(context, ScreenCaptureService::class.java).apply {
+                action = "ACTION_START"
+                putExtra("RESULT_CODE", result.resultCode)
+                putExtra("DATA", result.data)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent)
+            } else {
+                context.startService(serviceIntent)
+            }
+            isRecording = true
+        }
+    }
+
+    val receiver = remember {
+        object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == "COM_SPYBOY_CAMXPLOIT_RECORDING_STOPPED") {
+                    isRecording = false
+                    val path = intent.getStringExtra("FILE_PATH") ?: ""
+                    Toast.makeText(context, "Recording saved: $path", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        val filter = IntentFilter("COM_SPYBOY_CAMXPLOIT_RECORDING_STOPPED")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            context.registerReceiver(receiver, filter)
+        }
+        onDispose {
+            context.unregisterReceiver(receiver)
+        }
+    }
+
+    LaunchedEffect(isRecording) {
+        if (isRecording) {
+            recordingDuration = 0L
+            while (isRecording) {
+                delay(1000)
+                recordingDuration++
+            }
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
         val coarseLocationGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
+        val notificationsGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions[Manifest.permission.POST_NOTIFICATIONS] ?: false
+        } else true
+
         if (!fineLocationGranted && !coarseLocationGranted) {
             Toast.makeText(context, "Location permission is required for LAN scanning", Toast.LENGTH_LONG).show()
         }
     }
 
     LaunchedEffect(Unit) {
-        val fineLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
-        val coarseLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
-        if (fineLocation != PackageManager.PERMISSION_GRANTED || coarseLocation != PackageManager.PERMISSION_GRANTED) {
-            permissionLauncher.launch(arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            ))
+        val permissions = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        
+        val needsRequest = permissions.any {
+            ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+        }
+        
+        if (needsRequest) {
+            permissionLauncher.launch(permissions.toTypedArray())
         }
     }
 
@@ -244,7 +330,6 @@ fun CamGuardianApp() {
         )
     }
 
-    // File Viewer Dialog
     if (viewingFile != null) {
         AlertDialog(
             onDismissRequest = { viewingFile = null },
@@ -255,9 +340,7 @@ fun CamGuardianApp() {
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    TextButton(onClick = { 
-                        viewingFile?.let { openFile(context, it) }
-                    }) {
+                    TextButton(onClick = { viewingFile?.let { openFile(context, it) } }) {
                         Text("OPEN EXTERNAL", color = Color.Green)
                     }
                     TextButton(onClick = { viewingFile = null }) {
@@ -289,9 +372,7 @@ fun CamGuardianApp() {
                     color = Color(0xFF050505)
                 ) {
                     if (viewingFile?.extension == "png") {
-                        val bitmap = remember(viewingFile) {
-                            BitmapFactory.decodeFile(viewingFile?.absolutePath)
-                        }
+                        val bitmap = remember(viewingFile) { BitmapFactory.decodeFile(viewingFile?.absolutePath) }
                         if (bitmap != null) {
                             Image(
                                 bitmap = bitmap.asImageBitmap(),
@@ -327,90 +408,30 @@ fun CamGuardianApp() {
                 containerColor = Color(0xFF121212),
                 contentColor = Color.Cyan
             ) {
-                NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    icon = { Icon(Icons.Default.Info, "Console") },
-                    label = { Text("CONSOLE") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    icon = { Icon(Icons.Default.Home, "Intel") },
-                    label = { Text("INTEL") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    icon = { Icon(Icons.Default.List, "Archive") },
-                    label = { Text("ARCHIVE") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 3,
-                    onClick = { selectedTab = 3 },
-                    icon = { Icon(Icons.Default.Videocam, "Stream") },
-                    label = { Text("STREAM") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.Magenta,
-                        unselectedIconColor = Color.Gray,
-                        selectedTextColor = Color.Magenta,
-                        indicatorColor = Color(0xFF1E1E1E)
-                    )
-                )
-                NavigationBarItem(                    // ← New LAN Scanner Tab
-                    selected = selectedTab == 4,
-                    onClick = { selectedTab = 4 },
-                    icon = { Icon(Icons.Default.Search, "LAN Scan") },
-                    label = { Text("LAN SCAN") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 5,
-                    onClick = { selectedTab = 5 },
-                    icon = { Icon(Icons.Default.FlashOn, "Storm") },
-                    label = { Text("STORM") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color(0xFFFFBF00),
-                        selectedTextColor = Color(0xFFFFBF00),
-                        indicatorColor = Color(0xFF1E1E1E)
-                    )
-                )
+                NavigationBarItem(selected = selectedTab == 0, onClick = { selectedTab = 0 }, icon = { Icon(Icons.Default.Info, "Console") }, label = { Text("CONSOLE") })
+                NavigationBarItem(selected = selectedTab == 1, onClick = { selectedTab = 1 }, icon = { Icon(Icons.Default.Home, "Intel") }, label = { Text("INTEL") })
+                NavigationBarItem(selected = selectedTab == 2, onClick = { selectedTab = 2 }, icon = { Icon(Icons.Default.List, "Archive") }, label = { Text("ARCHIVE") })
+                NavigationBarItem(selected = selectedTab == 3, onClick = { selectedTab = 3 }, icon = { Icon(Icons.Default.Videocam, "Stream") }, label = { Text("STREAM") }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.Magenta, unselectedIconColor = Color.Gray, selectedTextColor = Color.Magenta, indicatorColor = Color(0xFF1E1E1E)))
+                NavigationBarItem(selected = selectedTab == 4, onClick = { selectedTab = 4 }, icon = { Icon(Icons.Default.Search, "LAN Scan") }, label = { Text("LAN SCAN") })
+                NavigationBarItem(selected = selectedTab == 5, onClick = { selectedTab = 5 }, icon = { Icon(Icons.Default.FlashOn, "Storm") }, label = { Text("STORM") }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Color(0xFFFFBF00), selectedTextColor = Color(0xFFFFBF00), indicatorColor = Color(0xFF1E1E1E)))
+                NavigationBarItem(selected = selectedTab == 6, onClick = { selectedTab = 6 }, icon = { Icon(Icons.Default.Bookmark, "Saved") }, label = { Text("SAVED") }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.Green, selectedTextColor = Color.Green, indicatorColor = Color(0xFF1E1E1E)))
             }
         },
         containerColor = Color.Black
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize().padding(16.dp)) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column {
-                    Text(
-                        text = "CAM VIGIL",
-                        color = Color.White,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 2.sp
-                    )
-                    Text(
-                        text = "NETWORK RECONNAISSANCE UNIT",
-                        color = Color.Gray,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text(text = "CAM VIGIL", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                    Text(text = "NETWORK RECONNAISSANCE UNIT", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
-                
                 Row {
-                    IconButton(onClick = { showShodanDialog = true }) {
-                        Icon(Icons.Default.Public, "Shodan Search", tint = Color.Magenta)
-                    }
-                    IconButton(onClick = { captureScreenshot(context, view) }) {
-                        Icon(Icons.Default.PhotoCamera, "Screenshot", tint = Color.Cyan)
-                    }
-                    IconButton(onClick = { generateHtmlReport(context, terminalText) }) {
-                        Icon(Icons.Default.CheckCircle, "Save Report", tint = Color.Green)
-                    }
+                    IconButton(onClick = { showShodanDialog = true }) { Icon(Icons.Default.Public, "Shodan Search", tint = Color.Magenta) }
+                    IconButton(onClick = { captureScreenshot(context, view) }) { Icon(Icons.Default.PhotoCamera, "Screenshot", tint = Color.Cyan) }
+                    IconButton(onClick = { 
+                        generatePdfReport(context, terminalText)
+                        generateHtmlReport(context, terminalText)
+                    }) { Icon(Icons.Default.CheckCircle, "Save Report", tint = Color.Green) }
                 }
             }
 
@@ -434,276 +455,195 @@ fun CamGuardianApp() {
                                     val py = Python.getInstance()
                                     val module = py.getModule("CamXploit")
                                     val sys = py.getModule("sys")
-                                    val outputStream = TerminalOutputStream { text ->
-                                        scope.launch(Dispatchers.Main) { terminalText += text }
-                                    }
+                                    val outputStream = TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }
                                     sys.put("stdout", outputStream)
                                     module.callAttr("main", ipInput)
                                     withContext(Dispatchers.Main) { 
                                         isScanning = false 
                                         saveJsonReport(context, terminalText, ipInput)
                                         saveContentToFile(context, terminalText, "Scan_Log", "txt")
+                                        if (terminalText.contains("CRACKED")) {
+                                            val (user, pass) = extractCredentials(terminalText)
+                                            val ip = ipInput
+                                            val brandMatch = Regex("""Brand:\s*(\w+)""").find(terminalText)
+                                            val brand = brandMatch?.groupValues?.get(1) ?: "Unknown"
+                                            val streamUrl = Regex("""(rtsp://[^\s]+|http://[^\s]+)""").find(terminalText)?.value ?: ""
+                                            scope.launch(Dispatchers.IO) {
+                                                val dao = CameraDatabase.getDatabase(context).cameraDao()
+                                                if (dao.getCameraByIp(ip) == null) {
+                                                    dao.insertCamera(SavedCamera(nickname = "Auto $brand", ip = ip, username = user, password = pass, brand = brand, streamUrl = streamUrl, isOnline = true))
+                                                }
+                                            }
+                                        }
                                     }
                                 } catch (e: Exception) {
-                                    withContext(Dispatchers.Main) {
-                                        terminalText += "\n[!] ERROR: ${e.message}"
-                                        isScanning = false
-                                    }
+                                    withContext(Dispatchers.Main) { terminalText += "\n[!] ERROR: ${e.message}"; isScanning = false }
                                 }
                             }
                         }
                     },
-                    onStreamSelect = { url, type ->
+                    onStreamSelect = { detectedStreamUrl, type ->
                         val (user, pass) = extractCredentials(terminalText)
-                        selectedUrl = buildAuthUrl(url, user, pass)
+                        selectedUrl = buildAuthUrl(detectedStreamUrl, user, pass)
                         selectedTab = 3
                     }
                 )
-                1 -> IntelTab(terminalText, {
-                    scope.launch(Dispatchers.IO) {
-                        try {
-                            val py = Python.getInstance()
-                            val module = py.getModule("CamXploit")
-                            
-                            // Extract first IP and Port found in terminalText
-                            val ipMatch = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").find(terminalText)
-                            val portMatch = Regex("""Port (\d+)""").find(terminalText)
-                            
-                            if (ipMatch != null) {
-                                val targetIp = ipMatch.value
-                                val targetPort = portMatch?.groupValues?.get(1)?.toInt() ?: 80
-                                
-                                // Extract credentials if found: "CRACKED (HTTP): admin:password"
-                                val credMatch = Regex("""CRACKED \(HTTP\): (\w+):(\w+)""").find(terminalText)
-                                val user = credMatch?.groupValues?.get(1)
-                                val pass = credMatch?.groupValues?.get(2)
-                                
-                                val b64Data = module.callAttr("manual_snapshot_capture", targetIp, targetPort, user, pass).toString()
-                                if (b64Data != "None") {
-                                    val decodedString = Base64.decode(b64Data, Base64.DEFAULT)
-                                    val bitmap = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.size)
-                                    withContext(Dispatchers.Main) {
-                                        capturedBitmap = bitmap
-                                        // Also save to file
-                                        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                                        val file = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Manual_Snap_$timeStamp.png")
-                                        FileOutputStream(file).use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-                                        Toast.makeText(context, "Snapshot Captured & Saved", Toast.LENGTH_SHORT).show()
-                                    }
-                                } else {
-                                    withContext(Dispatchers.Main) {
-                                        Toast.makeText(context, "Snapshot Capture Failed", Toast.LENGTH_SHORT).show()
+                1 -> IntelTab(
+                    terminalText = terminalText,
+                    onLogUpdate = { terminalText += it },
+                    onCaptureSnapshot = {
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val py = Python.getInstance()
+                                val module = py.getModule("CamXploit")
+                                val ipMatch = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").find(terminalText)
+                                val portMatch = Regex("""Port (\d+)""").find(terminalText)
+                                if (ipMatch != null) {
+                                    val targetIp = ipMatch.value
+                                    val targetPort = portMatch?.groupValues?.get(1)?.toInt() ?: 80
+                                    val credMatch = Regex("""CRACKED \(HTTP\): (\w+):(\w+)""").find(terminalText)
+                                    val user = credMatch?.groupValues?.get(1)
+                                    val pass = credMatch?.groupValues?.get(2)
+                                    val b64Data = module.callAttr("manual_snapshot_capture", targetIp, targetPort, user, pass).toString()
+                                    if (b64Data != "None") {
+                                        val decodedString = Base64.decode(b64Data, Base64.DEFAULT)
+                                        val bitmap = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.size)
+                                        withContext(Dispatchers.Main) {
+                                            capturedBitmap = bitmap
+                                            val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                                            val file = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Manual_Snap_$timeStamp.png")
+                                            FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                                            Toast.makeText(context, "Snapshot Captured & Saved", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                 }
-                            }
-                        } catch (e: Exception) {
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) { withContext(Dispatchers.Main) { Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show() } }
+                        }
+                    },
+                    onPreviewStream = { url ->
+                        val (user, pass) = extractCredentials(terminalText)
+                        selectedUrl = buildAuthUrl(url, user, pass)
+                        selectedTab = 3
+                    },
+                    onTestOnvif = {
+                        val targetIp = ipInput.ifEmpty { Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").findAll(terminalText).lastOrNull()?.value ?: "" }
+                        if (targetIp.isNotBlank()) {
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    val py = Python.getInstance()
+                                    val module = py.getModule("CamXploit")
+                                    val sys = py.getModule("sys")
+                                    sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } })
+                                    module.callAttr("discover_onvif", targetIp)
+                                } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] ONVIF Error: ${e.message}\n" } }
                             }
                         }
                     }
-                }, { url ->
-                    val (user, pass) = extractCredentials(terminalText)
-                    selectedUrl = buildAuthUrl(url, user, pass)
-                    selectedTab = 3
-                }, {
-                    val targetIp = ipInput.ifEmpty {
-                        Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").findAll(terminalText).lastOrNull()?.value ?: ""
+                )
+                2 -> ArchiveTab(context, selectedTab, terminalText, ipInput) { file -> viewingFile = file }
+                3 -> StreamTab(
+                    terminalText,
+                    selectedUrl,
+                    { selectedUrl = it },
+                    isRecording,
+                    recordingDuration,
+                    onStartRecording = {
+                        val intent = projectionManager.createScreenCaptureIntent()
+                        recordLauncher.launch(intent)
+                    },
+                    onStopRecording = {
+                        val serviceIntent = Intent(context, ScreenCaptureService::class.java).apply {
+                            action = "ACTION_STOP"
+                        }
+                        context.startService(serviceIntent)
                     }
-                    if (targetIp.isBlank()) {
-                        Toast.makeText(context, "No active target IP. Run a scan first.", Toast.LENGTH_SHORT).show()
-                        return@IntelTab
-                    }
-                    scope.launch(Dispatchers.IO) {
-                        try {
-                            val py = Python.getInstance()
-                            val module = py.getModule("CamXploit")
-                            val sys = py.getModule("sys")
-                            val outputStream = TerminalOutputStream { text ->
-                                scope.launch(Dispatchers.Main) { terminalText += text }
-                            }
-                            sys.put("stdout", outputStream)
-                            module.callAttr("discover_onvif", targetIp)
-                        } catch (e: Exception) {
+                )
+                4 -> LanScanTab(
+                    scanResults = lanScanResults,
+                    isScanning = lanIsScanning,
+                    progress = lanProgress,
+                    subnet = lanSubnet,
+                    onScanStart = {
+                        lanIsScanning = true
+                        lanScanResults = emptyList()
+                        lanProgress = 0f
+                        scope.launch(Dispatchers.IO) {
+                            val currentSubnet = getLocalSubnet().substringBeforeLast(".0/24")
+                            withContext(Dispatchers.Main) { lanSubnet = currentSubnet }
+                            val total = 254
+                            (1..total).map { i ->
+                                async {
+                                    val ip = "$currentSubnet.$i"
+                                    if (InetAddress.getByName(ip).isReachable(300)) {
+                                        withContext(Dispatchers.Main) {
+                                            val device = DeviceInfo(ip, null, emptyList())
+                                            lanScanResults = lanScanResults + device
+                                        }
+                                    }
+                                    withContext(Dispatchers.Main) {
+                                        lanProgress = i.toFloat() / total
+                                    }
+                                }
+                            }.awaitAll()
                             withContext(Dispatchers.Main) {
-                                terminalText += "\n[!] ONVIF Error: ${e.message}\n"
+                                lanIsScanning = false
                             }
                         }
-                    }
-                })
-                2 -> ArchiveTab(context, selectedTab) { file -> viewingFile = file }
-                3 -> StreamTab(terminalText, selectedUrl, { selectedUrl = it })
-                4 -> LanScannerTab(
+                    },
+                    onResultFound = { },
                     onScanComplete = { },
-                    onDeviceSelect = { ip ->
+                    onTabSwitch = { selectedTab = it },
+                    onIpSelected = { ip ->
                         ipInput = ip
                         selectedTab = 0
                         Toast.makeText(context, "Target set to $ip", Toast.LENGTH_SHORT).show()
                     }
                 )
                 5 -> StormTab(terminalText) { text: String -> terminalText += text }
+                6 -> SavedCamerasTab(onStream = { url -> selectedUrl = url; selectedTab = 3 }, onScan = { ip -> ipInput = ip; selectedTab = 0 })
             }
 
             capturedBitmap?.let { bitmap ->
                 Spacer(modifier = Modifier.height(20.dp))
                 Text("LAST CAPTURED SNAPSHOT", color = Color.Yellow, fontWeight = FontWeight.Black, fontSize = 14.sp)
                 Spacer(modifier = Modifier.height(8.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp)
-                        .border(1.dp, Color.Gray, RoundedCornerShape(8.dp))
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Captured Snapshot",
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    IconButton(
-                        onClick = { capturedBitmap = null },
-                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                    ) {
-                        Icon(Icons.Default.Close, "Close", tint = Color.White)
-                    }
+                Box(modifier = Modifier.fillMaxWidth().height(200.dp).border(1.dp, Color.Gray, RoundedCornerShape(8.dp)).background(Color.Black), contentAlignment = Alignment.Center) {
+                    Image(bitmap = bitmap.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize())
+                    IconButton(onClick = { capturedBitmap = null }, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape)) { Icon(Icons.Default.Close, "Close", tint = Color.White) }
                 }
             }
-
-// === VIEWER LOGIC - Put this at the end of the main Column ===
-        if (showLiveView && selectedStreamUrl.isNotEmpty()) {
-            if (selectedStreamType.contains("SNAPSHOT")) {
-                SnapshotViewer(
-                    imageUrl = selectedStreamUrl,
-                    onBack = { showLiveView = false }
-                )
-            } else {
-                LiveViewScreen(
-                    streamUrl = selectedStreamUrl,
-                    streamType = selectedStreamType,
-                    onBack = { showLiveView = false }
-                )
-            }
-        }
         }
     }
 }
 
 @Composable
-fun ConsoleTab(
-    context: Context,
-    ipInput: String,
-    onIpChange: (String) -> Unit,
-    terminalText: String,
-    onTerminalClear: () -> Unit,
-    isScanning: Boolean,
-    scrollState: androidx.compose.foundation.ScrollState,
-    onStartScan: () -> Unit,
-    onStreamSelect: (String, String) -> Unit
-) {
+fun ConsoleTab(context: Context, ipInput: String, onIpChange: (String) -> Unit, terminalText: String, onTerminalClear: () -> Unit, isScanning: Boolean, scrollState: ScrollState, onStartScan: () -> Unit, onStreamSelect: (String, String) -> Unit) {
     Column {
-        // Target Input Area
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp))
-                .background(Color(0xFF0A0A0A))
-                .padding(12.dp)
-        ) {
+        Box(modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).background(Color(0xFF0A0A0A)).padding(12.dp)) {
             Column {
                 Text("TARGET HOST / RANGE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    BasicTextField(
-                        value = ipInput,
-                        onValueChange = onIpChange,
-                        textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace),
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green)
-                    )
-                    IconButton(onClick = onStartScan) {
-                        Icon(
-                            imageVector = if (isScanning) Icons.Default.Refresh else Icons.Default.Search,
-                            contentDescription = "Scan",
-                            tint = if (isScanning) Color.Yellow else Color.Green
-                        )
-                    }
+                    BasicTextField(value = ipInput, onValueChange = onIpChange, textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace), modifier = Modifier.weight(1f), singleLine = true, cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green))
+                    IconButton(onClick = onStartScan) { Icon(imageVector = if (isScanning) Icons.Default.Refresh else Icons.Default.Search, contentDescription = "Scan", tint = if (isScanning) Color.Yellow else Color.Green) }
                 }
             }
         }
-
         Spacer(modifier = Modifier.height(16.dp))
-
-        // Terminal
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .border(1.dp, Color(0xFF1A1A1A), RoundedCornerShape(4.dp)),
-            color = Color(0xFF050505)
-        ) {
+        Surface(modifier = Modifier.fillMaxWidth().weight(1f).border(1.dp, Color(0xFF1A1A1A), RoundedCornerShape(4.dp)), color = Color(0xFF050505)) {
             Box {
-                SelectionContainer {
-                    Text(
-                        text = terminalText,
-                        color = Color(0xFF00FF41), // Terminal Green
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(10.dp)
-                            .verticalScroll(scrollState)
-                    )
-                }
-                
-                // Clear button overlay
-                IconButton(
-                    onClick = onTerminalClear,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(24.dp)
-                ) {
-                    Icon(Icons.Default.Delete, "Clear", tint = Color.DarkGray, modifier = Modifier.size(16.dp))
-                }
+                SelectionContainer { Text(text = terminalText, color = Color(0xFF00FF41), fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.fillMaxSize().padding(10.dp).verticalScroll(scrollState)) }
+                IconButton(onClick = onTerminalClear, modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(24.dp)) { Icon(Icons.Default.Delete, "Clear", tint = Color.DarkGray, modifier = Modifier.size(16.dp)) }
             }
         }
-        
-        LaunchedEffect(terminalText) {
-            scrollState.animateScrollTo(scrollState.maxValue)
-        }
-
-        // Auto-Detected Links Panel - Scrollable + Router Warning
+        LaunchedEffect(terminalText) { scrollState.animateScrollTo(scrollState.maxValue) }
         if (terminalText.contains("===LINKS_START===")) {
             Spacer(modifier = Modifier.height(12.dp))
-            
             Text("🎯 Auto-Detected Links", color = Color.Cyan, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            
-            // Router Warning
-            if (terminalText.contains("Vodafone") || terminalText.contains("Wi-Fi Hub")) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF3A2A00)),
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
-                ) {
-                    Text(
-                        "⚠️ This appears to be your Router, not a Camera.\nTry scanning your actual camera IP.",
-                        color = Color.Yellow,
-                        modifier = Modifier.padding(12.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
             val lines = terminalText.lines()
             val start = lines.indexOfFirst { it.contains("===LINKS_START===") }
             val end = lines.indexOfFirst { it.contains("===LINKS_END===") }
-
             if (start != -1 && end != -1) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(350.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
+                Column(modifier = Modifier.fillMaxWidth().height(350.dp).verticalScroll(rememberScrollState())) {
                     for (i in start + 1 until end) {
                         val line = lines[i].trim()
                         if (line.contains("|")) {
@@ -712,35 +652,13 @@ fun ConsoleTab(
                                 val linkType = parts[0]
                                 val url = parts[1]
                                 val status = if (parts.size > 2) parts[2] else ""
-
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 6.dp)
-                                        .border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp))
-                                        .padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
+                                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            linkType,
-                                            color = if (linkType.contains("SNAPSHOT")) Color.Magenta else Color.Yellow,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                        Text(linkType, color = if (linkType.contains("SNAPSHOT")) Color.Magenta else Color.Yellow, fontWeight = FontWeight.Bold)
                                         Text(url.take(52) + "...", color = Color.LightGray, fontSize = 12.sp)
                                         Text("Status: $status", color = Color.Green, fontSize = 11.sp)
                                     }
-
-                                    Button(
-                                        onClick = {
-                                            onStreamSelect(url, linkType)
-                                        },
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (linkType.contains("SNAPSHOT")) Color.Magenta else Color.Green
-                                        )
-                                    ) {
-                                        Text("[VIEW]")
-                                    }
+                                    Button(onClick = { onStreamSelect(url, linkType) }, colors = ButtonDefaults.buttonColors(containerColor = if (linkType.contains("SNAPSHOT")) Color.Magenta else Color.Green)) { Text("LIVE") }
                                 }
                             }
                         }
@@ -748,1755 +666,815 @@ fun ConsoleTab(
                 }
             }
         }
-
-        if (terminalText.length > 50) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                Button(
-                    onClick = { 
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        val clip = ClipData.newPlainText("CamVigil Intel", terminalText)
-                        clipboard.setPrimaryClip(clip)
-                        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Copy Output", fontSize = 10.sp)
-                }
-                Button(
-                    onClick = { generateHtmlReport(context, terminalText) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20)),
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Icon(Icons.Default.PictureAsPdf, null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Export HTML", fontSize = 10.sp)
-                }
-            }
-        }
     }
 }
 
 @Composable
-fun IntelTab(
-    terminalText: String,
-    onCaptureSnapshot: () -> Unit,
-    onPreviewStream: (String) -> Unit,
-    onTestOnvif: () -> Unit
-) {
+fun IntelTab(terminalText: String, onLogUpdate: (String) -> Unit, onCaptureSnapshot: () -> Unit, onPreviewStream: (String) -> Unit, onTestOnvif: () -> Unit) {
     val context = LocalContext.current
-    val scope   = rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
+    var autoDiscoverOutput by remember { mutableStateOf("") }
+    var isAutoDiscovering by remember { mutableStateOf(false) }
+    var currentPipelineStep by remember { mutableIntStateOf(0) }
+    var hostCount by remember { mutableIntStateOf(0) }
+    var cameraCount by remember { mutableIntStateOf(0) }
 
-    var onvifOutput  by remember { mutableStateOf("") }
-    var onvifRunning by remember { mutableStateOf(false) }
-    var showOnvifResult by remember { mutableStateOf(false) }
-
-    val streams    = terminalText.lines().filter { it.contains("http") || it.contains("rtsp") }
-    val vulns      = terminalText.lines().filter { it.contains("VULNERABILITY") || it.contains("CRITICAL") || it.contains("FIRE") }
+    val streams = terminalText.lines().filter { it.contains("http") || it.contains("rtsp") }
+    val vulns = terminalText.lines().filter { it.contains("VULNERABILITY") || it.contains("CRITICAL") || it.contains("FIRE") }
     val deviceInfo = terminalText.lines().filter { it.contains("Model:") || it.contains("Firmware:") || it.contains("Manufacturer:") }
 
-    // Pull target IP from last scan
-    val targetIp = remember(terminalText) {
-        Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").find(terminalText)?.value ?: ""
-    }
-
     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-        Text("CATEGORIZED INTEL", color = Color.Cyan, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        Spacer(modifier = Modifier.height(12.dp))
-
-        IntelSection("STREAMS FOUND",           streams,    Color.Green, Icons.Default.Videocam,       onPreviewStream)
-        IntelSection("SECURITY VULNERABILITIES", vulns,      Color.Red,   Icons.Default.ReportProblem,  onPreviewStream)
-        IntelSection("DEVICE HARDWARE INFO",     deviceInfo, Color.Cyan,  Icons.Default.Info,           onPreviewStream)
-
-        Spacer(modifier = Modifier.height(20.dp))
-        Text("QUICK ACTIONS", color = Color.Cyan, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Target display
-        if (targetIp.isNotEmpty()) {
-            Text(
-                "Target: $targetIp",
-                color = Color.Gray,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-        } else {
-            Text(
-                "⚠️ No target found — run a Console scan first",
-                color = Color.Yellow,
-                fontSize = 11.sp,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        Button(
+            onClick = {
+                isAutoDiscovering = true
+                autoDiscoverOutput = "> INITIALIZING AUTO-DISCOVERY...\n"
+                scope.launch(Dispatchers.IO) {
+                    val subnets = listOf("192.168.1", "192.168.0")
+                    subnets.forEach { subnet ->
+                        (1..254).map { i ->
+                            async {
+                                val ip = "$subnet.$i"
+                                try {
+                                    if (InetAddress.getByName(ip).isReachable(300)) {
+                                        withContext(Dispatchers.Main) { hostCount++; autoDiscoverOutput += "Found: $ip\n" }
+                                        val openPorts = listOf(80, 554, 8000, 37777).filter { port -> try { Socket().use { s -> s.connect(InetSocketAddress(ip, port), 200); true } } catch (e: Exception) { false } }
+                                        if (openPorts.isNotEmpty()) {
+                                            withContext(Dispatchers.Main) { cameraCount++; autoDiscoverOutput += "Camera at $ip\n" }
+                                            try {
+                                                val py = Python.getInstance()
+                                                val module = py.getModule("CamXploit")
+                                                val sys = py.getModule("sys")
+                                                sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { onLogUpdate(text) } })
+                                                module.callAttr("main", ip)
+                                            } catch (e: Exception) {}
+                                        }
+                                    }
+                                } catch (e: Exception) {}
+                            }
+                        }.awaitAll()
+                    }
+                    isAutoDiscovering = false
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+            shape = RoundedCornerShape(8.dp),
+            enabled = !isAutoDiscovering
         ) {
-            Button(
-                onClick = {
-                    if (targetIp.isEmpty()) {
-                        Toast.makeText(context, "Run a scan first to set a target", Toast.LENGTH_SHORT).show()
-                        return@Button
-                    }
-                    onvifRunning    = true
-                    showOnvifResult = true
-                    onvifOutput     = "🔍 Probing $targetIp for ONVIF services...\n"
-
-                    scope.launch(Dispatchers.IO) {
-                        try {
-                            val py     = Python.getInstance()
-                            val module = py.getModule("CamXploit")
-                            val result = module.callAttr("onvif_probe", targetIp).toString()
-                            withContext(Dispatchers.Main) {
-                                onvifOutput  = result
-                                onvifRunning = false
-                            }
-                        } catch (e: Exception) {
-                            withContext(Dispatchers.Main) {
-                                onvifOutput  = "❌ ONVIF probe error: ${e.message}"
-                                onvifRunning = false
-                            }
-                        }
-                    }
-                },
-                enabled  = !onvifRunning,
-                modifier = Modifier.weight(1f),
-                colors   = ButtonDefaults.buttonColors(
-                    containerColor = if (onvifRunning) Color.DarkGray else Color(0xFF333333)
-                ),
-                shape = RoundedCornerShape(4.dp)
-            ) {
-                if (onvifRunning) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
-                        color = Color.Cyan,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(Modifier.width(6.dp))
-                }
-                Text(if (onvifRunning) "PROBING..." else "TEST ONVIF", fontSize = 10.sp)
-            }
-
-            Button(
-                onClick  = onCaptureSnapshot,
-                modifier = Modifier.weight(1f),
-                colors   = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20)),
-                shape    = RoundedCornerShape(4.dp)
-            ) {
-                Text("CAPTURE SNAP", fontSize = 10.sp)
-            }
+            if (isAutoDiscovering) CircularProgressIndicator(color = Color.Black, modifier = Modifier.size(24.dp))
+            else Text("AUTO DISCOVER ALL CAMERAS", color = Color.Black, fontWeight = FontWeight.Black)
         }
-
-        // ONVIF result output box
-        if (showOnvifResult && onvifOutput.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors   = CardDefaults.cardColors(containerColor = Color(0xFF050505)),
-                border   = BorderStroke(1.dp, Color(0xFF00AAAA))
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "ONVIF PROBE RESULTS",
-                            color = Color.Cyan,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp
-                        )
-                        Row {
-                            // Copy result button
-                            IconButton(
-                                onClick = {
-                                    val clipboard = context.getSystemService(
-                                        Context.CLIPBOARD_SERVICE
-                                    ) as ClipboardManager
-                                    clipboard.setPrimaryClip(
-                                        ClipData.newPlainText("ONVIF Result", onvifOutput)
-                                    )
-                                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.ContentCopy, null,
-                                    tint = Color.Gray,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                            // Dismiss button
-                            IconButton(
-                                onClick = { showOnvifResult = false },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Close, null,
-                                    tint = Color.Gray,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-
-                    SelectionContainer {
-                        Text(
-                            text       = onvifOutput,
-                            color      = if (onvifOutput.contains("CREDENTIALS WORK"))
-                                             Color(0xFF00FF41)
-                                         else Color.LightGray,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize   = 11.sp,
-                            lineHeight = 16.sp,
-                            modifier   = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 400.dp)
-                                .verticalScroll(rememberScrollState())
-                        )
-                    }
-
-                    // If RTSP links found in result, show launch buttons
-                    val rtspLinks = onvifOutput.lines()
-                        .filter { it.contains("🔗 RTSP:") }
-                        .map { it.substringAfter("🔗 RTSP:").trim() }
-
-                    if (rtspLinks.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text("DETECTED STREAMS:", color = Color.Cyan, fontSize = 11.sp)
-                        rtspLinks.forEach { url ->
-                            Button(
-                                onClick = {
-                                    StreamViewerActivity.launch(context, url, targetIp)
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 4.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF003300)
-                                )
-                            ) {
-                                Icon(
-                                    Icons.Default.Videocam, null,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    url.take(45) + if (url.length > 45) "..." else "",
-                                    fontSize = 10.sp
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         Spacer(modifier = Modifier.height(20.dp))
-        Text("EXTERNAL RECON LINKS", color = Color.Magenta, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ReconButton("SHODAN", "https://www.shodan.io/host/$targetIp", context)
-            ReconButton("CENSYS", "https://search.censys.io/hosts/$targetIp", context)
-            ReconButton("ZOOMEYE", "https://www.zoomeye.org/searchResult?q=$targetIp", context)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            PipelineStep(Icons.Default.Radar, "PING", "$hostCount", currentPipelineStep >= 1, isAutoDiscovering && currentPipelineStep == 1)
+            PipelineStep(Icons.Default.SettingsInputComponent, "PORT", "$cameraCount", currentPipelineStep >= 2, isAutoDiscovering && currentPipelineStep == 2)
         }
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ReconButton("MAPS", "https://www.google.com/maps/search/$targetIp", context)
-            ReconButton("DORK", "https://www.google.com/search?q=inurl:\"/view/viewer_index.shtml\"+ip:$targetIp", context)
-        }
-
+        Spacer(modifier = Modifier.height(12.dp))
+        IntelSection("STREAMS FOUND", streams, Color.Green, Icons.Default.Videocam, onPreviewStream)
+        IntelSection("SECURITY VULNERABILITIES", vulns, Color.Red, Icons.Default.ReportProblem, onPreviewStream)
+        IntelSection("DEVICE HARDWARE INFO", deviceInfo, Color.Cyan, Icons.Default.Info, onPreviewStream)
         Spacer(modifier = Modifier.height(20.dp))
-        Text("GOOGLE DORKING SUGGESTIONS", color = Color.Yellow, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        val dorks = listOf(
-            "inurl:\"/view/viewer_index.shtml\"",
-            "intitle:\"Live View / - AXIS\"",
-            "inurl:\"/mjpg/video.mjpg\"",
-            "inurl:\"view/index.shtml\"",
-            "inurl:\"top.htm?login\""
-        )
-        dorks.forEach { dork ->
-            Text(
-                text = dork,
-                color = Color.LightGray,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.padding(vertical = 4.dp).clickable {
-                    val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.google.com/search?q=$dork"))
-                    context.startActivity(intent)
-                }
-            )
-        }
-        if (terminalText.isEmpty()) {
-            Text(
-                "No intel collected yet. Start a scan first.",
-                color = Color.Gray,
-                modifier = Modifier.padding(20.dp)
-            )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onTestOnvif, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333)), shape = RoundedCornerShape(4.dp)) { Text("TEST ONVIF", fontSize = 10.sp) }
+            Button(onClick = onCaptureSnapshot, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20)), shape = RoundedCornerShape(4.dp)) { Text("CAPTURE SNAP", fontSize = 10.sp) }
         }
     }
 }
 
 @Composable
-fun ReconButton(label: String, url: String, context: Context) {
-    Button(
-        onClick = {
-            val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
-            context.startActivity(intent)
-        },
-        modifier = Modifier.height(36.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1A)),
-        border = BorderStroke(1.dp, Color.DarkGray),
-        shape = RoundedCornerShape(4.dp),
-        contentPadding = PaddingValues(horizontal = 8.dp)
-    ) {
-        Text(label, fontSize = 10.sp, color = Color.White)
-    }
-}
-
-fun extractCredentials(terminalText: String): Pair<String, String> {
-    val match = Regex("""CRACKED \((?:HTTP|RTSP)\): ([^:]+):([^\s\n]+)""").find(terminalText)
-    return if (match != null) {
-        match.groupValues[1] to match.groupValues[2]
-    } else {
-        "" to ""
-    }
-}
-
-fun buildAuthUrl(url: String, user: String, pass: String): String {
-    if (user.isBlank() || pass.isBlank() || url.contains("@")) return url
-    return try {
-        if (url.startsWith("rtsp://")) {
-            url.replace("rtsp://", "rtsp://$user:$pass@")
-        } else if (url.startsWith("http://")) {
-            url.replace("http://", "http://$user:$pass@")
-        } else {
-            url
+fun IntelSection(title: String, items: List<String>, color: Color, icon: androidx.compose.ui.graphics.vector.ImageVector, onPreviewStream: (String) -> Unit) {
+    if (items.isNotEmpty()) {
+        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)), border = BorderStroke(1.dp, Color(0xFF1A1A1A))) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = color, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text(title, color = color, fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+                items.forEach { item ->
+                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = item.trim(), color = Color.LightGray, fontSize = 11.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
+                        if (title == "STREAMS FOUND") {
+                            val url = Regex("(rtsp://[^\s]+|http://[^\s]+)").find(item)?.value ?: ""
+                            if (url.isNotEmpty()) TextButton(onClick = { onPreviewStream(url) }) { Text("[VIEW]", color = Color.Magenta) }
+                        }
+                    }
+                }
+            }
         }
-    } catch (e: Exception) {
-        url
     }
 }
 
 @Composable
-fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String) -> Unit) {
-    // Auto-extract credentials if any were found in the console
+fun PipelineStep(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, count: String, isComplete: Boolean, isActive: Boolean) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(60.dp)) {
+        Icon(imageVector = icon, contentDescription = label, tint = if (isComplete) Color(0xFF00E5FF) else if (isActive) Color.Yellow else Color.DarkGray, modifier = Modifier.size(24.dp))
+        Text(label, color = if (isComplete) Color(0xFF00E5FF) else if (isActive) Color.Yellow else Color.DarkGray, fontSize = 8.sp, fontWeight = FontWeight.Black)
+        Text(count, color = if (isComplete || isActive) Color.White else Color.DarkGray, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+fun StreamTab(
+    terminalText: String,
+    selectedUrl: String,
+    onUrlSelected: (String) -> Unit,
+    isRecording: Boolean,
+    recordingDuration: Long,
+    onStartRecording: () -> Unit,
+    onStopRecording: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val credentials = remember(terminalText) {
-        val credMatch = Regex("(?:CRACKED|Success)[^\\n]*?(\\w+):(\\w+)\\s*@")
-            .find(terminalText)
-        val user = credMatch?.groupValues?.get(1) ?: "admin"
-        val pass = credMatch?.groupValues?.get(2) ?: "admin"
-        user to pass
+        val credMatch = Regex("(?:CRACKED|Success)[^\\n]*?(\\w+):(\\w+)\\s*@").find(terminalText)
+        (credMatch?.groupValues?.get(1) ?: "admin") to (credMatch?.groupValues?.get(2) ?: "admin")
     }
 
-    // Auto-extract ALL stream URLs from scan results
+    var isGridView by remember { mutableStateOf(false) }
+    var gridUrls by remember { mutableStateOf(List(4) { "" }) }
+    var activeSlotIndex by remember { mutableIntStateOf(0) }
+    var screenshotPreview by remember { mutableStateOf<Bitmap?>(null) }
+    var showScreenshotPreview by remember { mutableStateOf(false) }
+
+    var currentExoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
+    var currentWebView by remember { mutableStateOf<WebView?>(null) }
+    var currentTextureView by remember { mutableStateOf<TextureView?>(null) }
+
+    DisposableEffect(selectedUrl) {
+        onDispose {
+            // player cleanup handled by AndroidView
+            currentExoPlayer?.release()
+            currentExoPlayer = null
+        }
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
+
     val streamUrls = remember(terminalText) {
         val start = terminalText.indexOf("===LINKS_START===")
         val end = terminalText.indexOf("===LINKS_END===")
-
         if (start != -1 && end != -1) {
-            // Parse the structured block
-            terminalText.substring(start, end)
-                .lines()
-                .filter { it.contains("rtsp://") || it.contains("http://") }
-                .mapNotNull { line ->
-                    Regex("(rtsp://[^|\\s\\\\n]+|http://[^|\\s\\\\n]+)")
-                        .find(line)?.value?.trim()
-                }
-                .distinct()
-        } else {
-            // Fallback to raw scan for older results
-            terminalText.lines()
-                .mapNotNull { line ->
-                    Regex("(rtsp://[^\\s]+|http://[^\\s]+)")
-                        .find(line)?.value?.trim()
-                }
-                .distinct()
-        }
+            terminalText.substring(start, end).lines().filter { it.contains("|") }.mapNotNull { line ->
+                val parts = line.split("|")
+                if (parts.size >= 2) { val url = parts[1].trim(); if (url.startsWith("http") || url.startsWith("rtsp")) url to parts[0].trim() else null } else null
+            }.distinctBy { it.first }
+        } else emptyList()
     }
 
-    // Auto-select first found URL if none is selected
-    LaunchedEffect(streamUrls) {
-        if (selectedUrl.isEmpty() && streamUrls.isNotEmpty()) {
-            onUrlSelected(streamUrls.first())
-        }
-    }
-
-    var customUrl by remember { mutableStateOf("") }
+    LaunchedEffect(streamUrls) { if (selectedUrl.isEmpty() && streamUrls.isNotEmpty()) onUrlSelected(streamUrls.first().first) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Text("STREAM VIEWER", color = Color.Magenta,
-            fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        Spacer(modifier = Modifier.height(8.dp))
-
-        if (streamUrls.isNotEmpty()) {
-            Text("AUTO-DETECTED STREAMS (${streamUrls.size})",
-                color = Color.Gray, fontSize = 10.sp,
-                fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(4.dp))
-
-            streamUrls.forEach { url ->
-                val isSelected = url == selectedUrl
-                TextButton(
-                    onClick = { onUrlSelected(url) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(
-                            1.dp,
-                            if (isSelected) Color.Magenta else Color(0xFF222222),
-                            RoundedCornerShape(4.dp)
-                        )
-                        .background(
-                            if (isSelected) Color(0xFF1A001A)
-                            else Color.Transparent
-                        )
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            if (url.startsWith("rtsp")) Icons.Default.Videocam
-                            else Icons.Default.Language,
-                            contentDescription = null,
-                            tint = if (isSelected) Color.Magenta else Color.Gray,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            url,
-                            color = if (isSelected) Color.Magenta else Color.Cyan,
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-            }
-        } else {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, Color(0xFF222222), RoundedCornerShape(4.dp))
-                    .padding(12.dp)
-            ) {
-                Text(
-                    "No streams detected yet.\nRun a scan on the CONSOLE tab first.",
-                    color = Color.Gray,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Manual override
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp))
-                .background(Color(0xFF0A0A0A))
-                .padding(12.dp)
-        ) {
-            Column {
-                Text("MANUAL OVERRIDE", color = Color.Gray, fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    BasicTextField(
-                        value = customUrl,
-                        onValueChange = { customUrl = it },
-                        textStyle = TextStyle(
-                            color = Color.White, fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace
-                        ),
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Magenta),
-                        decorationBox = { inner ->
-                            if (customUrl.isEmpty()) Text(
-                                "rtsp://user:pass@ip:port/stream",
-                                color = Color.DarkGray, fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
-                            inner()
-                        }
-                    )
-                    IconButton(onClick = { 
-                        if (customUrl.isNotEmpty()) {
-                            onUrlSelected(customUrl) 
-                        }
-                    }) {
-                        Icon(Icons.Default.PlayArrow, "Play", tint = Color.Magenta)
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Player - auto-plays selected URL
-        if (selectedUrl.isNotEmpty()) {
-            val (user, pass) = credentials
-            val authUrl = selectedUrl
-                .replace("http://", "http://$user:$pass@")
-                .replace("https://", "https://$user:$pass@")
-            val authenticatedUrl = if (selectedUrl.startsWith("rtsp")) {
-                buildAuthUrl(selectedUrl, user, pass)
-            } else {
-                authUrl
-            }
-            key(authenticatedUrl) { // Recompose player when URL changes
-                val isRtsp = authenticatedUrl.startsWith("rtsp")
-                val isMjpeg = authenticatedUrl.contains("mjpeg", ignoreCase = true) || 
-                             authenticatedUrl.contains("mjpg", ignoreCase = true) ||
-                             authenticatedUrl.contains("videostream.cgi", ignoreCase = true) ||
-                             authenticatedUrl.contains("faststream", ignoreCase = true)
-                val isSnapshot = authenticatedUrl.contains("snapshot", ignoreCase = true) || 
-                                authenticatedUrl.contains(".jpg", ignoreCase = true)
-
-                if (isRtsp) {
-                    AndroidView<PlayerView>(
-                        factory = { ctx ->
-                            val player = ExoPlayer.Builder(ctx).build()
-                            val mediaItem = MediaItem.fromUri(authenticatedUrl)
-                            val rtspMediaSource = RtspMediaSource.Factory()
-                                .setForceUseRtpTcp(true)
-                                .createMediaSource(mediaItem)
-                            player.setMediaSource(rtspMediaSource)
-                            player.prepare()
-                            player.play()
-                            PlayerView(ctx).apply {
-                                this.player = player
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .border(1.dp, Color(0xFF333333))
-                    )
-                } else if (isMjpeg) {
-                    // MJPEG Stream via WebView
-                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                        AndroidView(
-                            factory = { ctx ->
-                                WebView(ctx).apply {
-                                    settings.javaScriptEnabled = true
-                                    settings.domStorageEnabled = true
-                                    settings.useWideViewPort = true
-                                    settings.loadWithOverviewMode = true
-                                    webViewClient = object : WebViewClient() {
-                                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {
-                                            handler?.proceed()
-                                        }
-                                    }
-                                    loadUrl(authUrl)
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                } else if (isSnapshot) {
-                    var snapshotBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
-                    var refreshCount by remember { mutableIntStateOf(0) }
-
-                    LaunchedEffect(authenticatedUrl, refreshCount) {
-                        withContext(Dispatchers.IO) {
-                            try {
-                                val bytes = java.net.URL(authenticatedUrl).readBytes()
-                                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                snapshotBitmap = bitmap?.asImageBitmap()
-                            } catch (e: Exception) {}
-                        }
-                        delay(2000)
-                        refreshCount++
-                    }
-
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("STREAM VIEWER", color = Color.Magenta, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                if (isRecording) {
+                    Spacer(modifier = Modifier.width(12.dp))
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .border(1.dp, Color(0xFF333333))
-                            .background(Color.Black),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        snapshotBitmap?.let {
-                            Image(
-                                bitmap = it,
-                                contentDescription = "Snapshot",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Fit
-                            )
-                        } ?: CircularProgressIndicator(color = Color.Magenta)
-                    }
-                } else {
-                    // Fallback for other HTTP links
-                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                        AndroidView(
-                            factory = { ctx ->
-                                WebView(ctx).apply {
-                                    settings.javaScriptEnabled = true
-                                    settings.domStorageEnabled = true
-                                    settings.useWideViewPort = true
-                                    settings.loadWithOverviewMode = true
-                                    webViewClient = object : WebViewClient() {
-                                        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {
-                                            handler?.proceed()
-                                        }
-                                    }
-                                    loadUrl(authUrl)
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
-            }
-        } else {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .background(Color(0xFF050505))
-                    .border(1.dp, Color(0xFF1A1A1A)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.Videocam, null,
-                        tint = Color(0xFF333333),
-                        modifier = Modifier.size(48.dp))
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Awaiting stream source...",
-                        color = Color(0xFF333333),
-                        fontFamily = FontFamily.Monospace)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun IntelSection(
-    title: String,
-    items: List<String>,
-    color: Color,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onPreviewStream: (String) -> Unit
-) {
-    if (items.isNotEmpty()) {
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
-            border = BorderStroke(1.dp, Color(0xFF1A1A1A))
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(title, color = color, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                }
-                Spacer(Modifier.height(8.dp))
-                items.forEach { item ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = item.trim().removePrefix("    ").removePrefix("       "),
-                            color = Color.LightGray,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (title == "STREAMS FOUND") {
-                            // Extract URL from various possible formats
-                            val url = item.substringAfter("🔗 ")
-                                        .substringAfter("ACTIVE MJPEG STREAM: ")
-                                        .substringAfter("POTENTIAL VIDEO STREAM: ")
-                                        .substringAfter("RTSP URL: ")
-                                        .substringAfter("RTSP Stream: ")
-                                        .substringAfter("🔗 ") // Handle nested or duplicated symbols
-                                        .split("|").first() // Handle structured link format
-                                        .trim()
-                            
-                            if (url.startsWith("http") || url.startsWith("rtsp")) {
-                                TextButton(
-                                    onClick = { onPreviewStream(url) }
-                                ) {
-                                    Text("[VIEW]", color = Color.Magenta)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ArchiveTab(context: Context, selectedTab: Int, onFileClick: (File) -> Unit) {
-    var refreshTrigger by remember { mutableIntStateOf(0) }
-
-    // Auto-refresh whenever Archive tab is opened
-    LaunchedEffect(selectedTab) {
-        if (selectedTab == 2) refreshTrigger++
-    }
-
-    val files = remember(refreshTrigger) {
-        val docDir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
-        val picDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
-        val allFiles = mutableListOf<File>()
-        docDir?.listFiles()?.let { allFiles.addAll(it) }
-        picDir?.listFiles()?.let { allFiles.addAll(it) }
-        allFiles.sortedByDescending { it.lastModified() }
-    }
-
-    Column {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "SAVED REPORTS & LOGS",
-                color = Color.Yellow,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp
-            )
-            // Manual refresh button
-            IconButton(onClick = { refreshTrigger++ }) {
-                Icon(Icons.Default.Refresh, "Refresh", tint = Color.Cyan)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        // Stats bar
-        val snapCount   = files.count { it.extension == "jpg" || it.extension == "png" }
-        val reportCount = files.count { it.extension == "html" || it.extension == "json" }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("📷 $snapCount snapshots",  color = Color.Gray, fontSize = 11.sp)
-            Text("📄 $reportCount reports",  color = Color.Gray, fontSize = 11.sp)
-            Text("📁 ${files.size} total",   color = Color.Gray, fontSize = 11.sp)
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        if (files.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxWidth().padding(40.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Default.FolderOpen,
-                        null,
-                        tint = Color.DarkGray,
-                        modifier = Modifier.size(48.dp)
+                            .size(8.dp)
+                            .background(Color.Red.copy(alpha = pulseAlpha), CircleShape)
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        "No reports found in archive.",
-                        color = Color.DarkGray,
-                        textAlign = TextAlign.Center
-                    )
-                    Text(
-                        "Run a scan or capture a snapshot to populate.",
-                        color = Color.DarkGray,
-                        fontSize = 11.sp,
-                        textAlign = TextAlign.Center
+                        text = "REC ${String.format("%02d:%02d", recordingDuration / 60, recordingDuration % 60)}",
+                        color = Color.Red,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
-        } else {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                files.forEach { file ->
-                    val isImage = file.extension in listOf("jpg", "jpeg", "png")
-                    val isSnap  = file.name.contains("Snap") || file.name.contains("Capture")
-
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .clickable { onFileClick(file) },
-                        colors = CardDefaults.cardColors(
-                            containerColor = when {
-                                isSnap  -> Color(0xFF0A1A0A)  // green tint for snapshots
-                                else    -> Color(0xFF080808)
-                            }
-                        ),
-                        border = BorderStroke(
-                            1.dp,
-                            when {
-                                isSnap  -> Color(0xFF1A3A1A)
-                                else    -> Color(0xFF111111)
-                            }
-                        ),
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Thumbnail or icon
-                            Box(
-                                modifier = Modifier
-                                    .size(52.dp)
-                                    .background(Color(0xFF111111), RoundedCornerShape(4.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (isImage) {
-                                    val bitmap = remember(file.absolutePath) {
-                                        try {
-                                            val opts = BitmapFactory.Options().apply {
-                                                inSampleSize = 4  // downsample for thumbnail
-                                            }
-                                            BitmapFactory.decodeFile(file.absolutePath, opts)
-                                        } catch (_: Exception) { null }
-                                    }
-                                    if (bitmap != null) {
-                                        Image(
-                                            bitmap = bitmap.asImageBitmap(),
-                                            contentDescription = null,
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentScale = ContentScale.Crop
-                                        )
-                                    } else {
-                                        Icon(Icons.Default.BrokenImage, null, tint = Color.Gray)
-                                    }
-                                } else {
-                                    Icon(
-                                        imageVector = when (file.extension) {
-                                            "html" -> Icons.Default.Code
-                                            "json" -> Icons.Default.DataObject
-                                            else   -> Icons.Default.Description
-                                        },
-                                        contentDescription = null,
-                                        tint = when (file.extension) {
-                                            "html" -> Color.Cyan
-                                            "json" -> Color.Yellow
-                                            else   -> Color.Gray
-                                        },
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                }
-                            }
-
-                            Spacer(Modifier.width(10.dp))
-
-                            // File info
-                            Column(modifier = Modifier.weight(1f)) {
-                                // Badge + name
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    if (isSnap) {
-                                        Text(
-                                            "📷 SNAP",
-                                            color = Color.Green,
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            modifier = Modifier
-                                                .background(Color(0xFF003300), RoundedCornerShape(3.dp))
-                                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                                        )
-                                        Spacer(Modifier.width(4.dp))
-                                    }
-                                    Text(
-                                        file.name,
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        maxLines = 1
-                                    )
-                                }
-                                Spacer(Modifier.height(2.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text(
-                                        SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
-                                            .format(Date(file.lastModified())),
-                                        color = Color.Gray,
-                                        fontSize = 10.sp
-                                    )
-                                    Text(
-                                        formatFileSize(file.length()),
-                                        color = Color.DarkGray,
-                                        fontSize = 10.sp
-                                    )
-                                }
-                            }
-
-                            // Action buttons
-                            Row {
-                                IconButton(
-                                    onClick = { openFile(context, file) },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = if (isImage) Icons.Default.Image
-                                                      else Icons.Default.OpenInNew,
-                                        contentDescription = "Open",
-                                        tint = Color.Green,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                                IconButton(
-                                    onClick = { shareFile(context, file) },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Share, "Share",
-                                        tint = Color.Cyan,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                                IconButton(
-                                    onClick = { if (file.delete()) refreshTrigger++ },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Delete, "Delete",
-                                        tint = Color.Red,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Add this helper anywhere in the file
-fun formatFileSize(bytes: Long): String = when {
-    bytes < 1024        -> "${bytes}B"
-    bytes < 1024 * 1024 -> "${"%.1f".format(bytes / 1024.0)}KB"
-    else                -> "${"%.1f".format(bytes / (1024.0 * 1024))}MB"
-}
-
-data class ScannedDevice(
-    val ip: String,
-    val hostname: String?,
-    val openPorts: List<Int>
-)
-
-@Composable
-fun LanScannerTab(onScanComplete: (String) -> Unit, onDeviceSelect: (String) -> Unit) {
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-    var isScanning by remember { mutableStateOf(false) }
-    var scanOutput by remember { mutableStateOf("Ready to scan local network...") }
-    val discoveredRadarDevices = remember { mutableStateListOf<ScannedDevice>() }
-    var discoveredDevices by remember { mutableStateOf<List<String>>(emptyList()) }
-    var discoveredRangeDevices by remember { mutableStateOf<List<ScannedDevice>>(emptyList()) }
-    var scanProgress by remember { mutableFloatStateOf(0f) }
-    var selectedSubTab by remember { mutableIntStateOf(0) }
-    val subTabs = listOf("RADAR", "RANGE", "DEVICES", "LOGS")
-
-    // Radar Animation
-    val infiniteTransition = rememberInfiniteTransition(label = "RadarTransition")
-    val radarRotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "RadarRotation"
-    )
-
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("🔍 LAN Scanner", color = Color.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Black)
-        Text("Discover devices on your local network", color = Color.Gray, fontSize = 12.sp)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        TabRow(
-            selectedTabIndex = selectedSubTab,
-            containerColor = Color.Transparent,
-            contentColor = Color.Cyan,
-            divider = { Divider(color = Color.DarkGray) },
-            indicator = { tabPositions ->
-                TabRowDefaults.Indicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedSubTab]),
-                    color = Color.Cyan
-                )
-            }
-        ) {
-            subTabs.forEachIndexed { index, title ->
-                Tab(
-                    selected = selectedSubTab == index,
-                    onClick = { selectedSubTab = index },
-                    text = { Text(title, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        when (selectedSubTab) {
-            0 -> { // RADAR View
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                    Box(
-                        modifier = Modifier
-                            .size(200.dp)
-                            .padding(10.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        // Background Circles
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val center = size / 2f
-                            val radius = size.minDimension / 2f
-                            drawCircle(color = Color.DarkGray, radius = radius, style = Stroke(1f))
-                            drawCircle(color = Color.DarkGray, radius = radius * 0.66f, style = Stroke(1f))
-                            drawCircle(color = Color.DarkGray, radius = radius * 0.33f, style = Stroke(1f))
-                            
-                            // Crosshairs
-                            drawLine(Color.DarkGray, start = androidx.compose.ui.geometry.Offset(center.width, 0f), end = androidx.compose.ui.geometry.Offset(center.width, size.height), strokeWidth = 1f)
-                            drawLine(Color.DarkGray, start = androidx.compose.ui.geometry.Offset(0f, center.height), end = androidx.compose.ui.geometry.Offset(size.width, center.height), strokeWidth = 1f)
-                        }
-
-                        // Rotating Sweep
-                        if (isScanning) {
-                            Canvas(modifier = Modifier.fillMaxSize().rotate(radarRotation)) {
-                                val radius = size.minDimension / 2f
-                                drawArc(
-                                    brush = Brush.sweepGradient(
-                                        0.0f to Color.Transparent,
-                                        0.25f to Color.Green.copy(alpha = 0.4f),
-                                        0.5f to Color.Transparent
-                                    ),
-                                    startAngle = 0f,
-                                    sweepAngle = 90f,
-                                    useCenter = true
-                                )
-                                drawLine(
-                                    color = Color.Green,
-                                    start = center,
-                                    end = androidx.compose.ui.geometry.Offset(center.x + radius, center.y),
-                                    strokeWidth = 2f
-                                )
-                            }
-                        }
-                        
-                        Icon(
-                            Icons.Default.SettingsInputAntenna,
-                            contentDescription = null,
-                            tint = if (isScanning) Color.Green else Color.Gray,
-                            modifier = Modifier.size(48.dp)
-                        )
-                    }
-
-                    if (isScanning) {
-                        Text(
-                            text = "Scanning... ${(scanProgress * 100).toInt()}%",
-                            color = Color.Green,
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        LinearProgressIndicator(
-                            progress = scanProgress,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 8.dp),
-                            color = Color.Green,
-                            trackColor = Color.DarkGray,
-                            strokeCap = StrokeCap.Round
-                        )
-                    } else if (discoveredRadarDevices.isNotEmpty()) {
-                        Text(
-                            text = "Scan Complete: ${discoveredRadarDevices.size} devices found",
-                            color = Color.Cyan,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Button(
-                        onClick = {
-                            isScanning = true
-                            discoveredRadarDevices.clear()
-                            scanProgress = 0f
-                            scanOutput = "> Starting native ping sweep...\n"
-                            
-                            scope.launch(Dispatchers.IO) {
-                                try {
-                                    val subnets = mutableSetOf<String>()
-                                    // 1. Get local IP and determine primary subnet
-                                    val interfaces = NetworkInterface.getNetworkInterfaces()
-                                    for (inf in Collections.list(interfaces)) {
-                                        if (inf.isLoopback || !inf.isUp) continue
-                                        for (addr in Collections.list(inf.inetAddresses)) {
-                                            if (addr is Inet4Address && !addr.isLoopbackAddress) {
-                                                val ip = addr.hostAddress ?: continue
-                                                subnets.add(ip.substringBeforeLast("."))
-                                            }
-                                        }
-                                    }
-                                    
-                                    // Add 192.168.0 as fallback if not present
-                                    subnets.add("192.168.1")
-                                    subnets.add("192.168.0")
-                                    
-                                    val targetSubnets = subnets.take(3)
-                                    val totalIps = targetSubnets.size * 254
-                                    var scannedCount = 0
-                                    val portsToCheck = listOf(80, 554, 8080, 8000, 443, 37777)
-
-                                    targetSubnets.forEach { subnet ->
-                                        val jobs = (1..254).map { i ->
-                                            async {
-                                                val ip = "$subnet.$i"
-                                                try {
-                                                    val address = InetAddress.getByName(ip)
-                                                    if (address.isReachable(300)) {
-                                                        val hostname = try {
-                                                            val host = address.canonicalHostName
-                                                            if (host != ip) host else null
-                                                        } catch (e: Exception) { null }
-
-                                                        val openPorts = mutableListOf<Int>()
-                                                        for (port in portsToCheck) {
-                                                            try {
-                                                                Socket().use { socket ->
-                                                                    socket.connect(InetSocketAddress(ip, port), 150)
-                                                                    openPorts.add(port)
-                                                                }
-                                                            } catch (e: Exception) {}
-                                                        }
-                                                        
-                                                        withContext(Dispatchers.Main) {
-                                                            discoveredRadarDevices.add(ScannedDevice(ip, hostname, openPorts))
-                                                            scanOutput += "Discovered: $ip ${hostname ?: ""}\n"
-                                                        }
-                                                    }
-                                                } catch (e: Exception) {}
-                                                
-                                                synchronized(this) {
-                                                    scannedCount++
-                                                    scanProgress = scannedCount.toFloat() / totalIps
-                                                }
-                                            }
-                                        }
-                                        jobs.awaitAll()
-                                    }
-                                    
-                                    withContext(Dispatchers.Main) {
-                                        isScanning = false
-                                        scanOutput += "\nScan finished. Found ${discoveredRadarDevices.size} devices.\n"
-                                    }
-                                } catch (e: Exception) {
-                                    withContext(Dispatchers.Main) {
-                                        isScanning = false
-                                        scanOutput += "\n[!] Native Scan Error: ${e.message}\n"
-                                    }
-                                }
-                            }
-                        },
-                        enabled = !isScanning,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20))
-                    ) {
-                        Text(if (isScanning) "SCANNING..." else "INITIATE NETWORK SCAN")
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Found Devices List for RADAR tab
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(discoveredRadarDevices) { device ->
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
-                                border = BorderStroke(1.dp, Color(0xFF1A1A1A))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = if (device.openPorts.contains(554) || device.openPorts.contains(8000)) Icons.Default.Videocam else Icons.Default.Router,
-                                        contentDescription = null,
-                                        tint = if (device.openPorts.isNotEmpty()) Color.Green else Color.Cyan,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(device.ip, color = Color.White, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                        if (!device.hostname.isNullOrBlank()) {
-                                            Text(device.hostname, color = Color.Gray, fontSize = 11.sp)
-                                        }
-                                        if (device.openPorts.isNotEmpty()) {
-                                            Text("Ports: ${device.openPorts.joinToString(", ")}", color = Color.Green, fontSize = 10.sp)
-                                        }
-                                    }
-                                    Button(
-                                        onClick = { onDeviceSelect(device.ip) },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                        modifier = Modifier.height(30.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20))
-                                    ) {
-                                        Text("SCAN", fontSize = 10.sp)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            1 -> { // RANGE View
-                Column(modifier = Modifier.fillMaxSize()) {
-                    val subnets = listOf("192.168.1", "192.168.0")
-                    Text("Scanning Subnets: ${subnets.joinToString(", ")}", color = Color.Yellow, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    if (isScanning) {
-                        LinearProgressIndicator(
-                            progress = scanProgress,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                            color = Color.Cyan,
-                            trackColor = Color.DarkGray
-                        )
-                    }
-
-                    Button(
-                        onClick = {
-                            isScanning = true
-                            discoveredRangeDevices = emptyList()
-                            scanProgress = 0f
-                            scope.launch(Dispatchers.IO) {
-                                val results = mutableListOf<ScannedDevice>()
-                                val portsToCheck = listOf(80, 554, 8080, 8000)
-                                val totalIps = subnets.size * 254
-                                var scannedCount = 0
-
-                                subnets.forEach { subnet ->
-                                    val jobs = (1..254).map { i ->
-                                        async {
-                                            val ip = "$subnet.$i"
-                                            try {
-                                                val address = InetAddress.getByName(ip)
-                                                if (address.isReachable(300)) {
-                                                    val hostname = try {
-                                                        val host = address.canonicalHostName
-                                                        if (host != ip) host else null
-                                                    } catch (e: Exception) { null }
-                                                    
-                                                    val openPorts = mutableListOf<Int>()
-                                                    for (port in portsToCheck) {
-                                                        try {
-                                                            Socket().use { socket ->
-                                                                socket.connect(InetSocketAddress(ip, port), 200)
-                                                                openPorts.add(port)
-                                                            }
-                                                        } catch (e: Exception) {}
-                                                    }
-                                                    synchronized(results) {
-                                                        results.add(ScannedDevice(ip, hostname, openPorts))
-                                                    }
-                                                }
-                                            } catch (e: Exception) {}
-                                            synchronized(this@launch) {
-                                                scannedCount++
-                                                scanProgress = scannedCount.toFloat() / totalIps
-                                            }
-                                        }
-                                    }
-                                    jobs.awaitAll()
-                                }
-                                withContext(Dispatchers.Main) {
-                                    discoveredRangeDevices = results.sortedBy { it.ip }
-                                    isScanning = false
-                                    scanOutput += "\nRange Scan Complete: ${results.size} devices found."
-                                }
-                            }
-                        },
-                        enabled = !isScanning,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))
-                    ) {
-                        Text(if (isScanning) "SCANNING..." else "SCAN SUBNET")
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    if (discoveredRangeDevices.isEmpty() && !isScanning) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("No devices found. Tap SCAN SUBNET.", color = Color.Gray)
-                        }
-                    } else {
-                        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                            discoveredRangeDevices.forEach { device ->
-                                Card(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
-                                    border = BorderStroke(1.dp, Color(0xFF1A1A1A))
-                                ) {
-                                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.Router, null, tint = Color.Green, modifier = Modifier.size(24.dp))
-                                        Spacer(Modifier.width(12.dp))
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(device.ip, color = Color.White, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                            if (!device.hostname.isNullOrBlank()) {
-                                                Text(device.hostname, color = Color.Gray, fontSize = 11.sp)
-                                            }
-                                            if (device.openPorts.isNotEmpty()) {
-                                                Text("Open Ports: ${device.openPorts.joinToString(", ")}", color = Color.Cyan, fontSize = 11.sp)
-                                            }
-                                        }
-                                        Button(
-                                            onClick = { onDeviceSelect(device.ip) },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20)),
-                                            shape = RoundedCornerShape(4.dp)
-                                        ) {
-                                            Text("SCAN", fontSize = 10.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            2 -> { // DEVICES View
-                if (discoveredDevices.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("No devices discovered yet.", color = Color.Gray)
-                    }
-                } else {
-                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                        discoveredDevices.forEach { ip ->
-                            Card(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
-                                border = BorderStroke(1.dp, Color(0xFF1A1A1A))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.Router, null, tint = Color.Cyan, modifier = Modifier.size(20.dp))
-                                        Spacer(Modifier.width(12.dp))
-                                        Text(ip, color = Color.White, fontFamily = FontFamily.Monospace)
-                                    }
-                                    Button(
-                                        onClick = { onDeviceSelect(ip) },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                        modifier = Modifier.height(30.dp)
-                                    ) {
-                                        Text("SELECT", fontSize = 10.sp)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            3 -> { // LOGS View
-                Surface(
-                    modifier = Modifier.fillMaxSize().border(1.dp, Color(0xFF1A1A1A), RoundedCornerShape(4.dp)),
-                    color = Color(0xFF050505)
-                ) {
-                    SelectionContainer {
-                        Text(
-                            text = scanOutput,
-                            color = Color(0xFF00FF41),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            modifier = Modifier.padding(10.dp).verticalScroll(rememberScrollState())
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Global functions
-fun openFile(context: Context, file: File) {
-    try {
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension)
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, mime)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        context.startActivity(Intent.createChooser(intent, "Open with"))
-    } catch (e: Exception) {
-        Toast.makeText(context, "Cannot open file: ${e.message}", Toast.LENGTH_SHORT).show()
-    }
-}
-
-fun shareFile(context: Context, file: File) {
-    try {
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension) ?: "*/*"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        context.startActivity(Intent.createChooser(intent, "Share via"))
-    } catch (e: Exception) {
-        Toast.makeText(context, "Share Failed", Toast.LENGTH_SHORT).show()
-    }
-}
-
-fun saveContentToFile(context: Context, content: String, prefix: String, extension: String) {
-    try {
-        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val fileName = "${prefix}_$timeStamp.$extension"
-        val file = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), fileName)
-        FileOutputStream(file).use { it.write(content.toByteArray()) }
-        Toast.makeText(context, "Saved to Documents", Toast.LENGTH_SHORT).show()
-    } catch (e: Exception) {
-        Toast.makeText(context, "Save Failed: ${e.message}", Toast.LENGTH_SHORT).show()
-    }
-}
-
-fun captureScreenshot(context: Context, view: android.view.View) {
-    try {
-        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        view.draw(canvas)
-        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val file = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Vigil_Capture_$timeStamp.png")
-        FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        Toast.makeText(context, "Screenshot Saved", Toast.LENGTH_SHORT).show()
-    } catch (e: Exception) {
-        Toast.makeText(context, "Capture Failed", Toast.LENGTH_SHORT).show()
-    }
-}
-
-fun generateHtmlReport(context: Context, terminalText: String) {
-    val report = """
-        <html>
-        <head><title>CamVigil Recon Report</title>
-        <style>
-            body { background: #000; color: #0f0; font-family: monospace; padding: 20px; }
-            .box { border: 1px solid #333; padding: 15px; border-radius: 5px; }
-            h1 { color: cyan; border-bottom: 1px solid #333; }
-            pre { white-space: pre-wrap; word-wrap: break-word; color: #00FF41; }
-        </style></head>
-        <body><div class="box"><h1>CAMVIGIL INTEL REPORT</h1><pre>${terminalText.replace("<", "&lt;").replace(">", "&gt;")}</pre></div></body></html>
-    """.trimIndent()
-    saveContentToFile(context, report, "Vigil_Report", "html")
-}
-
-fun saveJsonReport(context: Context, terminalText: String, target: String) {
-    try {
-        val report = JSONObject().apply {
-            put("target", target)
-            put("timestamp", System.currentTimeMillis())
-            put("summary", "Automated Reconnaissance Report")
-            
-            val findings = JSONArray()
-            if (terminalText.contains("CRACKED")) findings.put("Default Credentials Found (CRITICAL)")
-            if (terminalText.contains("VULNERABILITY")) findings.put("Known CVE Detected")
-            if (terminalText.contains("EXPOSED")) findings.put("Sensitive Directory Exposed")
-            if (terminalText.contains("ONVIF AUTH SUCCESS")) findings.put("ONVIF Service compromised")
-            
-            put("findings", findings)
-            put("raw_output", terminalText)
+            IconButton(onClick = { isGridView = !isGridView }) { Icon(if (isGridView) Icons.Default.ViewStream else Icons.Default.GridView, null, tint = Color.Magenta) }
         }
         
-        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val fileName = "Vigil_Data_${target.replace("/", "_").replace(".", "_")}_$timeStamp.json"
-        val file = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), fileName)
-        FileOutputStream(file).use { it.write(report.toString(4).toByteArray()) }
-    } catch (e: Exception) {
-        e.printStackTrace()
+        if (isGridView) {
+            LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                itemsIndexed(gridUrls) { index, url ->
+                    Box(modifier = Modifier.aspectRatio(16/9f).border(2.dp, if (index == activeSlotIndex) Color.Magenta else Color(0xFF1A1A1A), RoundedCornerShape(4.dp)).clickable { activeSlotIndex = index }) {
+                        if (url.isNotEmpty()) MiniPlayer(url, credentials.first, credentials.second)
+                        else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("SLOT ${index + 1}", color = Color.DarkGray, fontSize = 10.sp) }
+                    }
+                }
+            }
+        } else if (selectedUrl.isNotEmpty()) {
+            val authenticatedUrl = buildAuthUrl(selectedUrl, credentials.first, credentials.second)
+            val isRtsp = selectedUrl.startsWith("rtsp")
+            Column(modifier = Modifier.weight(1f)) {
+                if (isRtsp) {
+                    key(selectedUrl) {
+                        AndroidView(
+                            factory = { ctx ->
+                                val player = ExoPlayer.Builder(ctx).build().apply {
+                                    setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).createMediaSource(MediaItem.fromUri(authenticatedUrl)))
+                                    prepare()
+                                    playWhenReady = true
+                                }
+                                currentExoPlayer = player
+                                val textureView = TextureView(ctx)
+                                currentTextureView = textureView
+                                PlayerView(ctx).apply {
+                                    this.player = player
+                                    useController = true
+                                    setVideoSurfaceView(textureView)
+                                }
+                            },
+                            update = { playerView ->
+                                playerView.player?.play()
+                            },
+                            modifier = Modifier.fillMaxWidth().weight(1f).border(1.dp, Color(0xFF333333))
+                        )
+                    }
+                } else {
+                    key(selectedUrl) {
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    currentWebView = this
+                                    settings.javaScriptEnabled = true
+                                    webViewClient = object : WebViewClient() { override fun onReceivedSslError(v: WebView?, h: SslErrorHandler?, e: android.net.http.SslError?) { h?.proceed() } }
+                                    loadUrl(authenticatedUrl)
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize().weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                val bitmap: Bitmap? = if (isRtsp) {
+                                    currentTextureView?.let { tv ->
+                                        val size = currentExoPlayer?.videoSize
+                                        if (size != null && size.width > 0) tv.getBitmap(size.width, size.height) else tv.getBitmap()
+                                    }
+                                } else {
+                                    currentWebView?.let { wv ->
+                                        val picture = wv.capturePicture()
+                                        val b = Bitmap.createBitmap(picture.width, picture.height, Bitmap.Config.ARGB_8888)
+                                        picture.draw(Canvas(b))
+                                        b
+                                    }
+                                }
+                                bitmap?.let { b ->
+                                    if (saveBitmapToGallery(context, b)) {
+                                        screenshotPreview = b
+                                        showScreenshotPreview = true
+                                        Toast.makeText(context, "Screenshot saved", Toast.LENGTH_SHORT).show()
+                                        delay(3000)
+                                        showScreenshotPreview = false
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.background(Color(0xFF003333), CircleShape).size(48.dp)
+                    ) { Icon(Icons.Default.PhotoCamera, "Screenshot", tint = Color.Cyan) }
+
+                    IconButton(
+                        onClick = {
+                            if (isRecording) onStopRecording() else onStartRecording()
+                        },
+                        modifier = Modifier.background(if (isRecording) Color.Red else Color(0xFF330000), CircleShape).size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
+                            contentDescription = "Record",
+                            tint = Color.White
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    AnimatedVisibility(visible = showScreenshotPreview, enter = fadeIn() + slideInVertically { it }, exit = fadeOut() + slideOutVertically { it }, modifier = Modifier.padding(16.dp)) {
+        screenshotPreview?.let {
+            Card(modifier = Modifier.size(120.dp, 80.dp).border(1.dp, Color.Cyan, RoundedCornerShape(8.dp)), colors = CardDefaults.cardColors(containerColor = Color.Black)) {
+                Image(bitmap = it.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            }
+        }
     }
 }
 
+@Composable
+fun MiniPlayer(url: String, user: String, pass: String) {
+    val authUrl = buildAuthUrl(url, user, pass)
+    if (url.startsWith("rtsp")) {
+        AndroidView(factory = { ctx -> PlayerView(ctx).apply { useController = false; player = ExoPlayer.Builder(ctx).build().apply { setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).createMediaSource(MediaItem.fromUri(authUrl))); prepare(); play() } } }, modifier = Modifier.fillMaxSize())
+    } else {
+        AndroidView(factory = { ctx -> WebView(ctx).apply { settings.javaScriptEnabled = true; loadUrl(authUrl) } }, modifier = Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+fun ArchiveTab(context: Context, selectedTab: Int, terminalText: String, targetIp: String, onFileClick: (File) -> Unit) {
+    var refreshTrigger by remember { mutableIntStateOf(0) }
+    LaunchedEffect(selectedTab) { if (selectedTab == 2) refreshTrigger++ }
+    val files = remember(refreshTrigger) {
+        val allFiles = mutableListOf<File>()
+        val docDir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
+        docDir?.listFiles()?.let { allFiles.addAll(it.filter { it.isFile }) }
+        File(docDir, "CamVigil").listFiles()?.let { allFiles.addAll(it) }
+        context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)?.listFiles()?.let { allFiles.addAll(it) }
+        allFiles.filter { it.isFile }.sortedByDescending { it.lastModified() }
+    }
+    Column {
+        if (terminalText.length > 50) {
+            Button(
+                onClick = { generateDetailedPdfReport(context, terminalText, targetIp) },
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Green),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Icon(Icons.Default.PictureAsPdf, "PDF", tint = Color.Black)
+                Spacer(Modifier.width(8.dp))
+                Text("GENERATE FULL AUDIT REPORT", color = Color.Black, fontWeight = FontWeight.Black)
+            }
+        }
+        Text("SAVED REPORTS & LOGS", color = Color.Yellow, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(files) { file ->
+                Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onFileClick(file) }, colors = CardDefaults.cardColors(containerColor = Color(0xFF080808)), border = BorderStroke(1.dp, Color(0xFF111111))) {
+                    Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Description, null, tint = Color.Gray, modifier = Modifier.size(28.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Text(file.name, color = Color.White, fontSize = 12.sp, maxLines = 1, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { openFile(context, file) }) { Icon(Icons.Default.OpenInNew, null, tint = Color.Green) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LanScanTab(
+    scanResults: List<DeviceInfo>,
+    isScanning: Boolean,
+    progress: Float,
+    subnet: String,
+    onScanStart: () -> Unit,
+    onResultFound: (DeviceInfo) -> Unit,
+    onScanComplete: () -> Unit,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text("🔍 LAN Scanner", color = Color.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Black)
+        
+        if (subnet.isNotEmpty()) {
+            Text("Subnet: $subnet.0/24", color = Color.Gray, fontSize = 12.sp)
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (isScanning) {
+            LinearProgressIndicator(
+                progress = progress,
+                modifier = Modifier.fillMaxWidth(),
+                color = Color.Cyan,
+                trackColor = Color.DarkGray
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        Button(onClick = onScanStart, modifier = Modifier.fillMaxWidth(), enabled = !isScanning) {
+            Text(if (isScanning) "SCANNING... ${(progress * 100).toInt()}%" else "START SCAN")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(scanResults) { device ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .clickable { onIpSelected(device.ip) },
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A))
+                ) {
+                    Row(modifier = Modifier.padding(12.dp)) {
+                        Icon(Icons.Default.Router, null, tint = Color.Cyan)
+                        Spacer(Modifier.width(12.dp))
+                        Text(device.ip, color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun openFile(context: Context, file: File) { try { val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file); val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension); context.startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, mime); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Open with")) } catch (e: Exception) { Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show() } }
+fun shareFile(context: Context, file: File) { try { val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file); context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension) ?: "*/*"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Share via")) } catch (e: Exception) { Toast.makeText(context, "Share Failed", Toast.LENGTH_SHORT).show() } }
+fun saveContentToFile(context: Context, content: String, prefix: String, extension: String) { try { val file = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "${prefix}_${System.currentTimeMillis()}.$extension"); FileOutputStream(file).use { it.write(content.toByteArray()) } } catch (e: Exception) {} }
+fun captureScreenshot(context: Context, view: android.view.View) { try { val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888); view.draw(Canvas(bitmap)); val file = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Vigil_Capture_${System.currentTimeMillis()}.png"); FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }; Toast.makeText(context, "Screenshot Saved", Toast.LENGTH_SHORT).show() } catch (e: Exception) {} }
+fun generateHtmlReport(context: Context, terminalText: String) { val report = "<html><body><pre>${terminalText.replace("<", "\&lt;").replace(">", "\&gt;")}</pre></body></html>"; saveContentToFile(context, report, "Vigil_Report", "html") }
+
+fun generatePdfReport(context: Context, terminalText: String) {
+    val pdfDocument = PdfDocument()
+    val paint = Paint().apply {
+        textSize = 10f
+        color = android.graphics.Color.BLACK
+        typeface = Typeface.MONOSPACE
+    }
+    
+    val lines = terminalText.split("\n")
+    val pageWidth = 595 // A4 width in points
+    val pageHeight = 842 // A4 height in points
+    val margin = 40f
+    val contentWidth = pageWidth - 2 * margin
+    val lineHeight = 14f
+    val linesPerPage = ((pageHeight - 2 * margin) / lineHeight).toInt()
+    
+    var currentLine = 0
+    var pageCount = 1
+    
+    while (currentLine < lines.size) {
+        val pageInfo = PageInfo.Builder(pageWidth, pageHeight, pageCount).create()
+        val page = pdfDocument.startPage(pageInfo)
+        val canvas = page.canvas
+        
+        canvas.drawText("CAM VIGIL - RECONNAISSANCE REPORT", margin, margin - 10f, Paint().apply {
+            textSize = 12f
+            isFakeBoldText = true
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        
+        var y = margin + lineHeight
+        for (i in 0 until linesPerPage) {
+            if (currentLine >= lines.size) break
+            
+            val line = lines[currentLine]
+            // Simple text wrapping if line is too long
+            if (paint.measureText(line) > contentWidth) {
+                var subLine = line
+                while (subLine.isNotEmpty()) {
+                    val count = paint.breakText(subLine, true, contentWidth, null)
+                    canvas.drawText(subLine.substring(0, count), margin, y, paint)
+                    y += lineHeight
+                    subLine = subLine.substring(count)
+                    if (y > pageHeight - margin) break 
+                }
+            } else {
+                canvas.drawText(line, margin, y, paint)
+                y += lineHeight
+            }
+            
+            currentLine++
+            if (y > pageHeight - margin) break
+        }
+        
+        pdfDocument.finishPage(page)
+        pageCount++
+    }
+    
+    val file = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "Vigil_Report_${System.currentTimeMillis()}.pdf")
+    try {
+        pdfDocument.writeTo(FileOutputStream(file))
+        Toast.makeText(context, "PDF Report Saved: ${file.name}", Toast.LENGTH_LONG).show()
+    } catch (e: Exception) {
+        Toast.makeText(context, "Failed to save PDF: ${e.message}", Toast.LENGTH_SHORT).show()
+    } finally {
+        pdfDocument.close()
+    }
+}
+
+fun generateDetailedPdfReport(context: Context, terminalText: String, targetIp: String) {
+    val pdfDocument = PdfDocument()
+    val pageWidth = 595
+    val pageHeight = 842
+    val margin = 50f
+    val paint = Paint()
+
+    // Page 1: Cover Page
+    val page1Info = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 1).create()
+    val page1 = pdfDocument.startPage(page1Info)
+    val canvas1 = page1.canvas
+    
+    paint.color = android.graphics.Color.RED
+    canvas1.drawRect(margin, 100f, margin + 60f, 160f, paint)
+    paint.color = android.graphics.Color.WHITE
+    paint.textSize = 40f
+    paint.typeface = Typeface.DEFAULT_BOLD
+    canvas1.drawText("CV", margin + 5f, 145f, paint)
+    
+    paint.color = android.graphics.Color.BLACK
+    paint.textSize = 28f
+    canvas1.drawText("CAMVIGIL AUDIT REPORT", margin + 80f, 140f, paint)
+    
+    paint.textSize = 14f
+    paint.typeface = Typeface.DEFAULT
+    canvas1.drawText("Generated on: ${SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault()).format(Date())}", margin, 250f, paint)
+    canvas1.drawText("Target Host: ${targetIp.ifBlank { "N/A" }}", margin, 275f, paint)
+    
+    paint.textSize = 16f
+    paint.isFakeBoldText = true
+    canvas1.drawText("EXECUTIVE SUMMARY", margin, 350f, paint)
+    paint.isFakeBoldText = false
+    paint.textSize = 12f
+    val summary = if (terminalText.contains("CRACKED")) 
+        "CRITICAL: Unauthorized access was successfully gained during the scan. Default or weak credentials were discovered, allowing full stream access."
+        else "NORMAL: Scan completed. Network mapping and service discovery performed. No immediate authentication bypass found."
+    
+    val textPaint = Paint(paint).apply { textSize = 12f }
+    var ySum = 380f
+    val words = summary.split(" ")
+    var line = ""
+    for (word in words) {
+        if (textPaint.measureText("$line $word") < pageWidth - 2 * margin) {
+            line += "$word "
+        } else {
+            canvas1.drawText(line, margin, ySum, textPaint)
+            ySum += 20f
+            line = "$word "
+        }
+    }
+    canvas1.drawText(line, margin, ySum, textPaint)
+    pdfDocument.finishPage(page1)
+
+    // Page 2: Open Ports Table
+    val page2Info = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 2).create()
+    val page2 = pdfDocument.startPage(page2Info)
+    val canvas2 = page2.canvas
+    paint.textSize = 20f
+    paint.isFakeBoldText = true
+    canvas2.drawText("NETWORK SERVICES & PORTS", margin, 80f, paint)
+    
+    paint.textSize = 12f
+    canvas2.drawRect(margin, 110f, pageWidth - margin, 135f, Paint().apply { color = android.graphics.Color.LTGRAY })
+    canvas2.drawText("PORT", margin + 10f, 127f, paint)
+    canvas2.drawText("SERVICE", margin + 100f, 127f, paint)
+    canvas2.drawText("STATUS", margin + 300f, 127f, paint)
+    
+    val ports = Regex("""Port (\d+)""").findAll(terminalText).map { it.groupValues[1] }.distinct().toList()
+    var yPort = 155f
+    paint.isFakeBoldText = false
+    ports.forEach { port ->
+        val service = when(port) {
+            "80", "8080" -> "HTTP / Web"
+            "554" -> "RTSP Streaming"
+            "8000", "37777" -> "Media SDK"
+            else -> "Other Service"
+        }
+        canvas2.drawText(port, margin + 10f, yPort, paint)
+        canvas2.drawText(service, margin + 100f, yPort, paint)
+        canvas2.drawText("OPEN", margin + 300f, yPort, paint)
+        canvas2.drawLine(margin, yPort + 5f, pageWidth - margin, yPort + 5f, Paint().apply { color = android.graphics.Color.LTGRAY; strokeWidth = 1f })
+        yPort += 25f
+    }
+    pdfDocument.finishPage(page2)
+
+    // Page 3: Credentials Found
+    val page3Info = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 3).create()
+    val page3 = pdfDocument.startPage(page3Info)
+    val canvas3 = page3.canvas
+    paint.textSize = 20f
+    paint.isFakeBoldText = true
+    canvas3.drawText("AUTHENTICATION BYPASS", margin, 80f, paint)
+    
+    val (user, pass) = extractCredentials(terminalText)
+    paint.textSize = 14f
+    paint.isFakeBoldText = false
+    if (user.isNotEmpty()) {
+        paint.color = android.graphics.Color.RED
+        canvas3.drawText("STATUS: SUCCESSFUL ATTACK", margin, 120f, paint)
+        paint.color = android.graphics.Color.BLACK
+        canvas3.drawRect(margin, 150f, pageWidth - margin, 230f, Paint().apply { color = android.graphics.Color.rgb(240, 240, 240) })
+        canvas3.drawText("Username: $user", margin + 20f, 185f, paint)
+        canvas3.drawText("Password: $pass", margin + 20f, 210f, paint)
+    } else {
+        canvas3.drawText("No cracked credentials found in this session.", margin, 120f, paint)
+    }
+    pdfDocument.finishPage(page3)
+
+    // Page 4: Stream URLs
+    val page4Info = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 4).create()
+    val page4 = pdfDocument.startPage(page4Info)
+    val canvas4 = page4.canvas
+    paint.textSize = 20f
+    paint.isFakeBoldText = true
+    canvas4.drawText("DISCOVERED STREAMS", margin, 80f, paint)
+    
+    paint.textSize = 10f
+    paint.isFakeBoldText = false
+    paint.typeface = Typeface.MONOSPACE
+    val streams = terminalText.lines().filter { it.contains("http") || it.contains("rtsp") }.distinct()
+    var yStream = 120f
+    streams.take(30).forEach { stream ->
+        val url = Regex("(rtsp://[^\s]+|http://[^\s]+)").find(stream)?.value ?: stream
+        canvas4.drawText("• $url", margin, yStream, paint)
+        yStream += 18f
+    }
+    pdfDocument.finishPage(page4)
+
+    // Page 5: Vulnerabilities
+    val page5Info = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 5).create()
+    val page5 = pdfDocument.startPage(page5Info)
+    val canvas5 = page5.canvas
+    paint.typeface = Typeface.DEFAULT
+    paint.textSize = 20f
+    paint.isFakeBoldText = true
+    canvas5.drawText("SECURITY VULNERABILITIES", margin, 80f, paint)
+    
+    val vulns = terminalText.lines().filter { it.contains("VULNERABILITY") || it.contains("CRITICAL") || it.contains("FIRE") || it.contains("CVE") }.distinct()
+    var yVuln = 120f
+    paint.textSize = 12f
+    paint.isFakeBoldText = false
+    if (vulns.isEmpty()) {
+        canvas5.drawText("No specific vulnerabilities identified via automated analysis.", margin, yVuln, paint)
+    } else {
+        vulns.forEach { vuln ->
+            canvas5.drawText("⚠ $vuln", margin, yVuln, paint)
+            yVuln += 22f
+        }
+    }
+    pdfDocument.finishPage(page5)
+
+    // Page 6: Recommendations
+    val page6Info = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 6).create()
+    val page6 = pdfDocument.startPage(page6Info)
+    val canvas6 = page6.canvas
+    paint.textSize = 20f
+    paint.isFakeBoldText = true
+    canvas6.drawText("MITIGATION STRATEGIES", margin, 80f, paint)
+    
+    val recs = listOf(
+        "• REMOVE DEFAULT CREDENTIALS: Set a strong, unique password for all administrative accounts.",
+        "• DISABLE UPNP: Turn off Universal Plug and Play on the edge router to prevent automatic port forwarding.",
+        "• UPDATE FIRMWARE: Apply latest manufacturer patches to remediate known CVE exploits.",
+        "• NETWORK ISOLATION: Place cameras on a separate VLAN with restricted outbound internet access.",
+        "• ENCRYPT TRAFFIC: Use HTTPS for web management and SRTP/RTSPS if supported by the hardware.",
+        "• AUDIT ACCESS LOGS: Regularly review device logs for unauthorized login attempts."
+    )
+    var yRec = 130f
+    paint.textSize = 11f
+    paint.isFakeBoldText = false
+    recs.forEach { rec ->
+        var line = ""
+        val recWords = rec.split(" ")
+        for (word in recWords) {
+            if (paint.measureText("$line $word") < pageWidth - 2 * margin) {
+                line += "$word "
+            } else {
+                canvas6.drawText(line, margin, yRec, paint)
+                yRec += 20f
+                line = "  $word "
+            }
+        }
+        canvas6.drawText(line, margin, yRec, paint)
+        yRec += 35f
+    }
+    pdfDocument.finishPage(page6)
+
+    val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "CamVigil")
+    if (!dir.exists()) dir.mkdirs()
+    val file = File(dir, "CamVigil_Audit_${System.currentTimeMillis()}.pdf")
+    
+    try {
+        pdfDocument.writeTo(FileOutputStream(file))
+        Toast.makeText(context, "Full Audit Report Ready", Toast.LENGTH_SHORT).show()
+        shareFile(context, file)
+    } catch (e: Exception) {
+        Toast.makeText(context, "Generation Failed: ${e.message}", Toast.LENGTH_SHORT).show()
+    } finally {
+        pdfDocument.close()
+    }
+}
+
+fun saveJsonReport(context: Context, terminalText: String, target: String) { try { val report = JSONObject().apply { put("target", target); put("raw", terminalText) }; saveContentToFile(context, report.toString(4), "Vigil_Data", "json") } catch (e: Exception) {} }
 
 @Composable
 fun StormTab(terminalText: String, onLogUpdate: (String) -> Unit) {
-    var targetIp by remember { mutableStateOf("") }
-    var selectedType by remember { mutableStateOf("DOS_RESILIENCE") }
-    var stormOutput by remember { mutableStateOf("> Ready for stress testing...\n") }
-    var expanded by remember { mutableStateOf(false) }
-    val options = listOf("DOS_RESILIENCE", "SSDP_FLOOD", "PORT_STRESS")
-    val scope = rememberCoroutineScope()
-
-    // Auto-fill IP from terminalText
-    LaunchedEffect(terminalText) {
-        val ipMatch = Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}""").findAll(terminalText).lastOrNull()
-        if (ipMatch != null && targetIp.isEmpty()) {
-            targetIp = ipMatch.value
-        }
-    }
-
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
+    var targetIp by remember { mutableStateOf("") }; var stormOutput by remember { mutableStateOf("> Ready for stress testing...\n") }; val scope = rememberCoroutineScope()
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("⚡ STORM MODULE", color = Color(0xFFFFBF00), fontSize = 24.sp, fontWeight = FontWeight.Black)
-        Text("Network Stress & Resilience Testing", color = Color.Gray, fontSize = 12.sp)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Warning Box
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF332200)),
-            border = BorderStroke(1.dp, Color(0xFFFFBF00)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                "⚠️ WARNING: Only use on your own devices or authorized targets. Stress testing can cause network instability.",
-                color = Color(0xFFFFBF00),
-                modifier = Modifier.padding(12.dp),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Target IP Input
-        OutlinedTextField(
-            value = targetIp,
-            onValueChange = { targetIp = it },
-            label = { Text("Target IP", color = Color(0xFFFFBF00)) },
-            modifier = Modifier.fillMaxWidth(),
-            textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color(0xFFFFBF00),
-                unfocusedBorderColor = Color.DarkGray,
-                focusedLabelColor = Color(0xFFFFBF00)
-            )
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Attack Type Dropdown
-        Box(modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(
-                onClick = { expanded = true },
-                modifier = Modifier.fillMaxWidth(),
-                border = BorderStroke(1.dp, Color.DarkGray)
-            ) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(selectedType, color = Color.White)
-                    Icon(Icons.Default.ArrowDropDown, null, tint = Color(0xFFFFBF00))
-                }
-            }
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false },
-                modifier = Modifier.fillMaxWidth(0.9f).background(Color(0xFF111111))
-            ) {
-                options.forEach { type ->
-                    DropdownMenuItem(
-                        text = { Text(type, color = Color.White) },
-                        onClick = {
-                            selectedType = type
-                            expanded = false
-                        }
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                if (targetIp.isNotBlank()) {
-                    stormOutput += "> Initiating $selectedType on $targetIp...\n"
-                    scope.launch(Dispatchers.IO) {
-                        try {
-                            val py = Python.getInstance()
-                            val module = py.getModule("CamXploit")
-                            val sys = py.getModule("sys")
-                            val outputStream = TerminalOutputStream { text ->
-                                scope.launch(Dispatchers.Main) { stormOutput += text }
-                            }
-                            sys.put("stdout", outputStream)
-                            // Assuming port 80 for basic test
-                            module.callAttr("test_dos_resilience", targetIp, 80)
-                            withContext(Dispatchers.Main) {
-                                stormOutput += "\n> $selectedType Complete.\n"
-                            }
-                        } catch (e: Exception) {
-                            withContext(Dispatchers.Main) {
-                                stormOutput += "\n[!] Storm Error: ${e.message}\n"
-                            }
-                        }
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFBF00))
-        ) {
-            Text("START STRESS TEST", color = Color.Black, fontWeight = FontWeight.Bold)
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Results Terminal
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(200.dp)
-                .border(1.dp, Color(0xFF332200), RoundedCornerShape(4.dp)),
-            color = Color(0xFF050505)
-        ) {
-            SelectionContainer {
-                Text(
-                    text = stormOutput,
-                    color = Color(0xFFFFBF00), // Amber
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(10.dp).verticalScroll(rememberScrollState())
-                )
-            }
-        }
+        OutlinedTextField(value = targetIp, onValueChange = { targetIp = it }, label = { Text("Target IP") }, modifier = Modifier.fillMaxWidth())
+        Button(onClick = { stormOutput += "> Initiating on $targetIp...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { stormOutput += text } }); module.callAttr("test_dos_resilience", targetIp, 80) } catch (e: Exception) { withContext(Dispatchers.Main) { stormOutput += "\nError: ${e.message}" } } } }, modifier = Modifier.fillMaxWidth()) { Text("START STRESS TEST") }
+        Surface(modifier = Modifier.fillMaxWidth().height(200.dp).padding(top = 16.dp), color = Color.Black) { Text(text = stormOutput, color = Color.Yellow, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.verticalScroll(rememberScrollState())) }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LiveViewScreen(
-    streamUrl: String,
-    streamType: String,
-    onBack: () -> Unit
-) {
-    var isLoading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-
+fun LiveViewScreen(streamUrl: String, streamType: String, onBack: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("📺 $streamType") },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, "Back")
-                }
-            }
-        )
-
-        if (isLoading && !streamUrl.startsWith("rtsp")) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        }
-
-        if (streamUrl.startsWith("rtsp")) {
-            AndroidView<PlayerView>(
-                factory = { ctx ->
-                    val player = ExoPlayer.Builder(ctx).build()
-                    val mediaItem = MediaItem.fromUri(streamUrl)
-                    val rtspMediaSource = RtspMediaSource.Factory()
-                        .setForceUseRtpTcp(true)
-                        .createMediaSource(mediaItem)
-                    player.setMediaSource(rtspMediaSource)
-                    player.prepare()
-                    player.play()
-                    PlayerView(ctx).apply {
-                        this.player = player
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            AndroidView(
-                factory = { context ->
-                    WebView(context).apply {
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.loadWithOverviewMode = true
-                        settings.useWideViewPort = true
-                        settings.builtInZoomControls = true
-
-                        webViewClient = object : WebViewClient() {
-                            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                                handler?.proceed()
-                            }
-
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                isLoading = false
-                            }
-
-                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, err: WebResourceError?) {
-                                isLoading = false
-                                error = "Failed to load - Try another link"
-                            }
-                        }
-                    }
-                },
-                update = { it.loadUrl(streamUrl) },
-                modifier = Modifier.fillMaxSize()
-            )
-        }
+        TopAppBar(title = { Text("📺 $streamType") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) } })
+        if (streamUrl.startsWith("rtsp")) { AndroidView(factory = { ctx -> PlayerView(ctx).apply { player = ExoPlayer.Builder(ctx).build().apply { setMediaSource(RtspMediaSource.Factory().createMediaSource(MediaItem.fromUri(streamUrl))); prepare(); play() } } }, modifier = Modifier.fillMaxSize()) }
+        else { AndroidView(factory = { ctx -> WebView(ctx).apply { settings.javaScriptEnabled = true; loadUrl(streamUrl) } }, modifier = Modifier.fillMaxSize()) }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SnapshotViewer(imageUrl: String, onBack: () -> Unit) {
-    var imageBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
-
-    LaunchedEffect(imageUrl) {
-        withContext(Dispatchers.IO) {
-            try {
-                val bytes = java.net.URL(imageUrl).readBytes()
-                val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                imageBitmap = bitmap?.asImageBitmap()
-            } catch (e: Exception) {
-                // error
-            }
-            isLoading = false
-        }
-    }
-
+    var bitmap by remember { mutableStateOf<ImageBitmap?>(null) }; LaunchedEffect(imageUrl) { withContext(Dispatchers.IO) { try { val b = BitmapFactory.decodeStream(URL(imageUrl).openStream()); bitmap = b.asImageBitmap() } catch (e: Exception) {} } }
     Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("📸 Camera Snapshot") },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") } }
-        )
-
-        if (isLoading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else if (imageBitmap != null) {
-            Image(
-                bitmap = imageBitmap!!,
-                contentDescription = "Snapshot",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit
-            )
-        } else {
-            Text("Failed to load snapshot", color = Color.Red, modifier = Modifier.padding(16.dp))
-        }
+        TopAppBar(title = { Text("📸 Snapshot") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) } })
+        bitmap?.let { Image(bitmap = it, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
     }
 }
 
-fun getLocalSubnet(): String {
-    try {
-        val interfaces = NetworkInterface.getNetworkInterfaces()
-        for (inf in Collections.list(interfaces)) {
-            if (inf.isLoopback || !inf.isUp) continue
-            for (addr in Collections.list(inf.inetAddresses)) {
-                if (addr is Inet4Address && !addr.isLoopbackAddress) {
-                    val ip = addr.hostAddress ?: continue
-                    return ip.substringBeforeLast(".") + ".0/24"
+fun getLocalSubnet(): String { try { val interfaces = NetworkInterface.getNetworkInterfaces(); for (inf in Collections.list(interfaces)) { if (inf.isLoopback || !inf.isUp) continue; for (addr in Collections.list(inf.inetAddresses)) { if (addr is Inet4Address && !addr.isLoopbackAddress) return addr.hostAddress.substringBeforeLast(".") + ".0/24" } } } catch (e: Exception) {}; return "192.168.1.0/24" }
+
+@Composable
+fun SavedCamerasTab(onStream: (String) -> Unit, onScan: (String) -> Unit) {
+    val context = LocalContext.current; val dao = remember { CameraDatabase.getDatabase(context).cameraDao() }; val cameras by dao.getAllCameras().collectAsState(initial = emptyList())
+    var isMonitoring by remember { mutableStateOf(CameraMonitorService.isRunning) }
+    
+    LaunchedEffect(Unit) {
+        isMonitoring = CameraMonitorService.isRunning
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "monitorPulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("SAVED TARGETS", color = Color.Green, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                if (isMonitoring) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(modifier = Modifier.size(8.dp).background(Color.Green.copy(alpha = pulseAlpha), CircleShape))
+                }
+            }
+            
+            Switch(
+                checked = isMonitoring,
+                onCheckedChange = { checked ->
+                    val intent = Intent(context, CameraMonitorService::class.java)
+                    if (checked) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            context.startForegroundService(intent)
+                        } else {
+                            context.startService(intent)
+                        }
+                    } else {
+                        context.stopService(intent)
+                    }
+                    isMonitoring = checked
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.Green,
+                    checkedTrackColor = Color.Green.copy(alpha = 0.5f),
+                    uncheckedThumbColor = Color.Gray,
+                    uncheckedTrackColor = Color.DarkGray
+                )
+            )
+        }
+        Text(
+            text = if (isMonitoring) "BACKGROUND MONITORING ACTIVE" else "MONITORING DISABLED",
+            color = if (isMonitoring) Color.Green else Color.Gray,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold
+        )
+        
+        Spacer(modifier = Modifier.height(16.dp))
+        LazyColumn {
+            items(cameras) { camera ->
+                Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A))) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(camera.nickname, color = Color.White, fontWeight = FontWeight.Bold)
+                            Box(modifier = Modifier.size(8.dp).background(if (camera.isOnline) Color.Green else Color.Red, CircleShape).align(Alignment.CenterVertically))
+                        }
+                        Text(camera.ip, color = Color.Cyan)
+                        Row {
+                            Button(onClick = { onStream(camera.streamUrl) }) { Text("STREAM") }
+                            Spacer(Modifier.width(8.dp))
+                            Button(onClick = { onScan(camera.ip) }) { Text("SCAN") }
+                        }
+                    }
                 }
             }
         }
-    } catch (e: Exception) {}
-    return "192.168.1.0/24"
+    }
 }
+
+@Composable
+fun AddCameraDialog(onDismiss: () -> Unit, onSave: (SavedCamera) -> Unit) {
+    var nick by remember { mutableStateOf("") }; var ip by remember { mutableStateOf("") }; AlertDialog(onDismissRequest = onDismiss, confirmButton = { Button(onClick = { onSave(SavedCamera(nickname = nick, ip = ip, port = 80, username = "admin", password = "admin", streamUrl = "", brand = "Manual")) }) { Text("SAVE") } }, title = { Text("Add Camera") }, text = { Column { OutlinedTextField(nick, { nick = it }, label = { Text("Nickname") }); OutlinedTextField(ip, { ip = it }, label = { Text("IP") }) } })
+}
+
+fun extractCredentials(terminalText: String): Pair<String, String> { val match = Regex("""CRACKED \((?:HTTP|RTSP)\): ([^:]+):([^\s\n]+)""").find(terminalText); return if (match != null) match.groupValues[1] to match.groupValues[2] else "" to "" }
+fun buildAuthUrl(url: String, user: String, pass: String): String { if (user.isBlank() || pass.isBlank() || url.contains("@")) return url; return try { if (url.startsWith("rtsp://")) url.replace("rtsp://", "rtsp://$user:$pass@") else if (url.startsWith("http://")) url.replace("http://", "http://$user:$pass@") else url } catch (e: Exception) { url } }
+data class DeviceInfo(val ip: String, val hostname: String?, val openPorts: List<Int>)
