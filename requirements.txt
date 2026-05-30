@@ -4,5 +4,3 @@ lxml
 onvif-zeep
 shodan
 scapy
-flask
-flask-cors

@@ -23,34 +23,21 @@ android {
 
         python {
             version "3.10"
+            extractPackages "onvif", "onvif2", "zeep"
             pip {
                 install "requests"
                 install "idna"
                 install "charset-normalizer"
                 install "urllib3"
                 install "certifi"
-                install "typing-extensions"
-                install "werkzeug"
-                install "markupsafe"
-                install "jinja2"
-                install "itsdangerous"
-                install "blinker"
-                install "isodate"
-                install "pytz"
-                install "requests-toolbelt"
                 install "beautifulsoup4"
+                install "onvif-python"
                 install "zeep"
+                install "onvif-zeep-async"
+                install "scapy"
+                install "XlsxWriter"
                 install "cryptography"
                 install "pyOpenSSL"
-                install "lxml"
-                install "onvif2-zeep"
-                install "scapy"
-                install "flask"
-                install "flask-cors"
-                install "click"
-                install "click-plugins"
-                install "colorama"
-                install "XlsxWriter"
                 options "--no-deps", "--no-binary", "shodan"
                 install "shodan"
             }
@@ -92,9 +79,9 @@ dependencies {
     implementation 'androidx.media3:media3-datasource:1.5.1'
 
     implementation 'androidx.compose.runtime:runtime-livedata'
-    implementation "androidx.room:room-runtime:2.6.1"
-    implementation "androidx.room:room-ktx:2.6.1"
-    kapt "androidx.room:room-compiler:2.6.1"
+    implementation "androidx.room:room-runtime:2.8.4"
+    implementation "androidx.room:room-ktx:2.8.4"
+    kapt "androidx.room:room-compiler:2.8.4"
 
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
