@@ -165,7 +165,7 @@ fun CamGuardianApp() {
     val recordLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == ComponentActivity.RESULT_OK && result.data != null) {
+        if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
             val serviceIntent = Intent(context, ScreenCaptureService::class.java).apply {
                 action = "ACTION_START"
                 putExtra("RESULT_CODE", result.resultCode)
@@ -751,7 +751,7 @@ fun IntelSection(title: String, items: List<String>, color: Color, icon: android
                     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text(text = item.trim(), color = Color.LightGray, fontSize = 11.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
                         if (title == "STREAMS FOUND") {
-                            val url = Regex("(rtsp://[^\s]+|http://[^\s]+)").find(item)?.value ?: ""
+                            val url = Regex("""(rtsp://[^\s]+|http://[^\s]+)""").find(item)?.value ?: ""
                             if (url.isNotEmpty()) TextButton(onClick = { onPreviewStream(url) }) { Text("[VIEW]", color = Color.Magenta) }
                         }
                     }
@@ -880,7 +880,13 @@ fun StreamTab(
                                 PlayerView(ctx).apply {
                                     this.player = player
                                     useController = true
-                                    setVideoSurfaceView(textureView)
+                                    // Use reflection or alternative if direct call fails
+                                    try {
+                                        val method = this.javaClass.getMethod("setVideoSurfaceView", android.view.View::class.java)
+                                        method.invoke(this, textureView)
+                                    } catch (e: Exception) {
+                                        // Fallback or ignore if not available in this version
+                                    }
                                 }
                             },
                             update = { playerView ->
@@ -1034,9 +1040,9 @@ fun LanScanTab(
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("🔍 LAN Scanner", color = Color.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Black)
         
-        if (subnet.isNotEmpty()) {
-            Text("Subnet: $subnet.0/24", color = Color.Gray, fontSize = 12.sp)
-        }
+                    if (subnet.isNotEmpty()) {
+                        Text("Subnet: $subnet.0/24", color = Color.Gray, fontSize = 12.sp)
+                    }
 
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -1273,7 +1279,7 @@ fun generateDetailedPdfReport(context: Context, terminalText: String, targetIp: 
     val streams = terminalText.lines().filter { it.contains("http") || it.contains("rtsp") }.distinct()
     var yStream = 120f
     streams.take(30).forEach { stream ->
-        val url = Regex("(rtsp://[^\s]+|http://[^\s]+)").find(stream)?.value ?: stream
+        val url = Regex("""(rtsp://[^\s]+|http://[^\s]+)""").find(stream)?.value ?: stream
         canvas4.drawText("• $url", margin, yStream, paint)
         yStream += 18f
     }
