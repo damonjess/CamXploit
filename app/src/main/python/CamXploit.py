@@ -789,7 +789,8 @@ def discover_onvif(target_ip):
 
     try:
         if ONVIFCamera is None:
-            print(f"    {ERR} ONVIF Library (onvif-zeep) not available. Cannot perform deep probe.")
+            print(f"    {RADR} Using lightweight ONVIF probe (Android compatible mode)")
+            print(onvif_probe(target_ip))
             return
 
         # 1. WS-Discovery (Unicast Probe)
