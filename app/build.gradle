@@ -32,6 +32,7 @@ android {
                 install "certifi"
                 install "beautifulsoup4"
                 install "onvif-python"
+                install "onvif-zeep"
                 install "zeep"
                 install "onvif-zeep-async"
                 install "scapy"

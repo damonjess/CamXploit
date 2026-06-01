@@ -1,6 +1,20 @@
+# Core Dependencies
 requests
 beautifulsoup4
 lxml
-onvif-zeep
 shodan
 scapy
+zeep
+XlsxWriter
+
+# ONVIF Support
+onvif-zeep
+onvif-python
+onvif-zeep-async
+
+# Security & Encryption
+cryptography
+pyOpenSSL
+
+# UI (Legacy/Stand-alone)
+kivy

@@ -34,6 +34,20 @@ CamXploit is intended for **security research, awareness, and authorized testing
 > [!IMPORTANT]
 > CamXploit performs reconnaissance and configuration analysis only and must be used **strictly on systems you own or have explicit authorization to test**.
 
+### 📱 Android Application (Native)
+CamXploit now features a native Android application built with **Kotlin, Jetpack Compose, and Chaquopy**. It provides a modern, high-performance interface for all reconnaissance tasks directly on your mobile device.
+
+- **Console Tab**: Direct interaction with the scanner.
+- **Intel Tab**: Deep scan and vulnerability analysis.
+- **Archive**: Saved reports and scan logs.
+- **Stream Viewer**: Live RTSP/HTTP stream viewing with recording capabilities.
+- **LAN Scanner**: Enhanced local network discovery.
+
+To build the app, open the project in **Android Studio**.
+
+### 💻 CLI Version
+The stand-alone Python script for terminal use is located in the root directory (or `legacy_kivy/` if you are using the older Kivy-based interface).
+
 ### ☁️ Run It Instantly on Google Colab (No Installation Needed)
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/spyboy-productions/CamXploit/blob/main/CamXploit.ipynb)
