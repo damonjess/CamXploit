@@ -357,7 +357,13 @@ fun CamGuardianApp() {
                     sys.put("stderr", stringIO)
                     
                     // Run the scan
-                    module.callAttr("main", targetIp)
+                    try {
+                        module.callAttr("main", targetIp)
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            terminalText += "\n[!] Python Execution Error: ${e.message}\n"
+                        }
+                    }
                     
                     // Get all output at once
                     stringIO.callAttr("seek", 0)
