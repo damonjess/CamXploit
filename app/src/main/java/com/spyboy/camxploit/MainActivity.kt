@@ -43,6 +43,7 @@ import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -54,10 +55,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -89,6 +94,154 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable
+fun NmapTab(
+    context: Context,
+    terminalText: String,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    var nmapIp by remember { mutableStateOf("") }
+    var scanType by remember { mutableStateOf("QUICK") }
+    var output by remember { mutableStateOf("> Nmap Module Ready.\n") }
+    var isScanning by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) {
+        val lastIp = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(terminalText)?.value
+        if (lastIp != null) nmapIp = lastIp
+    }
+
+    LaunchedEffect(scanType) {
+        if (scanType == "SUBNET" && !nmapIp.contains("/")) {
+            nmapIp = getLocalSubnet()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Text(text = "🛰️ NMAP NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(16.dp))
+
+        Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).background(Color(0xFF0A0A0A)).padding(12.dp)) {
+            Column {
+                Text(text = "TARGET IP / SUBNET", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                BasicTextField(
+                    value = nmapIp,
+                    onValueChange = { nmapIp = it },
+                    textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text("SCAN TYPE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), Arrangement.spacedBy(8.dp)) {
+            listOf("QUICK", "SUBNET", "CAMERA", "AGGRESSIVE", "VULN").forEach { type ->
+                Button(
+                    onClick = { scanType = type },
+                    colors = ButtonDefaults.buttonColors(if (scanType == type) Color.Green else Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(type, color = if (scanType == type) Color.Black else Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                if (nmapIp.isNotBlank()) {
+                    isScanning = true
+                    output = "> Initializing $scanType scan on $nmapIp...\n"
+                    val onOutput: (String) -> Unit = { line -> output += "$line\n" }
+                    val onComplete: () -> Unit = { isScanning = false }
+                    when (scanType) {
+                        "QUICK" -> quickScan(context, nmapIp, onOutput, onComplete)
+                        "SUBNET" -> subnetScan(context, nmapIp, onOutput, onComplete)
+                        "CAMERA" -> cameraScan(context, nmapIp, onOutput, onComplete)
+                        "AGGRESSIVE" -> aggressiveScan(context, nmapIp, onOutput, onComplete)
+                        "VULN" -> vulnScan(context, nmapIp, onOutput, onComplete)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            enabled = !isScanning,
+            colors = ButtonDefaults.buttonColors(Color.Green),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            if (isScanning) CircularProgressIndicator(Modifier.size(24.dp), Color.Black)
+            else Text("START NMAP SCAN", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Surface(modifier = Modifier.weight(1f).fillMaxWidth().border(1.dp, Color(0xFF1A1A1A)), color = Color(0xFF050505)) {
+            Box {
+                Column(Modifier.fillMaxSize().padding(10.dp).verticalScroll(scrollState)) {
+                    output.lines().forEach { line ->
+                        NmapAnnotatedText(line)
+                    }
+                }
+                LaunchedEffect(output) { scrollState.animateScrollTo(scrollState.maxValue) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val ipMatch = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(output)?.value
+                if (ipMatch != null) {
+                    onIpSelected(ipMatch)
+                    onTabSwitch(0)
+                } else {
+                    Toast.makeText(context, "No target IP found in results", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(45.dp),
+            colors = ButtonDefaults.buttonColors(Color(0xFF1B5E20)),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Icon(Icons.Default.Send, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("SEND TO CONSOLE", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun NmapAnnotatedText(line: String) {
+    val annotatedString = buildAnnotatedString {
+        when {
+            line.contains("open", ignoreCase = true) && line.contains("/") -> {
+                withStyle(style = SpanStyle(color = Color(0xFF00FF41), fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("OS details:", ignoreCase = true) || line.contains("Running:") || line.contains("OS scan results") -> {
+                withStyle(style = SpanStyle(color = Color.Cyan)) { append(line) }
+            }
+            line.contains("VULNERABLE", ignoreCase = true) || line.contains("Exploit") || line.contains("state: VULNERABLE") -> {
+                withStyle(style = SpanStyle(color = Color.Red, fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("Service Info:", ignoreCase = true) || (line.contains("VERSION") && !line.contains("Nmap")) || (line.contains(":") && line.contains("(") && line.contains(")")) -> {
+                withStyle(style = SpanStyle(color = Color.Yellow)) { append(line) }
+            }
+            else -> {
+                append(line)
+            }
+        }
+    }
+    Text(
+        text = annotatedString,
+        color = Color(0xFF00FF41),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        lineHeight = 14.sp
+    )
+}
+
 fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Boolean {
     val filename = "CamVigil_${System.currentTimeMillis()}.png"
     try {
@@ -116,6 +269,16 @@ class TerminalOutputStream(
 ) : OutputStream() {
     
     private val buffer = StringBuilder()
+
+    fun write(s: String) {
+        s.forEach { char ->
+            buffer.append(char)
+            if (char == '\n') {
+                onText(buffer.toString())
+                buffer.clear()
+            }
+        }
+    }
     
     override fun write(b: Int) {
         val char = b.toChar()
@@ -137,17 +300,7 @@ class TerminalOutputStream(
     ) {
         val text = String(b, off, len, 
             Charsets.UTF_8)
-        text.forEach { char ->
-            buffer.append(char)
-            if (char == '\n') {
-                onText(buffer.toString())
-                buffer.clear()
-            }
-        }
-        if (buffer.isNotEmpty()) {
-            onText(buffer.toString())
-            buffer.clear()
-        }
+        write(text)
     }
     
     override fun flush() {
@@ -156,6 +309,154 @@ class TerminalOutputStream(
             buffer.clear()
         }
     }
+}
+
+@Composable
+fun NmapTab(
+    context: Context,
+    terminalText: String,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    var nmapIp by remember { mutableStateOf("") }
+    var scanType by remember { mutableStateOf("QUICK") }
+    var output by remember { mutableStateOf("> Nmap Module Ready.\n") }
+    var isScanning by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) {
+        val lastIp = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(terminalText)?.value
+        if (lastIp != null) nmapIp = lastIp
+    }
+
+    LaunchedEffect(scanType) {
+        if (scanType == "SUBNET" && !nmapIp.contains("/")) {
+            nmapIp = getLocalSubnet()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Text(text = "🛰️ NMAP NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(16.dp))
+
+        Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).background(Color(0xFF0A0A0A)).padding(12.dp)) {
+            Column {
+                Text(text = "TARGET IP / SUBNET", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                BasicTextField(
+                    value = nmapIp,
+                    onValueChange = { nmapIp = it },
+                    textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text("SCAN TYPE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), Arrangement.spacedBy(8.dp)) {
+            listOf("QUICK", "SUBNET", "CAMERA", "AGGRESSIVE", "VULN").forEach { type ->
+                Button(
+                    onClick = { scanType = type },
+                    colors = ButtonDefaults.buttonColors(if (scanType == type) Color.Green else Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(type, color = if (scanType == type) Color.Black else Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                if (nmapIp.isNotBlank()) {
+                    isScanning = true
+                    output = "> Initializing $scanType scan on $nmapIp...\n"
+                    val onOutput: (String) -> Unit = { line -> output += "$line\n" }
+                    val onComplete: () -> Unit = { isScanning = false }
+                    when (scanType) {
+                        "QUICK" -> quickScan(context, nmapIp, onOutput, onComplete)
+                        "SUBNET" -> subnetScan(context, nmapIp, onOutput, onComplete)
+                        "CAMERA" -> cameraScan(context, nmapIp, onOutput, onComplete)
+                        "AGGRESSIVE" -> aggressiveScan(context, nmapIp, onOutput, onComplete)
+                        "VULN" -> vulnScan(context, nmapIp, onOutput, onComplete)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            enabled = !isScanning,
+            colors = ButtonDefaults.buttonColors(Color.Green),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            if (isScanning) CircularProgressIndicator(Modifier.size(24.dp), Color.Black)
+            else Text("START NMAP SCAN", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Surface(modifier = Modifier.weight(1f).fillMaxWidth().border(1.dp, Color(0xFF1A1A1A)), color = Color(0xFF050505)) {
+            Box {
+                Column(Modifier.fillMaxSize().padding(10.dp).verticalScroll(scrollState)) {
+                    output.lines().forEach { line ->
+                        NmapAnnotatedText(line)
+                    }
+                }
+                LaunchedEffect(output) { scrollState.animateScrollTo(scrollState.maxValue) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val ipMatch = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(output)?.value
+                if (ipMatch != null) {
+                    onIpSelected(ipMatch)
+                    onTabSwitch(0)
+                } else {
+                    Toast.makeText(context, "No target IP found in results", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(45.dp),
+            colors = ButtonDefaults.buttonColors(Color(0xFF1B5E20)),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Icon(Icons.Default.Send, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("SEND TO CONSOLE", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun NmapAnnotatedText(line: String) {
+    val annotatedString = buildAnnotatedString {
+        when {
+            line.contains("open", ignoreCase = true) && line.contains("/") -> {
+                withStyle(style = SpanStyle(color = Color(0xFF00FF41), fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("OS details:", ignoreCase = true) || line.contains("Running:") || line.contains("OS scan results") -> {
+                withStyle(style = SpanStyle(color = Color.Cyan)) { append(line) }
+            }
+            line.contains("VULNERABLE", ignoreCase = true) || line.contains("Exploit") || line.contains("state: VULNERABLE") -> {
+                withStyle(style = SpanStyle(color = Color.Red, fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("Service Info:", ignoreCase = true) || (line.contains("VERSION") && !line.contains("Nmap")) || (line.contains(":") && line.contains("(") && line.contains(")")) -> {
+                withStyle(style = SpanStyle(color = Color.Yellow)) { append(line) }
+            }
+            else -> {
+                append(line)
+            }
+        }
+    }
+    Text(
+        text = annotatedString,
+        color = Color(0xFF00FF41),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        lineHeight = 14.sp
+    )
 }
 
 @Composable
@@ -177,6 +478,8 @@ fun CamGuardianApp() {
     var selectedUrl by remember { mutableStateOf("") }
     var isRecording by remember { mutableStateOf(false) }
     var recordingDuration by remember { mutableLongStateOf(0L) }
+    var lanNmapMode by remember { mutableStateOf(false) }
+    var lanScanOutput by remember { mutableStateOf("") }
 
     val context = LocalContext.current
     val view = LocalView.current
@@ -189,9 +492,32 @@ fun CamGuardianApp() {
             ipInput = targetIp; selectedTab = 0; isScanning = true; terminalText = "> Starting Reconnaissance on $targetIp...\n"
             scope.launch(Dispatchers.IO) {
                 try {
-                    val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys")
-                    sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } })
+                    val py = Python.getInstance()
+                    val module = py.getModule("CamXploit")
+                    
+                    // Set up Python-side output capture
+                    val sys = py.getModule("sys")
+                    val io = py.getModule("io")
+                    
+                    // Create a StringIO to capture output
+                    val stringIO = io.callAttr("StringIO")
+                    sys.put("stdout", stringIO)
+                    sys.put("stderr", stringIO)
+                    
+                    // Run the scan
                     module.callAttr("main", targetIp)
+                    
+                    // Get all output at once
+                    stringIO.callAttr("seek", 0)
+                    val output = stringIO.callAttr("read").toString()
+                    
+                    // Display output line by line
+                    output.lines().forEach { line ->
+                        withContext(Dispatchers.Main) {
+                            terminalText += "$line\n"
+                        }
+                    }
+
                     withContext(Dispatchers.Main) { 
                         isScanning = false; saveJsonReport(context, terminalText, targetIp); saveContentToFile(context, terminalText, "Scan_Log", "txt")
                         if (terminalText.contains("CRACKED")) {
@@ -336,6 +662,7 @@ fun CamGuardianApp() {
                 NavigationBarItem(selected = selectedTab == 4, onClick = { selectedTab = 4 }, icon = { Icon(Icons.Default.Search, "LAN Scan") }, label = { Text("LAN SCAN") })
                 NavigationBarItem(selected = selectedTab == 5, onClick = { selectedTab = 5 }, icon = { Icon(Icons.Default.FlashOn, "Storm") }, label = { Text("STORM") }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Color(0xFFFFBF00), indicatorColor = Color(0xFF1E1E1E)))
                 NavigationBarItem(selected = selectedTab == 6, onClick = { selectedTab = 6 }, icon = { Icon(Icons.Default.Bookmark, "Saved") }, label = { Text("SAVED") }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.Green, indicatorColor = Color(0xFF1E1E1E)))
+                NavigationBarItem(selected = selectedTab == 7, onClick = { selectedTab = 7 }, icon = { Icon(Icons.Default.Radar, "Nmap") }, label = { Text("NMAP") }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Color.Green, indicatorColor = Color(0xFF1E1E1E)))
             }
         }, containerColor = Color.Black
     ) { padding ->
@@ -349,9 +676,70 @@ fun CamGuardianApp() {
                 1 -> IntelTab(terminalText, { terminalText += it }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val b64 = py.getModule("CamXploit").callAttr("manual_snapshot_capture", ipInput, 80, extractCredentials(terminalText).first, extractCredentials(terminalText).second).toString(); if (b64 != "None") { val b = Base64.decode(b64, Base64.DEFAULT); val bmp = BitmapFactory.decodeByteArray(b, 0, b.size); withContext(Dispatchers.Main) { capturedBitmap = bmp; val f = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Snap_${System.currentTimeMillis()}.png"); FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }; Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() } } } catch (e: Exception) {} } }, { selectedUrl = buildAuthUrl(it, extractCredentials(terminalText).first, extractCredentials(terminalText).second); selectedTab = 3 }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); py.getModule("sys").put("stdout", TerminalOutputStream { t -> scope.launch(Dispatchers.Main) { terminalText += t } }); py.getModule("CamXploit").callAttr("discover_onvif", ipInput) } catch (e: Exception) {} } })
                 2 -> ArchiveTab(context, selectedTab, terminalText, ipInput) { viewingFile = it }
                 3 -> StreamTab(terminalText, selectedUrl, { selectedUrl = it }, isRecording, recordingDuration, { recordLauncher.launch(projectionManager.createScreenCaptureIntent()) }, { context.startService(Intent(context, ScreenCaptureService::class.java).apply { action = "ACTION_STOP" }) })
-                4 -> LanScanTab(lanScanResults, lanIsScanning, lanProgress, lanSubnet, { lanIsScanning = true; lanScanResults = emptyList(); lanProgress = 0f; scope.launch(Dispatchers.IO) { val subnet = getLocalSubnet().substringBeforeLast(".0/24"); withContext(Dispatchers.Main) { lanSubnet = subnet }; (1..254).map { i -> async { val ip = "$subnet.$i"; if (InetAddress.getByName(ip).isReachable(300)) withContext(Dispatchers.Main) { lanScanResults = lanScanResults + DeviceInfo(ip, null, emptyList()) }; withContext(Dispatchers.Main) { lanProgress = i / 254f } } }.awaitAll(); withContext(Dispatchers.Main) { lanIsScanning = false } } }, { }, { }, { selectedTab = it }, { ipInput = it; selectedTab = 0 })
+                4 -> LanScanTab(
+                    scanResults = lanScanResults,
+                    isScanning = lanIsScanning,
+                    progress = lanProgress,
+                    subnet = lanSubnet,
+                    nmapMode = lanNmapMode,
+                    onNmapModeChange = { lanNmapMode = it },
+                    nmapOutput = lanScanOutput,
+                    onScanStart = {
+                        lanIsScanning = true
+                        lanScanResults = emptyList()
+                        lanProgress = 0f
+                        lanScanOutput = "> Initiating scan...\n"
+                        scope.launch(Dispatchers.IO) {
+                            val subnet = getLocalSubnet().substringBeforeLast(".0/24")
+                            withContext(Dispatchers.Main) { lanSubnet = subnet }
+
+                            if (lanNmapMode) {
+                                subnetScan(
+                                    context = context,
+                                    subnet = "$subnet.0/24",
+                                    onOutput = { line ->
+                                        if (line.contains("Nmap scan report")) {
+                                            val ip = line.substringAfter("for ").trim().split(" ").first()
+                                            if (lanScanResults.none { it.ip == ip }) {
+                                                lanScanResults = lanScanResults + DeviceInfo(ip, null, emptyList())
+                                            }
+                                        }
+                                        lanScanOutput += "$line\n"
+                                    },
+                                    onComplete = {
+                                        lanIsScanning = false
+                                    }
+                                )
+                            } else {
+                                (1..254).map { i ->
+                                    async {
+                                        val ip = "$subnet.$i"
+                                        try {
+                                            if (InetAddress.getByName(ip).isReachable(300)) {
+                                                withContext(Dispatchers.Main) {
+                                                    if (lanScanResults.none { it.ip == ip }) {
+                                                        lanScanResults = lanScanResults + DeviceInfo(ip, null, emptyList())
+                                                    }
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                        }
+                                        withContext(Dispatchers.Main) { lanProgress = i / 254f }
+                                    }
+                                }.awaitAll()
+                                withContext(Dispatchers.Main) { lanIsScanning = false }
+                            }
+                        }
+                    },
+                    onResultFound = { },
+                    onScanComplete = { },
+                    onTabSwitch = { selectedTab = it },
+                    onIpSelected = { ipInput = it; selectedTab = 0 })
                 5 -> StormTab(onAutoRescan = { startReconScan(it); Toast.makeText(context, "Running post-stress scan...", Toast.LENGTH_SHORT).show() }, onSaveResults = { ip, out -> saveContentToFile(context, out, "[STORM] ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())} - $ip", "txt"); Toast.makeText(context, "Saved to Archive", Toast.LENGTH_SHORT).show() })
                 6 -> SavedCamerasTab({ selectedUrl = it; selectedTab = 3 }, { ipInput = it; selectedTab = 0 })
+                7 -> NmapTab(context, terminalText,
+                    onTabSwitch = { selectedTab = it },
+                    onIpSelected = { ipInput = it })
             }
             capturedBitmap?.let { bmp ->
                 Spacer(Modifier.height(20.dp)); Text(text = "LAST SNAPSHOT", color = Color.Yellow, fontSize = 14.sp, fontWeight = FontWeight.Black); Spacer(Modifier.height(8.dp))
@@ -359,6 +747,154 @@ fun CamGuardianApp() {
             }
         }
     }
+}
+
+@Composable
+fun NmapTab(
+    context: Context,
+    terminalText: String,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    var nmapIp by remember { mutableStateOf("") }
+    var scanType by remember { mutableStateOf("QUICK") }
+    var output by remember { mutableStateOf("> Nmap Module Ready.\n") }
+    var isScanning by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) {
+        val lastIp = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(terminalText)?.value
+        if (lastIp != null) nmapIp = lastIp
+    }
+
+    LaunchedEffect(scanType) {
+        if (scanType == "SUBNET" && !nmapIp.contains("/")) {
+            nmapIp = getLocalSubnet()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Text(text = "🛰️ NMAP NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(16.dp))
+
+        Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).background(Color(0xFF0A0A0A)).padding(12.dp)) {
+            Column {
+                Text(text = "TARGET IP / SUBNET", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                BasicTextField(
+                    value = nmapIp,
+                    onValueChange = { nmapIp = it },
+                    textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text("SCAN TYPE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), Arrangement.spacedBy(8.dp)) {
+            listOf("QUICK", "SUBNET", "CAMERA", "AGGRESSIVE", "VULN").forEach { type ->
+                Button(
+                    onClick = { scanType = type },
+                    colors = ButtonDefaults.buttonColors(if (scanType == type) Color.Green else Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(type, color = if (scanType == type) Color.Black else Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                if (nmapIp.isNotBlank()) {
+                    isScanning = true
+                    output = "> Initializing $scanType scan on $nmapIp...\n"
+                    val onOutput: (String) -> Unit = { line -> output += "$line\n" }
+                    val onComplete: () -> Unit = { isScanning = false }
+                    when (scanType) {
+                        "QUICK" -> quickScan(context, nmapIp, onOutput, onComplete)
+                        "SUBNET" -> subnetScan(context, nmapIp, onOutput, onComplete)
+                        "CAMERA" -> cameraScan(context, nmapIp, onOutput, onComplete)
+                        "AGGRESSIVE" -> aggressiveScan(context, nmapIp, onOutput, onComplete)
+                        "VULN" -> vulnScan(context, nmapIp, onOutput, onComplete)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            enabled = !isScanning,
+            colors = ButtonDefaults.buttonColors(Color.Green),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            if (isScanning) CircularProgressIndicator(Modifier.size(24.dp), Color.Black)
+            else Text("START NMAP SCAN", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Surface(modifier = Modifier.weight(1f).fillMaxWidth().border(1.dp, Color(0xFF1A1A1A)), color = Color(0xFF050505)) {
+            Box {
+                Column(Modifier.fillMaxSize().padding(10.dp).verticalScroll(scrollState)) {
+                    output.lines().forEach { line ->
+                        NmapAnnotatedText(line)
+                    }
+                }
+                LaunchedEffect(output) { scrollState.animateScrollTo(scrollState.maxValue) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val ipMatch = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(output)?.value
+                if (ipMatch != null) {
+                    onIpSelected(ipMatch)
+                    onTabSwitch(0)
+                } else {
+                    Toast.makeText(context, "No target IP found in results", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(45.dp),
+            colors = ButtonDefaults.buttonColors(Color(0xFF1B5E20)),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Icon(Icons.Default.Send, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("SEND TO CONSOLE", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun NmapAnnotatedText(line: String) {
+    val annotatedString = buildAnnotatedString {
+        when {
+            line.contains("open", ignoreCase = true) && line.contains("/") -> {
+                withStyle(style = SpanStyle(color = Color(0xFF00FF41), fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("OS details:", ignoreCase = true) || line.contains("Running:") || line.contains("OS scan results") -> {
+                withStyle(style = SpanStyle(color = Color.Cyan)) { append(line) }
+            }
+            line.contains("VULNERABLE", ignoreCase = true) || line.contains("Exploit") || line.contains("state: VULNERABLE") -> {
+                withStyle(style = SpanStyle(color = Color.Red, fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("Service Info:", ignoreCase = true) || (line.contains("VERSION") && !line.contains("Nmap")) || (line.contains(":") && line.contains("(") && line.contains(")")) -> {
+                withStyle(style = SpanStyle(color = Color.Yellow)) { append(line) }
+            }
+            else -> {
+                append(line)
+            }
+        }
+    }
+    Text(
+        text = annotatedString,
+        color = Color(0xFF00FF41),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        lineHeight = 14.sp
+    )
 }
 
 @Composable
@@ -378,6 +914,154 @@ fun ConsoleTab(ipInput: String, onIpChange: (String) -> Unit, terminalText: Stri
 }
 
 @Composable
+fun NmapTab(
+    context: Context,
+    terminalText: String,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    var nmapIp by remember { mutableStateOf("") }
+    var scanType by remember { mutableStateOf("QUICK") }
+    var output by remember { mutableStateOf("> Nmap Module Ready.\n") }
+    var isScanning by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) {
+        val lastIp = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(terminalText)?.value
+        if (lastIp != null) nmapIp = lastIp
+    }
+
+    LaunchedEffect(scanType) {
+        if (scanType == "SUBNET" && !nmapIp.contains("/")) {
+            nmapIp = getLocalSubnet()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Text(text = "🛰️ NMAP NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(16.dp))
+
+        Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).background(Color(0xFF0A0A0A)).padding(12.dp)) {
+            Column {
+                Text(text = "TARGET IP / SUBNET", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                BasicTextField(
+                    value = nmapIp,
+                    onValueChange = { nmapIp = it },
+                    textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text("SCAN TYPE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), Arrangement.spacedBy(8.dp)) {
+            listOf("QUICK", "SUBNET", "CAMERA", "AGGRESSIVE", "VULN").forEach { type ->
+                Button(
+                    onClick = { scanType = type },
+                    colors = ButtonDefaults.buttonColors(if (scanType == type) Color.Green else Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(type, color = if (scanType == type) Color.Black else Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                if (nmapIp.isNotBlank()) {
+                    isScanning = true
+                    output = "> Initializing $scanType scan on $nmapIp...\n"
+                    val onOutput: (String) -> Unit = { line -> output += "$line\n" }
+                    val onComplete: () -> Unit = { isScanning = false }
+                    when (scanType) {
+                        "QUICK" -> quickScan(context, nmapIp, onOutput, onComplete)
+                        "SUBNET" -> subnetScan(context, nmapIp, onOutput, onComplete)
+                        "CAMERA" -> cameraScan(context, nmapIp, onOutput, onComplete)
+                        "AGGRESSIVE" -> aggressiveScan(context, nmapIp, onOutput, onComplete)
+                        "VULN" -> vulnScan(context, nmapIp, onOutput, onComplete)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            enabled = !isScanning,
+            colors = ButtonDefaults.buttonColors(Color.Green),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            if (isScanning) CircularProgressIndicator(Modifier.size(24.dp), Color.Black)
+            else Text("START NMAP SCAN", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Surface(modifier = Modifier.weight(1f).fillMaxWidth().border(1.dp, Color(0xFF1A1A1A)), color = Color(0xFF050505)) {
+            Box {
+                Column(Modifier.fillMaxSize().padding(10.dp).verticalScroll(scrollState)) {
+                    output.lines().forEach { line ->
+                        NmapAnnotatedText(line)
+                    }
+                }
+                LaunchedEffect(output) { scrollState.animateScrollTo(scrollState.maxValue) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val ipMatch = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(output)?.value
+                if (ipMatch != null) {
+                    onIpSelected(ipMatch)
+                    onTabSwitch(0)
+                } else {
+                    Toast.makeText(context, "No target IP found in results", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(45.dp),
+            colors = ButtonDefaults.buttonColors(Color(0xFF1B5E20)),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Icon(Icons.Default.Send, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("SEND TO CONSOLE", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun NmapAnnotatedText(line: String) {
+    val annotatedString = buildAnnotatedString {
+        when {
+            line.contains("open", ignoreCase = true) && line.contains("/") -> {
+                withStyle(style = SpanStyle(color = Color(0xFF00FF41), fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("OS details:", ignoreCase = true) || line.contains("Running:") || line.contains("OS scan results") -> {
+                withStyle(style = SpanStyle(color = Color.Cyan)) { append(line) }
+            }
+            line.contains("VULNERABLE", ignoreCase = true) || line.contains("Exploit") || line.contains("state: VULNERABLE") -> {
+                withStyle(style = SpanStyle(color = Color.Red, fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("Service Info:", ignoreCase = true) || (line.contains("VERSION") && !line.contains("Nmap")) || (line.contains(":") && line.contains("(") && line.contains(")")) -> {
+                withStyle(style = SpanStyle(color = Color.Yellow)) { append(line) }
+            }
+            else -> {
+                append(line)
+            }
+        }
+    }
+    Text(
+        text = annotatedString,
+        color = Color(0xFF00FF41),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        lineHeight = 14.sp
+    )
+}
+
+@Composable
 fun IntelTab(terminalText: String, onLogUpdate: (String) -> Unit, onCaptureSnapshot: () -> Unit, onPreviewStream: (String) -> Unit, onTestOnvif: () -> Unit) {
     val scope = rememberCoroutineScope(); var isAuto by remember { mutableStateOf(false) }
     Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -388,10 +1072,306 @@ fun IntelTab(terminalText: String, onLogUpdate: (String) -> Unit, onCaptureSnaps
 }
 
 @Composable
+fun NmapTab(
+    context: Context,
+    terminalText: String,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    var nmapIp by remember { mutableStateOf("") }
+    var scanType by remember { mutableStateOf("QUICK") }
+    var output by remember { mutableStateOf("> Nmap Module Ready.\n") }
+    var isScanning by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) {
+        val lastIp = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(terminalText)?.value
+        if (lastIp != null) nmapIp = lastIp
+    }
+
+    LaunchedEffect(scanType) {
+        if (scanType == "SUBNET" && !nmapIp.contains("/")) {
+            nmapIp = getLocalSubnet()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Text(text = "🛰️ NMAP NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(16.dp))
+
+        Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).background(Color(0xFF0A0A0A)).padding(12.dp)) {
+            Column {
+                Text(text = "TARGET IP / SUBNET", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                BasicTextField(
+                    value = nmapIp,
+                    onValueChange = { nmapIp = it },
+                    textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text("SCAN TYPE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), Arrangement.spacedBy(8.dp)) {
+            listOf("QUICK", "SUBNET", "CAMERA", "AGGRESSIVE", "VULN").forEach { type ->
+                Button(
+                    onClick = { scanType = type },
+                    colors = ButtonDefaults.buttonColors(if (scanType == type) Color.Green else Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(type, color = if (scanType == type) Color.Black else Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                if (nmapIp.isNotBlank()) {
+                    isScanning = true
+                    output = "> Initializing $scanType scan on $nmapIp...\n"
+                    val onOutput: (String) -> Unit = { line -> output += "$line\n" }
+                    val onComplete: () -> Unit = { isScanning = false }
+                    when (scanType) {
+                        "QUICK" -> quickScan(context, nmapIp, onOutput, onComplete)
+                        "SUBNET" -> subnetScan(context, nmapIp, onOutput, onComplete)
+                        "CAMERA" -> cameraScan(context, nmapIp, onOutput, onComplete)
+                        "AGGRESSIVE" -> aggressiveScan(context, nmapIp, onOutput, onComplete)
+                        "VULN" -> vulnScan(context, nmapIp, onOutput, onComplete)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            enabled = !isScanning,
+            colors = ButtonDefaults.buttonColors(Color.Green),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            if (isScanning) CircularProgressIndicator(Modifier.size(24.dp), Color.Black)
+            else Text("START NMAP SCAN", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Surface(modifier = Modifier.weight(1f).fillMaxWidth().border(1.dp, Color(0xFF1A1A1A)), color = Color(0xFF050505)) {
+            Box {
+                Column(Modifier.fillMaxSize().padding(10.dp).verticalScroll(scrollState)) {
+                    output.lines().forEach { line ->
+                        NmapAnnotatedText(line)
+                    }
+                }
+                LaunchedEffect(output) { scrollState.animateScrollTo(scrollState.maxValue) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val ipMatch = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(output)?.value
+                if (ipMatch != null) {
+                    onIpSelected(ipMatch)
+                    onTabSwitch(0)
+                } else {
+                    Toast.makeText(context, "No target IP found in results", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(45.dp),
+            colors = ButtonDefaults.buttonColors(Color(0xFF1B5E20)),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Icon(Icons.Default.Send, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("SEND TO CONSOLE", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun NmapAnnotatedText(line: String) {
+    val annotatedString = buildAnnotatedString {
+        when {
+            line.contains("open", ignoreCase = true) && line.contains("/") -> {
+                withStyle(style = SpanStyle(color = Color(0xFF00FF41), fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("OS details:", ignoreCase = true) || line.contains("Running:") || line.contains("OS scan results") -> {
+                withStyle(style = SpanStyle(color = Color.Cyan)) { append(line) }
+            }
+            line.contains("VULNERABLE", ignoreCase = true) || line.contains("Exploit") || line.contains("state: VULNERABLE") -> {
+                withStyle(style = SpanStyle(color = Color.Red, fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("Service Info:", ignoreCase = true) || (line.contains("VERSION") && !line.contains("Nmap")) || (line.contains(":") && line.contains("(") && line.contains(")")) -> {
+                withStyle(style = SpanStyle(color = Color.Yellow)) { append(line) }
+            }
+            else -> {
+                append(line)
+            }
+        }
+    }
+    Text(
+        text = annotatedString,
+        color = Color(0xFF00FF41),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        lineHeight = 14.sp
+    )
+}
+
+@Composable
 fun IntelSection(title: String, items: List<String>, color: Color, icon: androidx.compose.ui.graphics.vector.ImageVector, onPreviewStream: (String) -> Unit) {
     if (items.isNotEmpty()) Card(Modifier.fillMaxWidth().padding(vertical = 8.dp), colors = CardDefaults.cardColors(Color(0xFF0A0A0A)), border = BorderStroke(1.dp, Color(0xFF1A1A1A))) {
         Column(Modifier.padding(12.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = color, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text(text = title, color = color, fontWeight = FontWeight.Bold, fontSize = 12.sp) }; items.forEach { item -> Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) { Text(text = item.trim(), color = Color.LightGray, fontSize = 11.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f)); if (title == "STREAMS FOUND") { val url = Regex("""(rtsp://\S+|http://\S+)""").find(item)?.value ?: ""; if (url.isNotEmpty()) TextButton(onClick = { onPreviewStream(url) }) { Text(text = "[VIEW]", color = Color.Magenta) } } } } }
     }
+}
+
+@Composable
+fun NmapTab(
+    context: Context,
+    terminalText: String,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    var nmapIp by remember { mutableStateOf("") }
+    var scanType by remember { mutableStateOf("QUICK") }
+    var output by remember { mutableStateOf("> Nmap Module Ready.\n") }
+    var isScanning by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) {
+        val lastIp = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(terminalText)?.value
+        if (lastIp != null) nmapIp = lastIp
+    }
+
+    LaunchedEffect(scanType) {
+        if (scanType == "SUBNET" && !nmapIp.contains("/")) {
+            nmapIp = getLocalSubnet()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Text(text = "🛰️ NMAP NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(16.dp))
+
+        Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).background(Color(0xFF0A0A0A)).padding(12.dp)) {
+            Column {
+                Text(text = "TARGET IP / SUBNET", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                BasicTextField(
+                    value = nmapIp,
+                    onValueChange = { nmapIp = it },
+                    textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text("SCAN TYPE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), Arrangement.spacedBy(8.dp)) {
+            listOf("QUICK", "SUBNET", "CAMERA", "AGGRESSIVE", "VULN").forEach { type ->
+                Button(
+                    onClick = { scanType = type },
+                    colors = ButtonDefaults.buttonColors(if (scanType == type) Color.Green else Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(type, color = if (scanType == type) Color.Black else Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                if (nmapIp.isNotBlank()) {
+                    isScanning = true
+                    output = "> Initializing $scanType scan on $nmapIp...\n"
+                    val onOutput: (String) -> Unit = { line -> output += "$line\n" }
+                    val onComplete: () -> Unit = { isScanning = false }
+                    when (scanType) {
+                        "QUICK" -> quickScan(context, nmapIp, onOutput, onComplete)
+                        "SUBNET" -> subnetScan(context, nmapIp, onOutput, onComplete)
+                        "CAMERA" -> cameraScan(context, nmapIp, onOutput, onComplete)
+                        "AGGRESSIVE" -> aggressiveScan(context, nmapIp, onOutput, onComplete)
+                        "VULN" -> vulnScan(context, nmapIp, onOutput, onComplete)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            enabled = !isScanning,
+            colors = ButtonDefaults.buttonColors(Color.Green),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            if (isScanning) CircularProgressIndicator(Modifier.size(24.dp), Color.Black)
+            else Text("START NMAP SCAN", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Surface(modifier = Modifier.weight(1f).fillMaxWidth().border(1.dp, Color(0xFF1A1A1A)), color = Color(0xFF050505)) {
+            Box {
+                Column(Modifier.fillMaxSize().padding(10.dp).verticalScroll(scrollState)) {
+                    output.lines().forEach { line ->
+                        NmapAnnotatedText(line)
+                    }
+                }
+                LaunchedEffect(output) { scrollState.animateScrollTo(scrollState.maxValue) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val ipMatch = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(output)?.value
+                if (ipMatch != null) {
+                    onIpSelected(ipMatch)
+                    onTabSwitch(0)
+                } else {
+                    Toast.makeText(context, "No target IP found in results", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(45.dp),
+            colors = ButtonDefaults.buttonColors(Color(0xFF1B5E20)),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Icon(Icons.Default.Send, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("SEND TO CONSOLE", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun NmapAnnotatedText(line: String) {
+    val annotatedString = buildAnnotatedString {
+        when {
+            line.contains("open", ignoreCase = true) && line.contains("/") -> {
+                withStyle(style = SpanStyle(color = Color(0xFF00FF41), fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("OS details:", ignoreCase = true) || line.contains("Running:") || line.contains("OS scan results") -> {
+                withStyle(style = SpanStyle(color = Color.Cyan)) { append(line) }
+            }
+            line.contains("VULNERABLE", ignoreCase = true) || line.contains("Exploit") || line.contains("state: VULNERABLE") -> {
+                withStyle(style = SpanStyle(color = Color.Red, fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("Service Info:", ignoreCase = true) || (line.contains("VERSION") && !line.contains("Nmap")) || (line.contains(":") && line.contains("(") && line.contains(")")) -> {
+                withStyle(style = SpanStyle(color = Color.Yellow)) { append(line) }
+            }
+            else -> {
+                append(line)
+            }
+        }
+    }
+    Text(
+        text = annotatedString,
+        color = Color(0xFF00FF41),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        lineHeight = 14.sp
+    )
 }
 
 @Composable
@@ -418,6 +1398,154 @@ fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String)
 }
 
 @Composable
+fun NmapTab(
+    context: Context,
+    terminalText: String,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    var nmapIp by remember { mutableStateOf("") }
+    var scanType by remember { mutableStateOf("QUICK") }
+    var output by remember { mutableStateOf("> Nmap Module Ready.\n") }
+    var isScanning by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) {
+        val lastIp = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(terminalText)?.value
+        if (lastIp != null) nmapIp = lastIp
+    }
+
+    LaunchedEffect(scanType) {
+        if (scanType == "SUBNET" && !nmapIp.contains("/")) {
+            nmapIp = getLocalSubnet()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Text(text = "🛰️ NMAP NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(16.dp))
+
+        Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).background(Color(0xFF0A0A0A)).padding(12.dp)) {
+            Column {
+                Text(text = "TARGET IP / SUBNET", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                BasicTextField(
+                    value = nmapIp,
+                    onValueChange = { nmapIp = it },
+                    textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text("SCAN TYPE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), Arrangement.spacedBy(8.dp)) {
+            listOf("QUICK", "SUBNET", "CAMERA", "AGGRESSIVE", "VULN").forEach { type ->
+                Button(
+                    onClick = { scanType = type },
+                    colors = ButtonDefaults.buttonColors(if (scanType == type) Color.Green else Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(type, color = if (scanType == type) Color.Black else Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                if (nmapIp.isNotBlank()) {
+                    isScanning = true
+                    output = "> Initializing $scanType scan on $nmapIp...\n"
+                    val onOutput: (String) -> Unit = { line -> output += "$line\n" }
+                    val onComplete: () -> Unit = { isScanning = false }
+                    when (scanType) {
+                        "QUICK" -> quickScan(context, nmapIp, onOutput, onComplete)
+                        "SUBNET" -> subnetScan(context, nmapIp, onOutput, onComplete)
+                        "CAMERA" -> cameraScan(context, nmapIp, onOutput, onComplete)
+                        "AGGRESSIVE" -> aggressiveScan(context, nmapIp, onOutput, onComplete)
+                        "VULN" -> vulnScan(context, nmapIp, onOutput, onComplete)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            enabled = !isScanning,
+            colors = ButtonDefaults.buttonColors(Color.Green),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            if (isScanning) CircularProgressIndicator(Modifier.size(24.dp), Color.Black)
+            else Text("START NMAP SCAN", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Surface(modifier = Modifier.weight(1f).fillMaxWidth().border(1.dp, Color(0xFF1A1A1A)), color = Color(0xFF050505)) {
+            Box {
+                Column(Modifier.fillMaxSize().padding(10.dp).verticalScroll(scrollState)) {
+                    output.lines().forEach { line ->
+                        NmapAnnotatedText(line)
+                    }
+                }
+                LaunchedEffect(output) { scrollState.animateScrollTo(scrollState.maxValue) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val ipMatch = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(output)?.value
+                if (ipMatch != null) {
+                    onIpSelected(ipMatch)
+                    onTabSwitch(0)
+                } else {
+                    Toast.makeText(context, "No target IP found in results", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(45.dp),
+            colors = ButtonDefaults.buttonColors(Color(0xFF1B5E20)),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Icon(Icons.Default.Send, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("SEND TO CONSOLE", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun NmapAnnotatedText(line: String) {
+    val annotatedString = buildAnnotatedString {
+        when {
+            line.contains("open", ignoreCase = true) && line.contains("/") -> {
+                withStyle(style = SpanStyle(color = Color(0xFF00FF41), fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("OS details:", ignoreCase = true) || line.contains("Running:") || line.contains("OS scan results") -> {
+                withStyle(style = SpanStyle(color = Color.Cyan)) { append(line) }
+            }
+            line.contains("VULNERABLE", ignoreCase = true) || line.contains("Exploit") || line.contains("state: VULNERABLE") -> {
+                withStyle(style = SpanStyle(color = Color.Red, fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("Service Info:", ignoreCase = true) || (line.contains("VERSION") && !line.contains("Nmap")) || (line.contains(":") && line.contains("(") && line.contains(")")) -> {
+                withStyle(style = SpanStyle(color = Color.Yellow)) { append(line) }
+            }
+            else -> {
+                append(line)
+            }
+        }
+    }
+    Text(
+        text = annotatedString,
+        color = Color(0xFF00FF41),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        lineHeight = 14.sp
+    )
+}
+
+@Composable
 fun MiniPlayer(url: String, user: String, pass: String) {
     val auth = buildAuthUrl(url, user, pass); if (url.startsWith("rtsp")) AndroidView(factory = { ctx -> PlayerView(ctx).apply { useController = false; player = ExoPlayer.Builder(ctx).build().apply { setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).createMediaSource(MediaItem.fromUri(auth))); prepare(); play() } } }, Modifier.fillMaxSize())
     else AndroidView(factory = { ctx -> WebView(ctx).apply { settings.javaScriptEnabled = true; loadUrl(auth) } }, Modifier.fillMaxSize())
@@ -434,12 +1562,390 @@ fun ArchiveTab(context: Context, selectedTab: Int, terminalText: String, targetI
 }
 
 @Composable
-fun LanScanTab(scanResults: List<DeviceInfo>, isScanning: Boolean, progress: Float, subnet: String, onScanStart: () -> Unit, onResultFound: (DeviceInfo) -> Unit, onScanComplete: () -> Unit, onTabSwitch: (Int) -> Unit, onIpSelected: (String) -> Unit) {
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text(text = "🔍 LAN Scanner", color = Color.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Black); if (subnet.isNotEmpty()) Text(text = "Subnet: $subnet.0/24", color = Color.Gray, fontSize = 12.sp)
-        Spacer(Modifier.height(8.dp)); if (isScanning) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = Color.Cyan, trackColor = Color.DarkGray); Button(onClick = onScanStart, Modifier.fillMaxWidth(), enabled = !isScanning) { Text(if (isScanning) "SCANNING... ${(progress * 100).toInt()}%" else "START SCAN") }
-        Spacer(Modifier.height(16.dp)); LazyColumn(Modifier.fillMaxSize()) { items(scanResults) { d -> Card(Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onIpSelected(d.ip) }, colors = CardDefaults.cardColors(Color(0xFF0A0A0A))) { Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Router, null, tint = Color.Cyan); Spacer(Modifier.width(12.dp)); Text(text = d.ip, color = Color.White, fontWeight = FontWeight.Bold) } } } }
+fun NmapTab(
+    context: Context,
+    terminalText: String,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    var nmapIp by remember { mutableStateOf("") }
+    var scanType by remember { mutableStateOf("QUICK") }
+    var output by remember { mutableStateOf("> Nmap Module Ready.\n") }
+    var isScanning by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) {
+        val lastIp = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(terminalText)?.value
+        if (lastIp != null) nmapIp = lastIp
     }
+
+    LaunchedEffect(scanType) {
+        if (scanType == "SUBNET" && !nmapIp.contains("/")) {
+            nmapIp = getLocalSubnet()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Text(text = "🛰️ NMAP NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(16.dp))
+
+        Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).background(Color(0xFF0A0A0A)).padding(12.dp)) {
+            Column {
+                Text(text = "TARGET IP / SUBNET", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                BasicTextField(
+                    value = nmapIp,
+                    onValueChange = { nmapIp = it },
+                    textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text("SCAN TYPE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), Arrangement.spacedBy(8.dp)) {
+            listOf("QUICK", "SUBNET", "CAMERA", "AGGRESSIVE", "VULN").forEach { type ->
+                Button(
+                    onClick = { scanType = type },
+                    colors = ButtonDefaults.buttonColors(if (scanType == type) Color.Green else Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(type, color = if (scanType == type) Color.Black else Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                if (nmapIp.isNotBlank()) {
+                    isScanning = true
+                    output = "> Initializing $scanType scan on $nmapIp...\n"
+                    val onOutput: (String) -> Unit = { line -> output += "$line\n" }
+                    val onComplete: () -> Unit = { isScanning = false }
+                    when (scanType) {
+                        "QUICK" -> quickScan(context, nmapIp, onOutput, onComplete)
+                        "SUBNET" -> subnetScan(context, nmapIp, onOutput, onComplete)
+                        "CAMERA" -> cameraScan(context, nmapIp, onOutput, onComplete)
+                        "AGGRESSIVE" -> aggressiveScan(context, nmapIp, onOutput, onComplete)
+                        "VULN" -> vulnScan(context, nmapIp, onOutput, onComplete)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            enabled = !isScanning,
+            colors = ButtonDefaults.buttonColors(Color.Green),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            if (isScanning) CircularProgressIndicator(Modifier.size(24.dp), Color.Black)
+            else Text("START NMAP SCAN", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Surface(modifier = Modifier.weight(1f).fillMaxWidth().border(1.dp, Color(0xFF1A1A1A)), color = Color(0xFF050505)) {
+            Box {
+                Column(Modifier.fillMaxSize().padding(10.dp).verticalScroll(scrollState)) {
+                    output.lines().forEach { line ->
+                        NmapAnnotatedText(line)
+                    }
+                }
+                LaunchedEffect(output) { scrollState.animateScrollTo(scrollState.maxValue) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val ipMatch = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(output)?.value
+                if (ipMatch != null) {
+                    onIpSelected(ipMatch)
+                    onTabSwitch(0)
+                } else {
+                    Toast.makeText(context, "No target IP found in results", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(45.dp),
+            colors = ButtonDefaults.buttonColors(Color(0xFF1B5E20)),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Icon(Icons.Default.Send, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("SEND TO CONSOLE", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun NmapAnnotatedText(line: String) {
+    val annotatedString = buildAnnotatedString {
+        when {
+            line.contains("open", ignoreCase = true) && line.contains("/") -> {
+                withStyle(style = SpanStyle(color = Color(0xFF00FF41), fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("OS details:", ignoreCase = true) || line.contains("Running:") || line.contains("OS scan results") -> {
+                withStyle(style = SpanStyle(color = Color.Cyan)) { append(line) }
+            }
+            line.contains("VULNERABLE", ignoreCase = true) || line.contains("Exploit") || line.contains("state: VULNERABLE") -> {
+                withStyle(style = SpanStyle(color = Color.Red, fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("Service Info:", ignoreCase = true) || (line.contains("VERSION") && !line.contains("Nmap")) || (line.contains(":") && line.contains("(") && line.contains(")")) -> {
+                withStyle(style = SpanStyle(color = Color.Yellow)) { append(line) }
+            }
+            else -> {
+                append(line)
+            }
+        }
+    }
+    Text(
+        text = annotatedString,
+        color = Color(0xFF00FF41),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        lineHeight = 14.sp
+    )
+}
+
+@Composable
+fun LanScanTab(
+    scanResults: List<DeviceInfo>,
+    isScanning: Boolean,
+    progress: Float,
+    subnet: String,
+    nmapMode: Boolean,
+    onNmapModeChange: (Boolean) -> Unit,
+    nmapOutput: String,
+    onScanStart: () -> Unit,
+    onResultFound: (DeviceInfo) -> Unit,
+    onScanComplete: () -> Unit,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    Column(Modifier.fillMaxSize().padding(16.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = "🔍 LAN Scanner", color = Color.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Black)
+
+            Surface(
+                onClick = { onNmapModeChange(!nmapMode) },
+                color = if (nmapMode) Color(0xFF1B5E20) else Color(0xFF333333),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (nmapMode) "NMAP" else "KOTLIN",
+                        color = if (nmapMode) Color.Green else Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = nmapMode,
+                        onCheckedChange = onNmapModeChange,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.Green,
+                            checkedTrackColor = Color.Green.copy(alpha = 0.5f)
+                        ),
+                        modifier = Modifier.scale(0.7f)
+                    )
+                }
+            }
+        }
+
+        if (subnet.isNotEmpty()) Text(text = "Subnet: $subnet.0/24", color = Color.Gray, fontSize = 12.sp)
+        Spacer(Modifier.height(8.dp))
+
+        if (isScanning) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = Color.Cyan, trackColor = Color.DarkGray)
+
+        Button(onClick = onScanStart, Modifier.fillMaxWidth(), enabled = !isScanning) {
+            Text(if (isScanning) "SCANNING... ${(progress * 100).toInt()}%" else "START SCAN")
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        if (nmapMode && nmapOutput.length > 20) {
+            Surface(modifier = Modifier.fillMaxWidth().height(150.dp).padding(bottom = 16.dp).border(1.dp, Color(0xFF1A1A1A)), color = Color.Black) {
+                SelectionContainer {
+                    Text(
+                        text = nmapOutput,
+                        color = Color.Green,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(8.dp).verticalScroll(rememberScrollState())
+                    )
+                }
+            }
+        }
+
+        LazyColumn(Modifier.fillMaxSize()) {
+            items(scanResults) { d ->
+                Card(Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onIpSelected(d.ip) }, colors = CardDefaults.cardColors(Color(0xFF0A0A0A))) {
+                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Router, null, tint = Color.Cyan)
+                        Spacer(Modifier.width(12.dp))
+                        Text(text = d.ip, color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun NmapTab(
+    context: Context,
+    terminalText: String,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    var nmapIp by remember { mutableStateOf("") }
+    var scanType by remember { mutableStateOf("QUICK") }
+    var output by remember { mutableStateOf("> Nmap Module Ready.\n") }
+    var isScanning by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) {
+        val lastIp = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(terminalText)?.value
+        if (lastIp != null) nmapIp = lastIp
+    }
+
+    LaunchedEffect(scanType) {
+        if (scanType == "SUBNET" && !nmapIp.contains("/")) {
+            nmapIp = getLocalSubnet()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Text(text = "🛰️ NMAP NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(16.dp))
+
+        Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).background(Color(0xFF0A0A0A)).padding(12.dp)) {
+            Column {
+                Text(text = "TARGET IP / SUBNET", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                BasicTextField(
+                    value = nmapIp,
+                    onValueChange = { nmapIp = it },
+                    textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text("SCAN TYPE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), Arrangement.spacedBy(8.dp)) {
+            listOf("QUICK", "SUBNET", "CAMERA", "AGGRESSIVE", "VULN").forEach { type ->
+                Button(
+                    onClick = { scanType = type },
+                    colors = ButtonDefaults.buttonColors(if (scanType == type) Color.Green else Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(type, color = if (scanType == type) Color.Black else Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                if (nmapIp.isNotBlank()) {
+                    isScanning = true
+                    output = "> Initializing $scanType scan on $nmapIp...\n"
+                    val onOutput: (String) -> Unit = { line -> output += "$line\n" }
+                    val onComplete: () -> Unit = { isScanning = false }
+                    when (scanType) {
+                        "QUICK" -> quickScan(context, nmapIp, onOutput, onComplete)
+                        "SUBNET" -> subnetScan(context, nmapIp, onOutput, onComplete)
+                        "CAMERA" -> cameraScan(context, nmapIp, onOutput, onComplete)
+                        "AGGRESSIVE" -> aggressiveScan(context, nmapIp, onOutput, onComplete)
+                        "VULN" -> vulnScan(context, nmapIp, onOutput, onComplete)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            enabled = !isScanning,
+            colors = ButtonDefaults.buttonColors(Color.Green),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            if (isScanning) CircularProgressIndicator(Modifier.size(24.dp), Color.Black)
+            else Text("START NMAP SCAN", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Surface(modifier = Modifier.weight(1f).fillMaxWidth().border(1.dp, Color(0xFF1A1A1A)), color = Color(0xFF050505)) {
+            Box {
+                Column(Modifier.fillMaxSize().padding(10.dp).verticalScroll(scrollState)) {
+                    output.lines().forEach { line ->
+                        NmapAnnotatedText(line)
+                    }
+                }
+                LaunchedEffect(output) { scrollState.animateScrollTo(scrollState.maxValue) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val ipMatch = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(output)?.value
+                if (ipMatch != null) {
+                    onIpSelected(ipMatch)
+                    onTabSwitch(0)
+                } else {
+                    Toast.makeText(context, "No target IP found in results", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(45.dp),
+            colors = ButtonDefaults.buttonColors(Color(0xFF1B5E20)),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Icon(Icons.Default.Send, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("SEND TO CONSOLE", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun NmapAnnotatedText(line: String) {
+    val annotatedString = buildAnnotatedString {
+        when {
+            line.contains("open", ignoreCase = true) && line.contains("/") -> {
+                withStyle(style = SpanStyle(color = Color(0xFF00FF41), fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("OS details:", ignoreCase = true) || line.contains("Running:") || line.contains("OS scan results") -> {
+                withStyle(style = SpanStyle(color = Color.Cyan)) { append(line) }
+            }
+            line.contains("VULNERABLE", ignoreCase = true) || line.contains("Exploit") || line.contains("state: VULNERABLE") -> {
+                withStyle(style = SpanStyle(color = Color.Red, fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("Service Info:", ignoreCase = true) || (line.contains("VERSION") && !line.contains("Nmap")) || (line.contains(":") && line.contains("(") && line.contains(")")) -> {
+                withStyle(style = SpanStyle(color = Color.Yellow)) { append(line) }
+            }
+            else -> {
+                append(line)
+            }
+        }
+    }
+    Text(
+        text = annotatedString,
+        color = Color(0xFF00FF41),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        lineHeight = 14.sp
+    )
 }
 
 fun openFile(context: Context, file: File) { try { val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file); context.startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension)); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Open with")) } catch (e: Exception) {} }
@@ -550,6 +2056,154 @@ fun StormTab(onAutoRescan: (String) -> Unit, onSaveResults: (String, String) -> 
     }
 }
 
+@Composable
+fun NmapTab(
+    context: Context,
+    terminalText: String,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    var nmapIp by remember { mutableStateOf("") }
+    var scanType by remember { mutableStateOf("QUICK") }
+    var output by remember { mutableStateOf("> Nmap Module Ready.\n") }
+    var isScanning by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) {
+        val lastIp = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(terminalText)?.value
+        if (lastIp != null) nmapIp = lastIp
+    }
+
+    LaunchedEffect(scanType) {
+        if (scanType == "SUBNET" && !nmapIp.contains("/")) {
+            nmapIp = getLocalSubnet()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Text(text = "🛰️ NMAP NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(16.dp))
+
+        Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).background(Color(0xFF0A0A0A)).padding(12.dp)) {
+            Column {
+                Text(text = "TARGET IP / SUBNET", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                BasicTextField(
+                    value = nmapIp,
+                    onValueChange = { nmapIp = it },
+                    textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text("SCAN TYPE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), Arrangement.spacedBy(8.dp)) {
+            listOf("QUICK", "SUBNET", "CAMERA", "AGGRESSIVE", "VULN").forEach { type ->
+                Button(
+                    onClick = { scanType = type },
+                    colors = ButtonDefaults.buttonColors(if (scanType == type) Color.Green else Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(type, color = if (scanType == type) Color.Black else Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                if (nmapIp.isNotBlank()) {
+                    isScanning = true
+                    output = "> Initializing $scanType scan on $nmapIp...\n"
+                    val onOutput: (String) -> Unit = { line -> output += "$line\n" }
+                    val onComplete: () -> Unit = { isScanning = false }
+                    when (scanType) {
+                        "QUICK" -> quickScan(context, nmapIp, onOutput, onComplete)
+                        "SUBNET" -> subnetScan(context, nmapIp, onOutput, onComplete)
+                        "CAMERA" -> cameraScan(context, nmapIp, onOutput, onComplete)
+                        "AGGRESSIVE" -> aggressiveScan(context, nmapIp, onOutput, onComplete)
+                        "VULN" -> vulnScan(context, nmapIp, onOutput, onComplete)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            enabled = !isScanning,
+            colors = ButtonDefaults.buttonColors(Color.Green),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            if (isScanning) CircularProgressIndicator(Modifier.size(24.dp), Color.Black)
+            else Text("START NMAP SCAN", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Surface(modifier = Modifier.weight(1f).fillMaxWidth().border(1.dp, Color(0xFF1A1A1A)), color = Color(0xFF050505)) {
+            Box {
+                Column(Modifier.fillMaxSize().padding(10.dp).verticalScroll(scrollState)) {
+                    output.lines().forEach { line ->
+                        NmapAnnotatedText(line)
+                    }
+                }
+                LaunchedEffect(output) { scrollState.animateScrollTo(scrollState.maxValue) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val ipMatch = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(output)?.value
+                if (ipMatch != null) {
+                    onIpSelected(ipMatch)
+                    onTabSwitch(0)
+                } else {
+                    Toast.makeText(context, "No target IP found in results", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(45.dp),
+            colors = ButtonDefaults.buttonColors(Color(0xFF1B5E20)),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Icon(Icons.Default.Send, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("SEND TO CONSOLE", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun NmapAnnotatedText(line: String) {
+    val annotatedString = buildAnnotatedString {
+        when {
+            line.contains("open", ignoreCase = true) && line.contains("/") -> {
+                withStyle(style = SpanStyle(color = Color(0xFF00FF41), fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("OS details:", ignoreCase = true) || line.contains("Running:") || line.contains("OS scan results") -> {
+                withStyle(style = SpanStyle(color = Color.Cyan)) { append(line) }
+            }
+            line.contains("VULNERABLE", ignoreCase = true) || line.contains("Exploit") || line.contains("state: VULNERABLE") -> {
+                withStyle(style = SpanStyle(color = Color.Red, fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("Service Info:", ignoreCase = true) || (line.contains("VERSION") && !line.contains("Nmap")) || (line.contains(":") && line.contains("(") && line.contains(")")) -> {
+                withStyle(style = SpanStyle(color = Color.Yellow)) { append(line) }
+            }
+            else -> {
+                append(line)
+            }
+        }
+    }
+    Text(
+        text = annotatedString,
+        color = Color(0xFF00FF41),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        lineHeight = 14.sp
+    )
+}
+
 fun getLocalSubnet(): String { try { val interfaces = NetworkInterface.getNetworkInterfaces(); for (inf in Collections.list(interfaces)) { if (inf.isLoopback || !inf.isUp) continue; for (addr in Collections.list(inf.inetAddresses)) { if (addr is Inet4Address && !addr.isLoopbackAddress) return addr.hostAddress?.substringBeforeLast(".") + ".0/24" } } } catch (e: Exception) {}; return "192.168.1.0/24" }
 fun extractCredentials(t: String): Pair<String, String> { val m = Regex("""CRACKED \((?:HTTP|RTSP)\): ([^:]+):([^\s\n]+)""").find(t); return if (m != null) m.groupValues[1] to m.groupValues[2] else "admin" to "admin" }
 fun buildAuthUrl(u: String, user: String, pass: String): String { if (user.isBlank() || pass.isBlank() || u.contains("@")) return u; return try { if (u.startsWith("rtsp://")) u.replace("rtsp://", "rtsp://$user:$pass@") else if (u.startsWith("http://")) u.replace("http://", "http://$user:$pass@") else u } catch (e: Exception) { u } }
@@ -562,4 +2216,152 @@ data class DeviceInfo(val ip: String, val hostname: String?, val openPorts: List
         Text(text = if (isMon) "MONITORING ACTIVE" else "DISABLED", color = if (isMon) Color.Green else Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(16.dp))
         LazyColumn { items(cameras) { c -> Card(Modifier.fillMaxWidth().padding(vertical = 4.dp), colors = CardDefaults.cardColors(Color(0xFF0A0A0A))) { Column(Modifier.padding(12.dp)) { Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) { Text(text = c.nickname, color = Color.White, fontWeight = FontWeight.Bold); Box(Modifier.size(8.dp).background(if (c.isOnline) Color.Green else Color.Red, CircleShape).align(Alignment.CenterVertically)) }; Text(text = c.ip, color = Color.Cyan); Row { Button(onClick = { onStream(c.streamUrl) }) { Text("STREAM") }; Spacer(Modifier.width(8.dp)); Button(onClick = { onScan(c.ip) }) { Text("SCAN") } } } } } }
     }
+}
+
+@Composable
+fun NmapTab(
+    context: Context,
+    terminalText: String,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit
+) {
+    var nmapIp by remember { mutableStateOf("") }
+    var scanType by remember { mutableStateOf("QUICK") }
+    var output by remember { mutableStateOf("> Nmap Module Ready.\n") }
+    var isScanning by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) {
+        val lastIp = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(terminalText)?.value
+        if (lastIp != null) nmapIp = lastIp
+    }
+
+    LaunchedEffect(scanType) {
+        if (scanType == "SUBNET" && !nmapIp.contains("/")) {
+            nmapIp = getLocalSubnet()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Text(text = "🛰️ NMAP NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(16.dp))
+
+        Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).background(Color(0xFF0A0A0A)).padding(12.dp)) {
+            Column {
+                Text(text = "TARGET IP / SUBNET", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                BasicTextField(
+                    value = nmapIp,
+                    onValueChange = { nmapIp = it },
+                    textStyle = TextStyle(color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Green)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text("SCAN TYPE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), Arrangement.spacedBy(8.dp)) {
+            listOf("QUICK", "SUBNET", "CAMERA", "AGGRESSIVE", "VULN").forEach { type ->
+                Button(
+                    onClick = { scanType = type },
+                    colors = ButtonDefaults.buttonColors(if (scanType == type) Color.Green else Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(type, color = if (scanType == type) Color.Black else Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                if (nmapIp.isNotBlank()) {
+                    isScanning = true
+                    output = "> Initializing $scanType scan on $nmapIp...\n"
+                    val onOutput: (String) -> Unit = { line -> output += "$line\n" }
+                    val onComplete: () -> Unit = { isScanning = false }
+                    when (scanType) {
+                        "QUICK" -> quickScan(context, nmapIp, onOutput, onComplete)
+                        "SUBNET" -> subnetScan(context, nmapIp, onOutput, onComplete)
+                        "CAMERA" -> cameraScan(context, nmapIp, onOutput, onComplete)
+                        "AGGRESSIVE" -> aggressiveScan(context, nmapIp, onOutput, onComplete)
+                        "VULN" -> vulnScan(context, nmapIp, onOutput, onComplete)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            enabled = !isScanning,
+            colors = ButtonDefaults.buttonColors(Color.Green),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            if (isScanning) CircularProgressIndicator(Modifier.size(24.dp), Color.Black)
+            else Text("START NMAP SCAN", color = Color.Black, fontWeight = FontWeight.Black)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Surface(modifier = Modifier.weight(1f).fillMaxWidth().border(1.dp, Color(0xFF1A1A1A)), color = Color(0xFF050505)) {
+            Box {
+                Column(Modifier.fillMaxSize().padding(10.dp).verticalScroll(scrollState)) {
+                    output.lines().forEach { line ->
+                        NmapAnnotatedText(line)
+                    }
+                }
+                LaunchedEffect(output) { scrollState.animateScrollTo(scrollState.maxValue) }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                val ipMatch = Regex("""\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b""").find(output)?.value
+                if (ipMatch != null) {
+                    onIpSelected(ipMatch)
+                    onTabSwitch(0)
+                } else {
+                    Toast.makeText(context, "No target IP found in results", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(45.dp),
+            colors = ButtonDefaults.buttonColors(Color(0xFF1B5E20)),
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Icon(Icons.Default.Send, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("SEND TO CONSOLE", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun NmapAnnotatedText(line: String) {
+    val annotatedString = buildAnnotatedString {
+        when {
+            line.contains("open", ignoreCase = true) && line.contains("/") -> {
+                withStyle(style = SpanStyle(color = Color(0xFF00FF41), fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("OS details:", ignoreCase = true) || line.contains("Running:") || line.contains("OS scan results") -> {
+                withStyle(style = SpanStyle(color = Color.Cyan)) { append(line) }
+            }
+            line.contains("VULNERABLE", ignoreCase = true) || line.contains("Exploit") || line.contains("state: VULNERABLE") -> {
+                withStyle(style = SpanStyle(color = Color.Red, fontWeight = FontWeight.Bold)) { append(line) }
+            }
+            line.contains("Service Info:", ignoreCase = true) || (line.contains("VERSION") && !line.contains("Nmap")) || (line.contains(":") && line.contains("(") && line.contains(")")) -> {
+                withStyle(style = SpanStyle(color = Color.Yellow)) { append(line) }
+            }
+            else -> {
+                append(line)
+            }
+        }
+    }
+    Text(
+        text = annotatedString,
+        color = Color(0xFF00FF41),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        lineHeight = 14.sp
+    )
 }

@@ -1,3 +1,26 @@
+import sys
+import io
+
+class AndroidOutput(io.TextIOBase):
+    def __init__(self, callback):
+        self.callback = callback
+        self.buffer_text = ""
+
+    def write(self, text):
+        if isinstance(text, str):
+            self.buffer_text += text
+            if '\n' in self.buffer_text:
+                lines = self.buffer_text.split('\n')
+                for line in lines[:-1]:
+                    self.callback(line + '\n')
+                self.buffer_text = lines[-1]
+        return len(text) if text else 0
+
+    def flush(self):
+        if self.buffer_text:
+            self.callback(self.buffer_text)
+            self.buffer_text = ""
+
 try:
     import requests
     REQUESTS_AVAILABLE = True
