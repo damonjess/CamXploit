@@ -163,7 +163,7 @@ fun quickScan(
     onComplete: () -> Unit
 ) {
     runNmap(
-        context, "-sV --open -T4 $ip",
+        context, "-T4 --open -F $ip",
         onOutput, onComplete
     )
 }
@@ -188,7 +188,7 @@ fun cameraScan(
         context,
         "-p 80,443,554,8080,8000,8443,8554," +
                 "9000,37777,37778,34567,3702,10554 " +
-                "-sV --open -T4 $ip",
+                "-T4 --open -F $ip",
         onOutput, onComplete
     )
 }

@@ -192,8 +192,8 @@ fun NmapTab(
 
                 nmapIsScanning = true
                 val displayCmd = when(scanType) {
-                    "QUICK" -> "nmap -sV --open -T4"
-                    "SERVICE" -> "nmap -p 80,443,554,8080,8000... -sV"
+                    "QUICK" -> "nmap -T4 --open -F"
+                    "SERVICE" -> "nmap -p 80,443,554,8080,8000... -T4 --open -F"
                     "SUBNET" -> "nmap -sn"
                     else -> "nmap"
                 }
