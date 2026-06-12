@@ -358,6 +358,7 @@ class TerminalOutputStream(val onText: (String) -> Unit) : OutputStream() {
 @Composable
 fun CamGuardianApp() {
     var terminalText by remember { mutableStateOf("> System Initialized. Awaiting Target...\n") }
+    val appendToConsole: (String) -> Unit = { text -> terminalText += text }
     var consoleIpInput by remember { mutableStateOf("") }
     var isScanning by remember { mutableStateOf(false) }
     var viewingFile by remember { mutableStateOf<File?>(null) }
@@ -611,6 +612,26 @@ fun CamGuardianApp() {
                             } catch (e: Exception) {
                             }
                         }
+                    },
+                    onProbeEndpoints = {
+                        val targetHost = if (consoleIpInput.contains(":")) consoleIpInput.substringBefore(":") else consoleIpInput
+                        val targetPort = if (consoleIpInput.contains(":")) consoleIpInput.substringAfter(":").toIntOrNull() ?: 80 else 80
+                        scope.launch(Dispatchers.IO) {
+                            val scanner = CameraScanner()
+                            withContext(Dispatchers.Main) {
+                                appendToConsole("🔍 Probing endpoints on $targetHost:$targetPort ...\n")
+                            }
+                            scanner.scanEndpoints(
+                                host     = targetHost,
+                                port     = targetPort,
+                                onResult = { result ->
+                                    appendToConsole("  🎯 Found ${result.type}: ${result.url} (HTTP ${result.httpCode})\n")
+                                },
+                                onDone = {
+                                    appendToConsole("✅ Endpoint scan complete.\n")
+                                }
+                            )
+                        }
                     }
                 )
                 2 -> ArchiveTab(context, selectedTab, terminalText, consoleIpInput) { viewingFile = it }
@@ -735,7 +756,7 @@ fun ConsoleTab(consoleIpInput: String, onIpChange: (String) -> Unit, terminalTex
 }
 
 @Composable
-fun IntelTab(consoleIpInput: String, terminalText: String, onTerminalUpdate: (String) -> Unit, onManualSnapshot: () -> Unit, onStreamSelect: (String) -> Unit, onDiscoverOnvif: () -> Unit) {
+fun IntelTab(consoleIpInput: String, terminalText: String, onTerminalUpdate: (String) -> Unit, onManualSnapshot: () -> Unit, onStreamSelect: (String) -> Unit, onDiscoverOnvif: () -> Unit, onProbeEndpoints: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     
@@ -759,6 +780,21 @@ fun IntelTab(consoleIpInput: String, terminalText: String, onTerminalUpdate: (St
                 Icon(Icons.Default.Radar, null, tint = Color.Cyan, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("ONVIF PROBE", fontSize = 10.sp, color = Color.Cyan)
+            }
+
+            Button(
+                onClick = { 
+                    if (consoleIpInput.isEmpty()) Toast.makeText(context, "Set target in CONSOLE", Toast.LENGTH_SHORT).show()
+                    else onProbeEndpoints() 
+                }, 
+                modifier = Modifier.weight(1f), 
+                colors = ButtonDefaults.buttonColors(Color(0xFF003300)), 
+                shape = RoundedCornerShape(8.dp), 
+                border = BorderStroke(1.dp, Color.Green)
+            ) {
+                Icon(Icons.Default.Search, null, tint = Color.Green, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("PROBE PATHS", fontSize = 10.sp, color = Color.Green)
             }
             
             Button(
