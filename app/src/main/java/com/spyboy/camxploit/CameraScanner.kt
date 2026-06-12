@@ -1,6 +1,8 @@
 package com.spyboy.camxploit
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -89,7 +91,7 @@ class CameraScanner {
     ) = withContext(Dispatchers.IO) {
 
         val base = "http://$host:$port"
-        val semaphore = kotlinx.coroutines.sync.Semaphore(MAX_PARALLEL)
+        val semaphore = Semaphore(MAX_PARALLEL)
 
         val jobs = mutableListOf<Deferred<Unit>>()
 

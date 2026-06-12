@@ -22,7 +22,8 @@ android {
         }
 
         python {
-            version "3.10"
+            buildPython "/usr/bin/python3"
+            version "3.13"
             extractPackages "onvif", "onvif2", "zeep"
             pip {
                 install "requests"
