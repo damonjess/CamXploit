@@ -22,25 +22,11 @@ android {
         }
 
         python {
-            buildPython "/usr/bin/python3"
-            version "3.13"
+            buildPython "python"
+            version "3.10"
             extractPackages "onvif", "onvif2", "zeep"
             pip {
                 install "requests"
-                install "idna"
-                install "charset-normalizer"
-                install "urllib3"
-                install "certifi"
-                install "beautifulsoup4"
-                install "onvif-python"
-                install "zeep"
-                install "onvif-zeep-async"
-                install "scapy"
-                install "XlsxWriter"
-                install "cryptography"
-                install "pyOpenSSL"
-                options "--no-deps", "--no-binary", "shodan"
-                install "shodan"
             }
         }
     }
