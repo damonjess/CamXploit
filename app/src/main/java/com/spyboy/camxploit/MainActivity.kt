@@ -379,6 +379,8 @@ fun CamGuardianApp() {
     var lanScanOutput by remember { mutableStateOf("") }
 
     val context = LocalContext.current
+    val cameras by CameraDatabase.getDatabase(context).cameraDao()
+        .getAllCameras().collectAsState(initial = emptyList())
     val view = LocalView.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
@@ -567,7 +569,7 @@ fun CamGuardianApp() {
                     Icons.Default.Wifi to "LAN",
                     Icons.Default.Bolt to "STORM",
                     Icons.Default.Bookmarks to "SAVED",
-                    Icons.Default.Radar to "NMAP"
+                    Icons.Default.Shield to "SENTINEL"
                 )
                 tabs.forEachIndexed { index, (icon, label) ->
                     Tab(
@@ -709,9 +711,7 @@ fun CamGuardianApp() {
                     onIpSelected = { consoleIpInput = it; selectedTab = 0 })
                 5 -> StormTab(onAutoRescan = { startReconScan(it); Toast.makeText(context, "Running post-stress scan...", Toast.LENGTH_SHORT).show() }, onSaveResults = { ip, out -> saveContentToFile(context, out, "[STORM] ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())} - $ip", "txt"); Toast.makeText(context, "Saved to Archive", Toast.LENGTH_SHORT).show() })
                 6 -> SavedCamerasTab({ selectedUrl = it; selectedTab = 3 }, { consoleIpInput = it; selectedTab = 0 })
-                7 -> NmapTab(context, consoleIpInput,
-                    onTabSwitch = { selectedTab = it },
-                    onIpSelected = { consoleIpInput = it })
+                7 -> SentinelTab(savedCameras = cameras)
             }
             capturedBitmap?.let { bmp ->
                 Spacer(Modifier.height(20.dp)); Text(text = "LAST SNAPSHOT", color = Color.Yellow, fontSize = 14.sp, fontWeight = FontWeight.Black); Spacer(Modifier.height(8.dp))
@@ -946,7 +946,7 @@ fun LanScanTab(
             Button(onClick = onScanStart, enabled = !isScanning, colors = ButtonDefaults.buttonColors(Color(0xFF004400))) { Text("SCAN", color = Color.Green) }
         }
         Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) { Switch(checked = nmapMode, onCheckedChange = onNmapModeChange, colors = SwitchDefaults.colors(checkedThumbColor = Color.Green)); Spacer(Modifier.width(8.dp)); Text("Enhanced Nmap Discovery", color = Color.LightGray, fontSize = 12.sp) }
+        Row(verticalAlignment = Alignment.CenterVertically) { Switch(checked = false, onCheckedChange = {}, enabled = false, colors = SwitchDefaults.colors(checkedThumbColor = Color.Green)); Spacer(Modifier.width(8.dp)); Text("Enhanced Nmap Discovery (requires root)", color = Color.Gray, fontSize = 12.sp) }
         Spacer(Modifier.height(16.dp))
         if (isScanning && !nmapMode) LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth().height(2.dp), color = Color.Green, trackColor = Color(0xFF111111))
         if (nmapMode && nmapOutput.isNotEmpty()) {
@@ -1053,7 +1053,22 @@ fun StormTab(onAutoRescan: (String) -> Unit, onSaveResults: (String, String) -> 
     }
 }
 
-fun getLocalSubnet(): String = "192.168.1.0/24"
+fun getLocalSubnet(): String {
+    return try {
+        java.net.NetworkInterface.getNetworkInterfaces().toList()
+            .flatMap { it.inetAddresses.toList() }
+            .firstOrNull { addr ->
+                addr is java.net.Inet4Address &&
+                !addr.isLoopbackAddress &&
+                (addr.hostAddress?.startsWith("192.168") == true ||
+                 addr.hostAddress?.startsWith("10.") == true ||
+                 addr.hostAddress?.startsWith("172.") == true)
+            }?.hostAddress?.substringBeforeLast(".")?.let { "$it.0/24" }
+            ?: "192.168.1.0/24"
+    } catch (e: Exception) {
+        "192.168.1.0/24"
+    }
+}
 fun extractCredentials(text: String): Pair<String, String> {
     val userMatch = Regex("""User:\s*(\S+)""").find(text)
     val passMatch = Regex("""Pass:\s*(\S+)""").find(text)
@@ -1118,6 +1133,206 @@ fun SavedCamerasTab(onPlay: (String) -> Unit, onIpSelected: (String) -> Unit) {
                             IconButton(onClick = { scope.launch(Dispatchers.IO) { dao.deleteCamera(camera) } }) {
                                 Icon(Icons.Default.Delete, null, tint = Color.Red.copy(0.7f))
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SentinelTab(savedCameras: List<SavedCamera>) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val dao = remember { CameraDatabase.getDatabase(context).sentinelDao() }
+    val detections by dao.getAll().collectAsState(initial = emptyList())
+
+    var isRunning by remember { mutableStateOf(false) }
+    var selectedCamera by remember { mutableStateOf<SavedCamera?>(null) }
+    var statusText by remember { mutableStateOf("Select a camera to begin monitoring") }
+    var frameCount by remember { mutableIntStateOf(0) }
+    var monitorJob by remember { mutableStateOf<Job?>(null) }
+    val processor = remember { SentinelProcessor(context) }
+
+    DisposableEffect(Unit) {
+        processor.load()
+        onDispose { processor.close(); monitorJob?.cancel() }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        // Header
+        Text("🛡️ SENTINEL", color = Color(0xFF00FFFF), fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Text("AI THREAT MONITOR", color = Color.Gray, fontSize = 10.sp)
+
+        Spacer(Modifier.height(12.dp))
+
+        // Camera selector
+        if (savedCameras.isEmpty()) {
+            Text("No saved cameras. Save a camera from the CONSOLE tab first.",
+                color = Color.Gray, fontSize = 12.sp)
+        } else {
+            Text("SELECT TARGET", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 140.dp)) {
+                items(savedCameras) { cam ->
+                    val isSelected = selectedCamera?.ip == cam.ip
+                    Card(
+                        Modifier.fillMaxWidth().padding(vertical = 3.dp)
+                            .clickable { if (!isRunning) selectedCamera = cam },
+                        colors = CardDefaults.cardColors(
+                            if (isSelected) Color(0xFF002200) else Color(0xFF0A0A0A)
+                        ),
+                        border = BorderStroke(1.dp, if (isSelected) Color(0xFF00FF00) else Color(0xFF1A1A1A))
+                    ) {
+                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Videocam, null,
+                                tint = if (isSelected) Color.Green else Color.Gray,
+                                modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(cam.nickname, color = Color.White, fontSize = 13.sp)
+                                Text(cam.ip, color = Color.Gray, fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // Status bar
+        Box(
+            Modifier.fillMaxWidth()
+                .background(Color(0xFF050505), RoundedCornerShape(4.dp))
+                .border(1.dp, Color(0xFF1A3A1A), RoundedCornerShape(4.dp))
+                .padding(10.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isRunning) {
+                    Box(Modifier.size(8.dp).background(Color.Green, CircleShape))
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(statusText, color = if (isRunning) Color.Green else Color.Gray,
+                    fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                if (isRunning) {
+                    Spacer(Modifier.weight(1f))
+                    Text("${frameCount}f", color = Color.DarkGray, fontSize = 10.sp)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Start / Stop button
+        Button(
+            onClick = {
+                if (isRunning) {
+                    monitorJob?.cancel()
+                    isRunning = false
+                    statusText = "Monitoring stopped"
+                } else {
+                    val cam = selectedCamera ?: return@Button
+                    val streamUrl = cam.streamUrl.ifBlank {
+                        "http://${cam.ip}/videostream.cgi"
+                    }
+                    isRunning = true
+                    frameCount = 0
+                    statusText = "Connecting to ${cam.ip}..."
+
+                    monitorJob = scope.launch {
+                        val grabber = MjpegFrameGrabber(streamUrl)
+                        grabber.stream(
+                            onFrame = { bitmap ->
+                                frameCount++
+                                statusText = "Analysing frame $frameCount..."
+                                val results = processor.detect(bitmap)
+                                results.filter { it.isThreat }.forEach { result ->
+                                    scope.launch {
+                                        dao.insert(SentinelDetection(
+                                            cameraIp   = cam.ip,
+                                            label      = result.label,
+                                            confidence = result.confidence,
+                                            frameIndex = frameCount
+                                        ))
+                                    }
+                                    statusText = "⚠️ ${result.label.uppercase()} detected (${(result.confidence * 100).toInt()}%)"
+                                }
+                            },
+                            onError = { err ->
+                                statusText = "❌ $err"
+                                isRunning = false
+                            }
+                        )
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            colors = ButtonDefaults.buttonColors(
+                if (isRunning) Color(0xFF330000) else Color(0xFF003300)
+            ),
+            border = BorderStroke(1.dp, if (isRunning) Color.Red else Color.Green),
+            shape = RoundedCornerShape(4.dp),
+            enabled = selectedCamera != null || isRunning
+        ) {
+            Icon(
+                if (isRunning) Icons.Default.Stop else Icons.Default.Radar,
+                null,
+                tint = if (isRunning) Color.Red else Color.Green
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (isRunning) "STOP SENTINEL" else "ACTIVATE SENTINEL",
+                color = if (isRunning) Color.Red else Color.Green,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // Detection log
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+            Text("THREAT LOG", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            if (detections.isNotEmpty()) {
+                TextButton(onClick = { scope.launch { dao.clearAll() } }) {
+                    Text("CLEAR", color = Color.DarkGray, fontSize = 10.sp)
+                }
+            }
+        }
+
+        LazyColumn(Modifier.fillMaxSize()) {
+            if (detections.isEmpty()) {
+                item {
+                    Text("No threats logged yet.", color = Color.DarkGray,
+                        fontSize = 11.sp, modifier = Modifier.padding(8.dp))
+                }
+            }
+            items(detections) { detection ->
+                val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+                    .format(java.util.Date(detection.timestamp))
+                Card(
+                    Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    colors = CardDefaults.cardColors(Color(0xFF0A0000)),
+                    border = BorderStroke(1.dp, Color(0xFF2A0000))
+                ) {
+                    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("⚠️", fontSize = 16.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(detection.label.uppercase(),
+                                color = Color(0xFFFF4444),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp)
+                            Text("${detection.cameraIp}  •  frame ${detection.frameIndex}",
+                                color = Color.DarkGray, fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace)
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("${(detection.confidence * 100).toInt()}%",
+                                color = Color(0xFFFF4444), fontWeight = FontWeight.Bold)
+                            Text(time, color = Color.DarkGray, fontSize = 10.sp)
                         }
                     }
                 }
