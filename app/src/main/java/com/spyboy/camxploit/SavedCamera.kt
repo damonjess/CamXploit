@@ -15,5 +15,6 @@ data class SavedCamera(
     val streamType: String = "RTSP",
     val brand: String = "Unknown",
     val lastSeen: Long = System.currentTimeMillis(),
-    val isOnline: Boolean = false
+    val isOnline: Boolean = false,
+    val remoteUrl: String? = null // New field for internet access
 )

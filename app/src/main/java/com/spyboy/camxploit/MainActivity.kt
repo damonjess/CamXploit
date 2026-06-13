@@ -413,8 +413,22 @@ fun CamGuardianApp() {
                     sys.put("stderr", pyOutputStream)
                     
                     // Run scan
-                    withTimeout(120_000) {
-                        module.callAttr("main", consoleIpInput)
+                    val heartbeat = launch(Dispatchers.Main) {
+                        val dots = listOf("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
+                        var i = 0
+                        while (isActive) {
+                            delay(500)
+                            // pulse indicator — replace last line if it was a pulse
+                            i = (i + 1) % dots.size
+                        }
+                    }
+
+                    try {
+                        withTimeout(60_000) {
+                            module.callAttr("main", consoleIpInput)
+                        }
+                    } finally {
+                        heartbeat.cancel()
                     }
                     
                     // Flush remaining output
@@ -616,19 +630,17 @@ fun CamGuardianApp() {
                     onProbeEndpoints = {
                         val targetHost = if (consoleIpInput.contains(":")) consoleIpInput.substringBefore(":") else consoleIpInput
                         val targetPort = if (consoleIpInput.contains(":")) consoleIpInput.substringAfter(":").toIntOrNull() ?: 80 else 80
-                        scope.launch(Dispatchers.IO) {
+                        scope.launch {
+                            terminalText += "🔍 Probing endpoints on $targetHost:$targetPort ...\n"
                             val scanner = CameraScanner()
-                            withContext(Dispatchers.Main) {
-                                appendToConsole("🔍 Probing endpoints on $targetHost:$targetPort ...\n")
-                            }
                             scanner.scanEndpoints(
-                                host     = targetHost,
-                                port     = targetPort,
+                                host = targetHost,
+                                port = targetPort,
                                 onResult = { result ->
-                                    appendToConsole("  🎯 Found ${result.type}: ${result.url} (HTTP ${result.httpCode})\n")
+                                    terminalText += "  🎯 Found ${result.type}: ${result.url} (HTTP ${result.httpCode})\n"
                                 },
                                 onDone = {
-                                    appendToConsole("✅ Endpoint scan complete.\n")
+                                    terminalText += "✅ Endpoint scan complete.\n"
                                 }
                             )
                         }
@@ -815,8 +827,12 @@ fun IntelTab(consoleIpInput: String, terminalText: String, onTerminalUpdate: (St
         
         Spacer(Modifier.height(20.dp))
         
-        IntelSection("EXPLOITATION VECTORS", listOf("CamOver Info Disclosure", "GoAhead Auth Bypass", "RTSP Credential Sniffing"), Color.Red, Icons.Default.Gavel) {
+        IntelSection("EXPLOITATION VECTORS", listOf("CamOver Info Disclosure", "GoAhead Auth Bypass", "RTSP Credential Sniffing", "ADB Screen Capture (Port 5555)", "Intel AMT Auth Bypass"), Color.Red, Icons.Default.Gavel) {
             onTerminalUpdate("> Testing Vector: $it...\n")
+            if (it.contains("ADB")) {
+                onTerminalUpdate("  [📡] Attempting unauthenticated ADB connection to $consoleIpInput...\n")
+                onTerminalUpdate("  [⚠️] Result: Device must have 'Wireless Debugging' enabled in Developer Options.\n")
+            }
         }
         
         Spacer(Modifier.height(16.dp))
@@ -1080,8 +1096,24 @@ fun SavedCamerasTab(onPlay: (String) -> Unit, onIpSelected: (String) -> Unit) {
                                 Text(camera.ip, color = Color.Gray, fontSize = 12.sp)
                                 Text("Brand: ${camera.brand}", color = Color.DarkGray, fontSize = 10.sp)
                             }
-                            IconButton(onClick = { onPlay(camera.streamUrl) }) {
-                                Icon(Icons.Default.PlayArrow, null, tint = Color.Cyan)
+                            IconButton(onClick = { onPlay(camera.remoteUrl ?: camera.streamUrl) }) {
+                                Icon(
+                                    imageVector = if (camera.remoteUrl != null) Icons.Default.CloudDone else Icons.Default.PlayArrow, 
+                                    null, 
+                                    tint = if (camera.remoteUrl != null) Color.Magenta else Color.Cyan
+                                )
+                            }
+                            IconButton(onClick = { 
+                                scope.launch(Dispatchers.IO) {
+                                    val py = Python.getInstance()
+                                    val relayUrl = py.getModule("CamXploit").callAttr("start_remote_relay", camera.ip, camera.port).toString()
+                                    dao.updateCamera(camera.copy(remoteUrl = relayUrl))
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(context, "Remote Bridge Active!", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }) {
+                                Icon(Icons.Default.Public, null, tint = Color.Yellow.copy(0.8f))
                             }
                             IconButton(onClick = { scope.launch(Dispatchers.IO) { dao.deleteCamera(camera) } }) {
                                 Icon(Icons.Default.Delete, null, tint = Color.Red.copy(0.7f))

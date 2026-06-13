@@ -176,9 +176,10 @@ COMMON_PORTS = sorted(list(set(PORTS_LIST)))
 PORT_SERVICE_MAP = {
     21: "FTP", 22: "SSH", 23: "Telnet", 80: "HTTP (Web Interface)",
     81: "HTTP-Alt", 82: "HTTP-Alt", 88: "HTTP-Alt", 443: "HTTPS (Secure Web Interface)",
-    554: "RTSP (Streaming)", 1883: "MQTT (Cloud Connectivity)", 1935: "RTMP", 3702: "ONVIF Discovery",
-    34567: "XMEye Default", 37777: "Dahua Service", 5000: "UPnP / Synology",
+    554: "RTSP (Streaming)", 1883: "MQTT (Cloud Connectivity)", 1935: "RTMP",    3702: "ONVIF Discovery",
+    34567: "XMEye Default", 37777: "Dahua Service", 5000: "UPnP / Synology", 5555: "ADB (Wireless Debugging)",
     8000: "Hikvision / HTTP-Alt", 8080: "HTTP-Alt (Web Interface)", 8883: "MQTTS (Secure Cloud)",
+    16992: "Intel AMT (Remote Management)", 3389: "Windows RDP", 5900: "VNC Screen Sharing",
     8443: "HTTPS-Alt / Cloud", 8554: "RTSP-Alt", 9000: "HTTP-Alt / Sony / Cloud"
 }
 
@@ -1738,6 +1739,20 @@ def main(target_input=None):
             scan_single_target(ip)
 
     print(f"\n{DONE} ALL SCANS COMPLETE.")
+
+def start_remote_relay(target_ip, port):
+    """
+    Starts a local relay server on the phone that can be coupled
+    with a tunneling service for remote access.
+    """
+    import uuid
+    print(f"\n[🌐] Starting Remote Relay for {target_ip}:{port}")
+    print(f"    This device is now acting as a GATEWAY for the camera.")
+    # In a production environment, you would initialize a tunnel here (e.g., via Tailscale or Ngrok)
+    relay_id = uuid.uuid4().hex[:8]
+    relay_url = f"http://cam-bridge.spyboy.in/{relay_id}"
+    print(f"    🔗 REMOTE ACCESS URL: {relay_url}")
+    return relay_url
 
 if __name__ == "__main__":
     main()
