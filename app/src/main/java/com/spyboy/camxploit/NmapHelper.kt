@@ -26,6 +26,18 @@ fun extractNmap(context: Context): String {
 
         // 2. Extract Data Files Recursively (nmap-services, nselib, scripts)
         copyAssetFolder(context, "nmap_data", nmapDataDir)
+
+        // 3. Extract OUI Database if present in assets
+        val ouiFile = File(context.filesDir, "oui.csv")
+        if (!ouiFile.exists() || ouiFile.length() == 0L) {
+            try {
+                context.assets.open("oui.csv").use { input ->
+                    FileOutputStream(ouiFile).use { out -> input.copyTo(out) }
+                }
+            } catch (e: Exception) {
+                // Ignore if oui.csv is not in assets
+            }
+        }
         
     } catch (e: Exception) {
         e.printStackTrace()

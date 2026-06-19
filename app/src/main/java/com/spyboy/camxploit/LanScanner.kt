@@ -158,7 +158,7 @@ class LanScanner(private val context: Context) {
         }
     }
 
-    private fun readArpTable(): Map<String, String> {
+    fun readArpTable(): Map<String, String> {
         val arpMap = mutableMapOf<String, String>()
         try {
             BufferedReader(FileReader("/proc/net/arp")).use { reader ->
@@ -174,7 +174,7 @@ class LanScanner(private val context: Context) {
         return arpMap
     }
 
-    private fun getVendor(mac: String): String {
+    fun getVendor(mac: String): String {
         if (mac == "Unknown") return "Unknown Device"
         val prefix = mac.lowercase().substring(0, minOf(8, mac.length))
         return macVendors.entries.firstOrNull {

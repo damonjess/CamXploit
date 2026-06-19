@@ -91,6 +91,8 @@ import java.util.*
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Extract assets before starting Python to ensure files are available
+        extractNmap(this)
         if (!Python.isStarted()) Python.start(AndroidPlatform(this))
         setContent { CamGuardianApp() }
     }
@@ -363,7 +365,7 @@ fun CamGuardianApp() {
     var isScanning by remember { mutableStateOf(false) }
     var viewingFile by remember { mutableStateOf<File?>(null) }
     var selectedTab by remember { mutableIntStateOf(0) }
-    var lanScanResults by remember { mutableStateOf<List<DeviceInfo>>(emptyList()) }
+    var lanScanResults by remember { mutableStateOf<List<LanHost>>(emptyList()) }
     var lanIsScanning by remember { mutableStateOf(false) }
     var lanProgress by remember { mutableStateOf(0f) }
     var lanSubnet by remember { mutableStateOf("") }
@@ -666,6 +668,7 @@ fun CamGuardianApp() {
                         scope.launch(Dispatchers.IO) {
                             val subnet = getLocalSubnet().substringBeforeLast(".0/24")
                             withContext(Dispatchers.Main) { lanSubnet = subnet }
+                            val scanner = LanScanner(context)
 
                             if (lanNmapMode) {
                                 subnetScan(
@@ -675,7 +678,10 @@ fun CamGuardianApp() {
                                         if (line.contains("Nmap scan report")) {
                                             val ip = line.substringAfter("for ").trim().split(" ").first()
                                             if (lanScanResults.none { it.ip == ip }) {
-                                                lanScanResults = lanScanResults + DeviceInfo(ip, null, emptyList())
+                                                val arp = scanner.readArpTable()
+                                                val mac = arp[ip] ?: "Unknown"
+                                                val vendor = scanner.getVendor(mac)
+                                                lanScanResults = lanScanResults + LanHost(ip = ip, mac = mac, vendor = vendor)
                                             }
                                         }
                                         lanScanOutput += "$line\n"
@@ -685,6 +691,7 @@ fun CamGuardianApp() {
                                     }
                                 )
                             } else {
+                                val arp = scanner.readArpTable()
                                 (1..254).map { i ->
                                     async {
                                         val ip = "$subnet.$i"
@@ -692,7 +699,9 @@ fun CamGuardianApp() {
                                             if (InetAddress.getByName(ip).isReachable(300)) {
                                                 withContext(Dispatchers.Main) {
                                                     if (lanScanResults.none { it.ip == ip }) {
-                                                        lanScanResults = lanScanResults + DeviceInfo(ip, null, emptyList())
+                                                        val mac = arp[ip] ?: "Unknown"
+                                                        val vendor = scanner.getVendor(mac)
+                                                        lanScanResults = lanScanResults + LanHost(ip = ip, mac = mac, vendor = vendor)
                                                     }
                                                 }
                                             }
@@ -926,7 +935,7 @@ fun ArchiveTab(context: Context, selectedTab: Int, terminalText: String, targetI
 
 @Composable
 fun LanScanTab(
-    scanResults: List<DeviceInfo>,
+    scanResults: List<LanHost>,
     isScanning: Boolean,
     progress: Float,
     subnet: String,
@@ -934,7 +943,7 @@ fun LanScanTab(
     onNmapModeChange: (Boolean) -> Unit,
     nmapOutput: String,
     onScanStart: () -> Unit,
-    onResultFound: (DeviceInfo) -> Unit,
+    onResultFound: (LanHost) -> Unit,
     onScanComplete: () -> Unit,
     onTabSwitch: (Int) -> Unit,
     onIpSelected: (String) -> Unit
@@ -955,13 +964,60 @@ fun LanScanTab(
             }
         } else {
             LazyColumn(Modifier.weight(1f)) {
-                items(scanResults) { device ->
-                    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onIpSelected(device.ip); onTabSwitch(0) }, colors = CardDefaults.cardColors(Color(0xFF0A0A0A)), border = BorderStroke(1.dp, Color(0xFF111111))) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(32.dp).background(Color(0xFF001100), CircleShape), Alignment.Center) { Icon(Icons.Default.Lan, null, tint = Color.Green, modifier = Modifier.size(16.dp)) }
-                            Spacer(Modifier.width(12.dp)); Column { Text(text = device.ip, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold); device.hostname?.let { Text(text = it, color = Color.Gray, fontSize = 11.sp) } }
-                        }
-                    }
+                items(scanResults) { host ->
+                    LanHostCard(host = host, onClick = { onIpSelected(host.ip); onTabSwitch(0) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LanHostCard(host: LanHost, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clickable { onClick() },
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
+        border = BorderStroke(1.dp, Color(0xFF111111)),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier.size(32.dp).background(Color(0xFF001100), CircleShape),
+                Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DeviceHub,
+                    contentDescription = null,
+                    tint = Color.Green,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text(
+                    text = host.ip,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                if (!host.vendor.isNullOrEmpty() && host.vendor != "Unknown" && host.vendor != "Unknown Device") {
+                    Text(
+                        text = host.vendor,
+                        color = Color(0xFF00FF41),
+                        fontSize = 11.sp
+                    )
+                } else if (!host.hostname.isNullOrEmpty() && host.hostname != "Unknown") {
+                    Text(
+                        text = host.hostname,
+                        color = Color.Gray,
+                        fontSize = 11.sp
+                    )
                 }
             }
         }
@@ -1076,7 +1132,13 @@ fun extractCredentials(text: String): Pair<String, String> {
 }
 fun buildAuthUrl(u: String, user: String, pass: String): String { if (user.isBlank() || pass.isBlank() || u.contains("@")) return u; return try { if (u.startsWith("rtsp://")) u.replace("rtsp://", "rtsp://$user:$pass@") else if (u.startsWith("http://")) u.replace("http://", "http://$user:$pass@") else u } catch (e: Exception) { u } }
 
-data class DeviceInfo(val ip: String, val hostname: String?, val openPorts: List<Int>)
+data class LanHost(
+    val ip: String,
+    val mac: String? = null,
+    val hostname: String? = null,
+    val vendor: String? = null,
+    val openPorts: List<Int> = emptyList()
+)
 
 @Composable
 fun SavedCamerasTab(onPlay: (String) -> Unit, onIpSelected: (String) -> Unit) {

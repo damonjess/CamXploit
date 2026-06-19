@@ -88,6 +88,7 @@ import ipaddress
 import base64
 import time
 import os
+import subprocess
 os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 # === STORM BREAKER MODE ===
@@ -703,54 +704,119 @@ def discover_upnp_ssdp():
 
     return "\n".join(output)
 
+OUI_DB = {}
+
+def load_oui_db():
+    """Loads OUI database from a CSV file if it exists."""
+    global OUI_DB
+    # Try multiple common locations for Android/Chaquopy
+    paths = [
+        os.path.join(os.path.dirname(__file__), "oui.csv"),
+        "/data/data/com.spyboy.camxploit/files/oui.csv",
+        os.path.join(os.environ.get("HOME", ""), "oui.csv")
+    ]
+
+    for path in paths:
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        parts = line.strip().split(',')
+                        if len(parts) >= 2:
+                            # OUI,Vendor
+                            OUI_DB[parts[0].replace(":", "").replace("-", "").upper()] = parts[1].strip('"')
+                print(f"✅ Loaded {len(OUI_DB)} OUIs from {path}")
+                return True
+            except Exception as e:
+                print(f"⚠️ Error loading OUI DB from {path}: {str(e)}")
+    return False
+
+# Initialize DB on load
+load_oui_db()
+
+def get_vendor(mac):
+    """Identifies vendor from MAC address using offline CSV, local dict, or online API."""
+    if not mac or mac == "Unknown" or mac == "00:00:00:00:00:00":
+        return "Unknown Vendor"
+
+    prefix = mac.replace(":", "").replace("-", "").upper()[:6]
+
+    # 1. Check loaded OUI Database (CSV)
+    if prefix in OUI_DB:
+        return OUI_DB[prefix]
+
+    # 2. Comprehensive offline vendor check for top camera/IoT brands (Fallback)
+    vendors = {
+        "00408C": "Axis Communications", "00E04F": "Axis Communications", "ACCC8E": "Axis Communications",
+        "001DFA": "Hikvision", "BCAD28": "Hikvision", "4419B6": "Hikvision", "CC6B1E": "Hikvision",
+        "B4A382": "Hikvision", "D89685": "Hikvision", "F4939F": "Hikvision",
+        "000B5D": "Dahua Technology", "38AF29": "Dahua Technology", "6C1F6E": "Dahua Technology",
+        "9002A9": "Dahua Technology", "BC325F": "Dahua Technology", "E40EEE": "Dahua Technology",
+        "00075F": "Panasonic", "0080F0": "Panasonic", "88108F": "Panasonic",
+        "00032F": "Sony", "000ED9": "Sony", "28C13C": "Sony",
+        "000747": "Bosch Security Systems", "000AF5": "Bosch Security Systems",
+        "0002D1": "Vivotek", "0018AE": "Vivotek",
+        "B0C554": "Reolink", "E0B94D": "Reolink",
+        "00606E": "Foscam (Shenzhen Foscan)", "B4B362": "Foscam",
+        "000325": "Mobotix", "000C29": "VMware (Virtual Target)", "080027": "VirtualBox (Virtual Target)",
+        "001723": "TP-Link", "E03F49": "TP-Link", "50C7BF": "TP-Link",
+        "001DFA": "Ubiquiti", "0418D6": "Ubiquiti", "788A20": "Ubiquiti",
+        "000420": "Samsung", "001632": "Samsung", "0012FB": "Samsung",
+        "001565": "Yealink", "000F7F": "D-Link", "001CF0": "D-Link"
+    }
+
+    vendor = vendors.get(prefix)
+    if vendor:
+        return vendor
+
+    # Online fallback for more accuracy
+    try:
+        oui = mac[:8].replace(':', '-')
+        url = f"https://api.macvendors.com/{oui}"
+        # Use make_request which has both requests and urllib fallback
+        r = make_request(url, timeout=3)
+        if r.status_code == 200:
+            return r.text.strip()
+    except:
+        pass
+
+    return "Unknown Vendor"
+
+def get_mac(ip):
+    """Reads MAC from ARP cache using 'ip neigh' command (Works on some Android versions)."""
+    try:
+        result = subprocess.check_output(['ip', 'neigh', 'show', ip], text=True)
+        # Output: "192.168.1.1 dev wlan0 lladdr aa:bb:cc:dd:ee:ff REACHABLE"
+        parts = result.split()
+        if 'lladdr' in parts:
+            return parts[parts.index('lladdr') + 1].upper()
+    except:
+        pass
+    return None
+
 def get_mac_vendor(target_ip):
     """Attempts MAC lookup via ARP and identifies Vendor."""
-    mac = "Unknown"
-    vendor = "Unknown Vendor"
-    try:
-        if not IS_ANDROID and os.path.exists("/proc/net/arp"):
-            # Try to read ARP table
-            with open("/proc/net/arp", "r") as f:
-                for line in f:
-                    if target_ip in line:
-                        parts = line.split()
-                        if len(parts) >= 4:
-                            mac = parts[3]
-                            break
-    except:
-        return "Unknown", "Unknown (Android restriction)"
+    mac = get_mac(target_ip)
 
-    try:
-        if mac != "Unknown" and mac != "00:00:00:00:00:00":
-            # Simple offline vendor check for top camera brands
-            prefix = mac.replace(":", "").upper()[:6]
-            vendors = {
-                "00408C": "Axis Communications", "00E04F": "Axis Communications", "ACCC8E": "Axis Communications",
-                "001DFA": "Hikvision", "BCAD28": "Hikvision", "4419B6": "Hikvision", "CC6B1E": "Hikvision", "B4A382": "Hikvision",
-                "000B5D": "Dahua Technology", "38AF29": "Dahua Technology", "6C1F6E": "Dahua Technology", "9002A9": "Dahua Technology",
-                "00075F": "Panasonic", "0080F0": "Panasonic", "88108F": "Panasonic",
-                "00032F": "Sony", "000ED9": "Sony", "28C13C": "Sony",
-                "000747": "Bosch Security Systems", "000AF5": "Bosch Security Systems",
-                "0002D1": "Vivotek", "0018AE": "Vivotek",
-                "B0C554": "Reolink", "E0B94D": "Reolink",
-                "00606E": "Foscam (Shenzhen Foscan)", "B4B362": "Foscam",
-                "000325": "Mobotix",
-                "000C29": "VMware (Virtual Target)", "080027": "VirtualBox (Virtual Target)"
-            }
-            vendor = vendors.get(prefix, "Searching online...")
+    # Method 2: Try /proc/net/arp if 'ip neigh' failed
+    if not mac or mac == "Unknown":
+        try:
+            if os.path.exists("/proc/net/arp"):
+                with open("/proc/net/arp", "r") as f:
+                    for line in f:
+                        if target_ip in line:
+                            parts = line.split()
+                            if len(parts) >= 4:
+                                mac = parts[3]
+                                break
+        except:
+            pass
 
-            # Online fallback for more accuracy
-            if vendor == "Searching online...":
-                try:
-                    r = requests.get(f"https://api.macvendors.com/{mac}", timeout=2)
-                    if r.status_code == 200:
-                        vendor = r.text
-                except:
-                    vendor = "Unknown (API Timeout)"
+    if not mac:
+        mac = "Unknown"
 
-        return mac, vendor
-    except:
-        return "Unknown", "MAC Restricted"
+    vendor = get_vendor(mac)
+    return mac, vendor
 
 def identify_device(ip):
     """Fallback identification when MAC is restricted (Android 10+)."""
@@ -1461,6 +1527,18 @@ def scan_single_target(target_ip, specific_port=None):
             for link in detected_links[:10]:
                 print(f"{link['type']}|{link['url']}|{link['status']}")
             print("===LINKS_END===")
+
+        # Append to storm_results for Kotlin to retrieve
+        global storm_results
+        storm_results.append({
+            "ip": target_ip,
+            "mac": mac,
+            "vendor": vendor,
+            "brand": brand,
+            "open_ports": open_ports,
+            "detected_links": detected_links,
+            "success_cred": success_cred if success_cred else None
+        })
     else:
         print(f"  {ERR} No open ports found on {target_ip}.")
 
@@ -1513,32 +1591,17 @@ def get_device_info(ip):
         pass
 
     # 2. MAC Address + Vendor Lookup
-    try:
-        if not IS_ANDROID and SCAPY_AVAILABLE:
+    mac = get_mac(ip)
+    if not mac and not IS_ANDROID and SCAPY_AVAILABLE:
+        try:
             # ARP request to get MAC
             ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=ip), timeout=2, verbose=False)
             if ans:
                 mac = ans[0][1].src
-                info["mac"] = mac
+        except: pass
 
-            # Simple vendor database (expandable)
-            vendors = {
-                "00:1A:2B": "Samsung", "00:1B:77": "Samsung", "AC:BC:32": "Samsung",
-                "00:0C:29": "VMware", "00:50:56": "VMware",
-                "00:1E:2A": "Hikvision", "B4:AD:28": "Hikvision", "44:19:B6": "Hikvision",
-                "00:0B:5D": "Dahua", "38:AF:29": "Dahua",
-                "00:80:F0": "Panasonic", "00:03:2F": "Sony",
-                "00:1A:8C": "Axis", "AC:CC:8E": "Axis",
-                "00:17:23": "TP-Link", "E0:3F:49": "TP-Link",
-                "00:1D:FA": "Ubiquiti",
-            }
-            prefix = mac.replace(":", "").upper()[:6]
-            for k, v in vendors.items():
-                if prefix.startswith(k.replace(":", "")):
-                    info["vendor"] = v
-                    break
-    except:
-        pass
+    info["mac"] = mac if mac else "Unknown"
+    info["vendor"] = get_vendor(info["mac"])
 
     # 3. Device Type Guessing
     if "hikvision" in info["hostname"].lower() or "camera" in info["hostname"].lower():
@@ -1553,7 +1616,7 @@ def get_device_info(ip):
         info["type"] = "Router/Gateway"
     elif info["vendor"] in ["Samsung", "Apple"]:
         info["type"] = "📱 Mobile Device"
-    elif info["vendor"] != "Unknown":
+    elif info["vendor"] not in ["Unknown Vendor", "Unknown"]:
         info["type"] = f"🖥️ {info['vendor']} Device"
 
     return info
