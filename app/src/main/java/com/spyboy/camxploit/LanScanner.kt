@@ -27,38 +27,31 @@ class LanScanner(private val context: Context) {
     private val devicePorts = listOf(62078, 7000, 49152, 5353)
     private val allPorts get() = (cameraPorts + commonPorts + devicePorts).distinct()
 
-    private val macVendors = mapOf(
-        "00:08:22" to "InPro (IP Camera)",
-        "00:40:8c" to "Axis Camera",
-        "ac:cc:8e" to "Axis Camera",
-        "00:1d:fa" to "Hikvision Camera",
-        "bc:ad:28" to "Hikvision Camera",
-        "4c:11:bf" to "Hikvision Camera",
-        "00:0b:5d" to "Dahua Camera",
-        "38:af:29" to "Dahua Camera",
-        "b0:c5:54" to "Reolink Camera",
-        "00:50:f2" to "Microsoft Device",
-        "dc:a6:32" to "Raspberry Pi",
-        "b8:27:eb" to "Raspberry Pi",
-        "f0:9f:c2" to "Ubiquiti",
-        "24:a4:3c" to "Ubiquiti",
-        "00:17:88" to "Philips Hue",
-        "18:b4:30" to "Nest",
-        "ac:84:c6" to "Samsung TV",
-        "00:e0:4c" to "Realtek (Windows PC)",
-        "3c:22:fb" to "Apple Device",
-        "a4:c3:f0" to "Apple Device",
-        "f4:5c:89" to "Apple iPhone/iPad",
-        "00:1a:11" to "Google Device",
-        "54:60:09" to "Google Chromecast",
-        "30:fd:38" to "Amazon Echo",
-        "44:65:0d" to "Amazon Fire TV",
-        "78:e1:03" to "TP-Link Router",
-        "c8:3a:35" to "Tenda Router",
-        "00:1e:e5" to "Cisco Router",
-        "b4:75:0e" to "Huawei Router",
-        "00:46:4b" to "NVIDIA Shield"
-    )
+    companion object {
+        private var cachedVendorMap: Map<String, String>? = null
+
+        private fun loadVendorMap(context: Context): Map<String, String> {
+            cachedVendorMap?.let { return it }
+            val map = mutableMapOf<String, String>()
+            try {
+                context.assets.open("nmap_data/nmap-mac-prefixes").bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        if (line.startsWith("#") || line.isBlank()) return@forEach
+                        val parts = line.split(" ", limit = 2)
+                        if (parts.size == 2) {
+                            map[parts[0].uppercase()] = parts[1].trim()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            cachedVendorMap = map
+            return map
+        }
+    }
+
+    private val vendorMap by lazy { loadVendorMap(context) }
 
     fun getLocalIpAndSubnet(): Pair<String, String>? {
         return try {
@@ -176,10 +169,32 @@ class LanScanner(private val context: Context) {
 
     fun getVendor(mac: String): String {
         if (mac == "Unknown") return "Unknown Device"
-        val prefix = mac.lowercase().substring(0, minOf(8, mac.length))
-        return macVendors.entries.firstOrNull {
-            prefix.startsWith(it.key.lowercase())
-        }?.value ?: "Unknown Device"
+        // Clean MAC to get OUI (first 6 chars, uppercase, no colons)
+        val cleanMac = mac.replace(":", "").uppercase()
+        if (cleanMac.length < 6) return "Unknown Device"
+        
+        val oui = cleanMac.substring(0, 6)
+        return vendorMap[oui] ?: "Unknown Device"
+    }
+
+    fun guessDeviceType(vendor: String, hostname: String, openPorts: List<Int>): String {
+        val v = vendor.lowercase()
+        val h = hostname.lowercase()
+        
+        return when {
+            v.contains("apple") || v.contains("samsung") || v.contains("huawei") || v.contains("google") -> "Phone"
+            v.contains("microsoft") || v.contains("dell") || v.contains("hp") || v.contains("lenovo") || v.contains("asus") -> "Computer"
+            v.contains("hikvision") || v.contains("dahua") || v.contains("axis") || v.contains("reolink") || openPorts.contains(554) -> "Camera"
+            v.contains("tp-link") || v.contains("d-link") || v.contains("netgear") || v.contains("cisco") || v.contains("ubiquiti") -> "Router"
+            v.contains("amazon") || v.contains("echo") || v.contains("google home") || v.contains("sonos") -> "Smart Speaker"
+            v.contains("sony") || v.contains("lg") || v.contains("panasonic") || v.contains("vizio") || h.contains("tv") -> "TV"
+            v.contains("synology") || v.contains("qnap") || openPorts.contains(445) -> "Storage"
+            v.contains("raspberry pi") -> "Single Board Computer"
+            h.contains("iphone") || h.contains("android") || h.contains("pixel") -> "Phone"
+            h.contains("macbook") || h.contains("laptop") || h.contains("desktop") -> "Computer"
+            h.contains("printer") || v.contains("canon") || v.contains("epson") || v.contains("brother") -> "Printer"
+            else -> "Unknown"
+        }
     }
 
     private fun formatDevice(device: NetworkDevice): String {

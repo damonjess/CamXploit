@@ -1,0 +1,5 @@
+- `[/]` Update Shodan OSINT reconnaissance filters
+    - `[ ]` Separate Shodan API filters from Google Search dorks in `MainActivity.kt`
+    - `[ ]` Add modern (2024-2025) Shodan filters
+    - `[ ]` Improve UI labeling for OSINT engines
+- `[ ]` Verify changes via deployment and manual testing

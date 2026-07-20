@@ -89,13 +89,14 @@ import base64
 import time
 import os
 import subprocess
+import json
 os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 # === STORM BREAKER MODE ===
 FORCE_MAX_MODE = True  # Set to True for maximum scanning
 
 if FORCE_MAX_MODE:
-    MAX_THREADS = 40
+    MAX_THREADS = 20  # Reduced from 40 for stability on mobile
     TIMEOUT = 8
     print("⚡ STORM BREAKER MODE ACTIVATED - Maximum Aggression")
 
@@ -122,7 +123,7 @@ try:
     import shodan
 except ImportError:
     shodan = None
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Suppress SSL warnings
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
@@ -174,14 +175,16 @@ PORTS_LIST = (
 )
 COMMON_PORTS = sorted(list(set(PORTS_LIST)))
 
+# Expanded Port Service Map
 PORT_SERVICE_MAP = {
-    21: "FTP", 22: "SSH", 23: "Telnet", 80: "HTTP (Web Interface)",
-    81: "HTTP-Alt", 82: "HTTP-Alt", 88: "HTTP-Alt", 443: "HTTPS (Secure Web Interface)",
-    554: "RTSP (Streaming)", 1883: "MQTT (Cloud Connectivity)", 1935: "RTMP",    3702: "ONVIF Discovery",
-    34567: "XMEye Default", 37777: "Dahua Service", 5000: "UPnP / Synology", 5555: "ADB (Wireless Debugging)",
-    8000: "Hikvision / HTTP-Alt", 8080: "HTTP-Alt (Web Interface)", 8883: "MQTTS (Secure Cloud)",
-    16992: "Intel AMT (Remote Management)", 3389: "Windows RDP", 5900: "VNC Screen Sharing",
-    8443: "HTTPS-Alt / Cloud", 8554: "RTSP-Alt", 9000: "HTTP-Alt / Sony / Cloud"
+    21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 80: "HTTP (Web Interface)",
+    81: "HTTP-Alt", 82: "HTTP-Alt", 88: "HTTP-Alt", 110: "POP3", 143: "IMAP", 443: "HTTPS (Secure)",
+    554: "RTSP (Streaming)", 1883: "MQTT (Cloud Connectivity)", 1935: "RTMP", 3306: "MySQL", 3389: "Windows RDP",
+    3702: "ONVIF Discovery", 5000: "UPnP / Synology", 5555: "ADB (Android Debug)",
+    5900: "VNC Screen Sharing", 8000: "Hikvision / HTTP-Alt", 8080: "HTTP-Alt (Web Interface)",
+    8081: "HTTP-Alt", 8443: "HTTPS-Alt / Cloud", 8883: "MQTTS (Secure Cloud)", 8554: "RTSP-Alt",
+    9000: "Sony / Bosch", 16992: "Intel AMT (Remote Management)", 34567: "XMEye Default",
+    37777: "Dahua Service", 37778: "Dahua Config", 10554: "RTSP-Alt"
 }
 
 # Expanded Fingerprint Database for many camera types
@@ -208,29 +211,20 @@ FINGERPRINT_PATHS = [
     "/cgi-bin/get_camera_params.cgi", "/cgi-bin/get_status.cgi"         # More CCTV paths
 ]
 
-# Expanded Port Service Map
-PORT_SERVICE_MAP = {
-    21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 80: "HTTP (Web Interface)",
-    81: "HTTP-Alt", 82: "HTTP-Alt", 88: "HTTP-Alt", 110: "POP3", 143: "IMAP", 443: "HTTPS (Secure)",
-    554: "RTSP (Streaming)", 1883: "MQTT (Cloud)", 1935: "RTMP", 3306: "MySQL", 3389: "RDP",
-    3702: "ONVIF Discovery", 5000: "UPnP / Synology", 5555: "ADB (Android Debug)",
-    8000: "Hikvision / HTTP-Alt", 8080: "HTTP-Alt", 8081: "HTTP-Alt", 8443: "HTTPS-Alt",
-    8883: "MQTTS", 8554: "RTSP-Alt", 9000: "Sony / Bosch", 34567: "XMEye Default",
-    37777: "Dahua Service", 37778: "Dahua Config", 10554: "RTSP-Alt"
-}
-
-# Expanded Brand-specific prioritized credentials (100+)
+# Expanded Brand-specific prioritized credentials (150+)
 BRAND_CREDENTIALS = {
-    "Hikvision": [("admin", "12345"), ("admin", "abc12345"), ("admin", "admin12345"), ("admin", "12345678a"), ("admin", "hik12345"), ("admin", "Hik12345")],
-    "Dahua": [("admin", "admin"), ("admin", "888888"), ("admin", "admin123"), ("666666", "666666"), ("admin", "password"), ("admin", "123456")],
-    "Axis": [("root", "pass"), ("root", "root"), ("root", "axis"), ("admin", "admin"), ("root", "password")],
-    "Sony": [("admin", "admin"), ("admin", ""), ("root", "root"), ("admin", "12345")],
-    "Panasonic": [("admin", "12345"), ("admin", "password"), ("admin", "admin123")],
-    "Foscam": [("admin", ""), ("admin", "admin"), ("admin", "123456")],
-    "Reolink": [("admin", ""), ("admin", "admin")],
-    "TP-Link": [("admin", "admin"), ("admin", "password"), ("admin", "12345")],
-    "Wisenet": [("admin", "4321"), ("admin", "1234567")],
-    "Vivotek": [("root", ""), ("root", "root"), ("admin", "admin")]
+    "Hikvision": [("admin", "12345"), ("admin", "abc12345"), ("admin", "admin12345"), ("admin", "12345678a"), ("admin", "hik12345"), ("admin", "Hik12345"), ("admin", "888888"), ("admin", "admin123")],
+    "Dahua": [("admin", "admin"), ("admin", "888888"), ("admin", "admin123"), ("666666", "666666"), ("admin", "password"), ("admin", "123456"), ("888888", "888888")],
+    "Axis": [("root", "pass"), ("root", "root"), ("root", "axis"), ("admin", "admin"), ("root", "password"), ("root", "12345")],
+    "Sony": [("admin", "admin"), ("admin", ""), ("root", "root"), ("admin", "12345"), ("admin", "1111")],
+    "Panasonic": [("admin", "12345"), ("admin", "password"), ("admin", "admin123"), ("admin1", "password")],
+    "Foscam": [("admin", ""), ("admin", "admin"), ("admin", "123456"), ("admin", "1111")],
+    "Reolink": [("admin", ""), ("admin", "admin"), ("admin", "12345")],
+    "TP-Link": [("admin", "admin"), ("admin", "password"), ("admin", "12345"), ("admin", "admin123")],
+    "Wisenet": [("admin", "4321"), ("admin", "1234567"), ("admin", "admin1234567")],
+    "Vivotek": [("root", ""), ("root", "root"), ("admin", "admin")],
+    "Amcrest": [("admin", "admin"), ("admin", "password")],
+    "Ubiquiti": [("ubnt", "ubnt"), ("admin", "admin")]
 }
 
 # Light Dictionary Mode (Top 50 common IoT/Camera passwords)
@@ -244,6 +238,7 @@ IOT_COMMON_PASSWORDS = [
     "private", "cisco", "login", "webcam", "video", "monitor"
 ]
 
+# Expanded Default Credentials (Legacy + Modern)
 DEFAULT_CREDENTIALS = [
     ("", ""), ("admin", ""), ("admin", "admin"), ("admin", "12345"),
     ("admin", "123456"), ("admin", "1234"), ("root", "root"), ("root", "toor"),
@@ -252,7 +247,8 @@ DEFAULT_CREDENTIALS = [
     ("admin", "admin1234"), ("guest", "guest"), ("operator", "operator"), ("service", "service"),
     ("admin", "1111"), ("admin", "0000"), ("admin", "9999"), ("admin", "123123"),
     ("root", "pass"), ("admin", "pass"), ("admin", "admin888"), ("admin", "admin777"),
-    ("admin", "smcadmin"), ("admin", "meinsm"), ("ubnt", "ubnt"), ("admin", "camera")
+    ("admin", "smcadmin"), ("admin", "meinsm"), ("ubnt", "ubnt"), ("admin", "camera"),
+    ("administrator", "1234"), ("Admin", "123456"), ("Admin", "1234"), ("root", "Admin")
 ]
 
 # Expanded CVE Database (Professional-Grade)
@@ -456,17 +452,27 @@ def directory_enumeration(ip, port, proto, brand, auth=None):
         "/cgi-bin/magicBox.cgi?action=getSystemInfo"
     ]
 
+    print(f"    [{RADR}] Running Targeted Directory Enumeration (parallel)...")
+
     found = []
-    for path in sensitive_paths:
+
+    def check_dir(path):
         try:
             url = f"{proto}://{ip}:{port}{path}"
             r = make_request(url, auth=auth, timeout=2, verify=False)
             if r.status_code == 200:
-                print(f"       {FIRE} EXPOSED: {url} (HTTP 200)")
-                found.append(path)
-            elif r.status_code == 401:
-                pass # Protected, good
+                return url
         except: pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(check_dir, path) for path in sensitive_paths]
+        for future in as_completed(futures):
+            res = future.result()
+            if res:
+                print(f"       {FIRE} EXPOSED: {res} (HTTP 200)")
+                found.append(res)
+
     return found
 
 def analyze_http_port(ip, port):
@@ -917,7 +923,7 @@ def clear_storm_results():
     storm_results = []
     return "Results Cleared"
 
-def discover_onvif(target_ip):
+def discover_onvif(target_ip, open_ports=None):
     """
     Attempts to discover ONVIF details for a specific IP.
     Uses WS-Discovery and direct service probing.
@@ -927,7 +933,7 @@ def discover_onvif(target_ip):
     try:
         if ONVIFCamera is None:
             print(f"    {RADR} Using lightweight ONVIF probe (Android compatible mode)")
-            print(onvif_probe(target_ip))
+            onvif_probe(target_ip, open_ports=open_ports)
             return
 
         # 1. WS-Discovery (Unicast Probe)
@@ -1030,19 +1036,33 @@ def discover_onvif(target_ip):
     if not discovered:
         print(f"    {INFO} No active ONVIF services detected via standard probes.")
 
-def onvif_probe(target_ip, target_port=None):
+def onvif_probe(target_ip, target_port=None, open_ports=None):
     """Lightweight ONVIF probe that works on Android via Chaquopy"""
     import socket
     import uuid
+    import base64
 
-    output = []
-    output.append("🔍 ONVIF Probe Started")
-    output.append("=" * 50)
-    output.append(f"📡 Target: {target_ip}")
-    output.append("")
+    print("🔍 ONVIF Probe Started")
+    print("=" * 50)
+    print(f"📡 Target: {target_ip}")
+    print("")
 
     # Ports to try
-    ports = [target_port] if target_port else [80, 8080, 8000, 8899, 8888, 2020]
+    if target_port:
+        ports = [target_port]
+    elif open_ports:
+        # ONLY probe ports that were actually found OPEN in the main scan.
+        # This prevents hanging on closed/filtered ports.
+        # We also include common camera ports if they were found open.
+        candidate_ports = [80, 8080, 8000, 8899, 8888, 2020, 8081, 8082, 8443, 9000, 10000, 3702, 34567, 37777]
+        ports = [p for p in open_ports if p in candidate_ports or p >= 80]
+
+        # If no common camera ports were open, just try whatever WAS open
+        if not ports:
+            ports = open_ports
+    else:
+        # Fallback if no open_ports provided (unlikely in this app)
+        ports = [80, 8080, 8000, 8899, 8888, 2020]
 
     # WS-Discovery multicast probe
     ws_probe = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -1061,84 +1081,89 @@ def onvif_probe(target_ip, target_port=None):
 </e:Envelope>"""
 
     # Step 1: WS-Discovery UDP probe on port 3702
-    output.append("📡 Step 1: WS-Discovery UDP Probe (port 3702)...")
+    import select
+    print("📡 Step 1: WS-Discovery UDP Probe (port 3702)...")
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(3)
+        sock.settimeout(1)
         sock.sendto(ws_probe.encode(), (target_ip, 3702))
-        data, _ = sock.recvfrom(4096)
-        resp = data.decode(errors='ignore')
-        output.append("  ✅ WS-Discovery Response received!")
-        if "NetworkVideoTransmitter" in resp:
-            output.append("  📷 Confirmed: NetworkVideoTransmitter (IP Camera)")
-        if "XAddr" in resp:
-            import re
-            xaddr = re.search(r"<[^>]*XAddr[^>]*>(.*?)</", resp)
-            if xaddr:
-                output.append(f"  🔗 Service URL: {xaddr.group(1).strip()}")
-        sock.close()
-    except socket.timeout:
-        output.append("  ⚠️ No WS-Discovery response (device may not support it)")
-        try: sock.close()
-        except: pass
-    except Exception as e:
-        output.append(f"  ❌ WS-Discovery failed: {type(e).__name__}")
 
-    output.append("")
+        ready = select.select([sock], [], [], 1.5)
+        if ready[0]:
+            data, _ = sock.recvfrom(4096)
+            resp = data.decode(errors='ignore')
+            print("  ✅ WS-Discovery Response received!")
+            if "NetworkVideoTransmitter" in resp:
+                print("  📷 Confirmed: NetworkVideoTransmitter (IP Camera)")
+            if "XAddr" in resp:
+                import re
+                xaddr = re.search(r"<[^>]*XAddr[^>]*>(.*?)</", resp)
+                if xaddr:
+                    print(f"  🔗 Service URL: {xaddr.group(1).strip()}")
+        else:
+            print("  ⚠️ No WS-Discovery response (device may not support it)")
+        sock.close()
+    except Exception as e:
+        print(f"  ❌ WS-Discovery failed: {type(e).__name__}")
+
+    print("")
 
     # Step 2: HTTP ONVIF endpoint probe
-    output.append("📡 Step 2: Probing ONVIF HTTP endpoints...")
+    print("📡 Step 2: Probing ONVIF HTTP endpoints...")
 
     onvif_endpoints = [
         "/onvif/device_service",
         "/onvif/devices",
         "/onvif/Media",
-        "/onvif/Events",
         "/onvif/PTZ",
-        "/onvif/imaging",
     ]
-
-    DEFAULT_CREDS = [
-        ("admin", "admin"), ("admin", "12345"), ("admin", ""),
-        ("admin", "password"), ("root", "root"), ("root", ""),
-        ("admin", "1234"), ("user", "user"), ("guest", "guest"),
-    ]
-
-    import urllib.request
-    import base64
 
     found_endpoint = None
-    working_cred   = None
+    port_lock = threading.Lock()
+    probed_ports = set()
 
+    def probe_endpoint(port_ep):
+        port, endpoint = port_ep
+        with port_lock:
+            if port not in probed_ports:
+                print(f"  📡 Probing Port {port}...")
+                probed_ports.add(port)
+
+        url = f"http://{target_ip}:{port}{endpoint}"
+        try:
+            # Use requests for better timeout behavior
+            r = make_request(url, timeout=2, verify=False)
+            if r.status_code in [200, 400, 401, 500]:
+                # We count 400/401/500 as "alive" because it means the endpoint exists but wants auth or specific SOAP
+                return (port, endpoint, r.status_code)
+        except:
+            pass
+        return None
+
+    probe_tasks = []
     for port in ports:
-        for endpoint in onvif_endpoints:
-            url = f"http://{target_ip}:{port}{endpoint}"
-            try:
-                req = urllib.request.Request(url, method='GET')
-                with urllib.request.urlopen(req, timeout=2) as r:
-                    if r.status in [200, 400, 500]:
-                        output.append(f"  ✅ ONVIF endpoint alive: {url} (HTTP {r.status})")
-                        found_endpoint = (target_ip, port, endpoint)
-                        break
-            except urllib.error.HTTPError as e:
-                if e.code in [400, 401, 500]:
-                    output.append(f"  ✅ ONVIF endpoint responds: {url} (HTTP {e.code})")
-                    found_endpoint = (target_ip, port, endpoint)
-                    break
-            except:
-                pass
-        if found_endpoint:
-            break
+        for ep in onvif_endpoints:
+            probe_tasks.append((port, ep))
+
+    with ThreadPoolExecutor(max_workers=15) as executor:
+        future_to_task = {executor.submit(probe_endpoint, task): task for task in probe_tasks}
+        for future in as_completed(future_to_task):
+            res = future.result()
+            if res:
+                port, ep, code = res
+                print(f"  ✅ ONVIF alive: http://{target_ip}:{port}{ep} (HTTP {code})")
+                if not found_endpoint:
+                    found_endpoint = (target_ip, port, ep)
 
     if not found_endpoint:
-        output.append("  ⚠️ No standard ONVIF HTTP endpoints responded")
+        print("  ⚠️ No standard ONVIF HTTP endpoints responded")
 
-    output.append("")
+    print("")
 
     # Step 3: Credential test if endpoint found
     if found_endpoint:
         ip, port, ep = found_endpoint
-        output.append("🔐 Step 3: Testing Default Credentials...")
+        print("🔐 Step 3: Testing Default Credentials...")
 
         # ONVIF GetDeviceInformation SOAP request
         soap_body = """<?xml version="1.0" encoding="UTF-8"?>
@@ -1149,87 +1174,95 @@ def onvif_probe(target_ip, target_port=None):
   </s:Body>
 </s:Envelope>"""
 
-        for user, pwd in DEFAULT_CREDS:
+        DEFAULT_CREDS = [
+            ("admin", "admin"), ("admin", "12345"), ("admin", ""),
+            ("admin", "password"), ("root", "root"), ("root", ""),
+        ]
+
+        working_cred = None
+
+        def test_cred(cred):
+            user, pwd = cred
             try:
                 url = f"http://{ip}:{port}{ep}"
-                credentials = base64.b64encode(f"{user}:{pwd}".encode()).decode()
-                req = urllib.request.Request(
-                    url,
-                    data=soap_body.encode(),
-                    headers={
-                        'Content-Type': 'application/soap+xml',
-                        'Authorization': f'Basic {credentials}'
-                    }
-                )
-                with urllib.request.urlopen(req, timeout=3) as r:
-                    resp_text = r.read().decode(errors='ignore')
-                    if "GetDeviceInformationResponse" in resp_text or r.status == 200:
-                        output.append(f"  🔥 CREDENTIALS WORK: {user}:{pwd}")
-                        working_cred = (user, pwd)
-
-                        # Extract device info from response
-                        import re
-                        for tag in ["Manufacturer", "Model", "FirmwareVersion", "SerialNumber"]:
-                            match = re.search(
-                                f"<[^>]*{tag}[^>]*>(.*?)<",
-                                resp_text, re.I
-                            )
-                            if match:
-                                output.append(f"  📋 {tag}: {match.group(1).strip()}")
-                        break
+                auth_str = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+                headers = {
+                    'Content-Type': 'application/soap+xml',
+                    'Authorization': f'Basic {auth_str}'
+                }
+                # Use requests with a clean mock response
+                r = make_request(url, method='POST', headers=headers, timeout=2.5, verify=False)
+                resp_text = r.text
+                if "GetDeviceInformationResponse" in resp_text or r.status_code == 200:
+                    return (user, pwd, resp_text)
             except:
                 pass
+            return None
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(test_cred, cred) for cred in DEFAULT_CREDS]
+            for future in as_completed(futures):
+                res = future.result()
+                if res:
+                    user, pwd, resp_text = res
+                    print(f"  🔥 CREDENTIALS WORK: {user}:{pwd}")
+                    working_cred = (user, pwd)
+                    # Extract device info
+                    import re
+                    for tag in ["Manufacturer", "Model", "FirmwareVersion", "SerialNumber"]:
+                        match = re.search(f"<[^>]*{tag}[^>]*>(.*?)<", resp_text, re.I)
+                        if match:
+                            print(f"  📋 {tag}: {match.group(1).strip()}")
+                    break
 
         if not working_cred:
-            output.append("  ℹ️ No default credentials worked")
-            output.append("  (Device may use custom credentials or digest auth)")
+            print("  ℹ️ No common default credentials worked")
 
-    output.append("")
+        print("")
 
-    # Step 4: GetProfiles if we have working creds
-    if working_cred and found_endpoint:
-        ip, port, ep = found_endpoint
-        user, pwd    = working_cred
-        output.append("📺 Step 4: Fetching Stream Profiles...")
-
-        profiles_soap = """<?xml version="1.0" encoding="UTF-8"?>
+        # Step 4: GetProfiles if we have working creds
+        if working_cred:
+            user, pwd = working_cred
+            print("📺 Step 4: Fetching Stream Profiles...")
+            profiles_soap = """<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
             xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
   <s:Body><trt:GetProfiles/></s:Body>
 </s:Envelope>"""
+            try:
+                credentials = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+                # We try different media endpoints
+                for media_ep in ["/onvif/Media", "/onvif/media", ep.replace("device_service", "Media")]:
+                    try:
+                        media_url = f"http://{ip}:{port}{media_ep}"
+                        req = urllib.request.Request(
+                            media_url,
+                            data=profiles_soap.encode(),
+                            headers={
+                                'Content-Type': 'application/soap+xml',
+                                'Authorization': f'Basic {credentials}'
+                            }
+                        )
+                        with urllib.request.urlopen(req, timeout=2) as r:
+                            resp_text = r.read().decode(errors='ignore')
+                            import re
+                            tokens = re.findall(r'token="([^"]+)"', resp_text)
+                            names = re.findall(r'<[^>]*Name[^>]*>(.*?)<', resp_text)
+                            if tokens:
+                                print(f"  ✅ Found {len(tokens)} stream profile(s):")
+                                for i, tok in enumerate(tokens):
+                                    name = names[i] if i < len(names) else "Unknown"
+                                    rtsp = f"rtsp://{user}:{pwd}@{ip}:554/onvif/profile{i}/media.smp"
+                                    print(f"  📷 Profile {i+1}: {name} (token: {tok})")
+                                    print(f"  🔗 RTSP: {rtsp}")
+                                break
+                    except:
+                        pass
+            except Exception as e:
+                print(f"  ❌ Profile fetch failed: {type(e).__name__}")
 
-        try:
-            credentials = base64.b64encode(f"{user}:{pwd}".encode()).decode()
-            media_url   = f"http://{ip}:{port}/onvif/Media"
-            req = urllib.request.Request(
-                media_url,
-                data=profiles_soap.encode(),
-                headers={
-                    'Content-Type': 'application/soap+xml',
-                    'Authorization': f'Basic {credentials}'
-                }
-            )
-            with urllib.request.urlopen(req, timeout=3) as r:
-                resp_text = r.read().decode(errors='ignore')
-                import re
-                tokens = re.findall(r'token="([^"]+)"', resp_text)
-                names  = re.findall(r'<[^>]*Name[^>]*>(.*?)<', resp_text)
-
-                if tokens:
-                    output.append(f"  ✅ Found {len(tokens)} stream profile(s):")
-                    for i, tok in enumerate(tokens):
-                        name = names[i] if i < len(names) else "Unknown"
-                        rtsp = f"rtsp://{user}:{pwd}@{ip}:554/onvif/profile{i}/media.smp"
-                        output.append(f"  📷 Profile {i+1}: {name} (token: {tok})")
-                        output.append(f"  🔗 RTSP: {rtsp}")
-                else:
-                    output.append("  ⚠️ No profiles found in response")
-        except Exception as e:
-            output.append(f"  ❌ Profile fetch failed: {type(e).__name__}")
-
-    output.append("")
-    output.append("✅ ONVIF Probe Complete")
-    return "\n".join(output)
+    print("")
+    print("✅ ONVIF Probe Complete")
 
 def cam_over_exploit(ip, port, proto):
     """
@@ -1272,8 +1305,116 @@ def banner_grab(ip, port):
     except: pass
     return None
 
+def get_geolocation(ip):
+    """Fetches geolocation data for a public IP."""
+    print(f"\n  [{GLOB}] Fetching Geolocation for {ip}...")
+    try:
+        # Check if it's a private IP
+        if ipaddress.ip_address(ip).is_private:
+            print(f"       {INFO} Private IP detected (Local Network).")
+            return None
+
+        url = f"http://ip-api.com/json/{ip}?fields=status,message,country,countryCode,regionName,city,zip,lat,lon,timezone,isp,org,as,query"
+        r = make_request(url, timeout=5)
+        if r.status_code == 200:
+            data = json.loads(r.text)
+            if data['status'] == 'success':
+                print(f"       {GLOB} Location: {data.get('city')}, {data.get('regionName')}, {data.get('country')}")
+                print(f"       {INFO} ISP: {data.get('isp')} ({data.get('as')})")
+                print(f"       {INFO} Timezone: {data.get('timezone')}")
+                print(f"       {RADR} Coordinates: {data.get('lat')}, {data.get('lon')}")
+                print(f"       {GLOB} Maps: https://www.google.com/maps?q={data.get('lat')},{data.get('lon')}")
+                return data
+    except Exception as e:
+        print(f"       {ERR} Geolocation failed: {str(e)}")
+    return None
+
+def get_osint_links(ip):
+    """Generates OSINT search links for the target IP."""
+    print(f"\n  [{GLOB}] Generating OSINT Intelligence Links:")
+    links = {
+        "Shodan": f"https://www.shodan.io/host/{ip}",
+        "Censys": f"https://search.censys.io/hosts/{ip}",
+        "ZoomEye": f"https://www.zoomeye.org/searchResult?q={ip}",
+        "CriminalIP": f"https://www.criminalip.io/en/asset/search?query={ip}",
+        "ViewDNS": f"https://viewdns.info/iplocation/?ip={ip}"
+    }
+    for name, url in links.items():
+        print(f"       🔗 {name}: {url}")
+    return links
+
+def get_internetdb_info(ip):
+    """Fetches free host intelligence from Shodan InternetDB API (No Key/Login required)."""
+    try:
+        url = f"https://internetdb.shodan.io/{ip}"
+        r = make_request(url, timeout=5)
+        if r.status_code == 200:
+            return r.text
+    except: pass
+    return None
+
+def get_dork_suggestions(brand):
+    """Provides Google Dorking suggestions based on brand."""
+    print(f"\n  [{RADR}] Google Dorking Suggestions for {brand}:")
+    dorks = {
+        "Hikvision": [
+            'intitle:"Hikvision" inurl:login',
+            'inurl:login.asp?HIKVISION',
+            'intext:"Hikvision" intitle:"Login"'
+        ],
+        "Dahua": [
+            'intitle:"Network Camera" inurl:web-client',
+            'intitle:"Dahua" inurl:login',
+            'inurl:index.php/User/doLogin'
+        ],
+        "Axis": [
+            'intitle:"Live View / - AXIS"',
+            'inurl:axis-cgi/mjpg',
+            'inurl:axis-cgi/jpg'
+        ],
+        "Sony": [
+            'intitle:"Sony Network Camera"',
+            'inurl:sony/info',
+            'inurl:nphControlCamera'
+        ],
+        "Generic": [
+            'intitle:"IP CAMERA Viewer"',
+            'inurl:view/view.shtml',
+            'inurl:viewerframe?mode='
+        ]
+    }
+    brand_dorks = dorks.get(brand, dorks["Generic"])
+    for dork in brand_dorks:
+        print(f"       🔍 {dork}")
+    return brand_dorks
+
+def print_banner():
+    """Prints a stylized ASCII banner."""
+    banner = f"""
+{Color.CYAN}  ██████╗ █████╗ ███╗   ███╗██╗  ██╗██████╗ ██╗      ██████╗ ██╗████████╗
+ ██╔════╝██╔══██╗████╗ ████║╚██╗██╔╝██╔══██╗██║     ██╔═══██╗██║╚══██╔══╝
+ ██║     ███████║██╔████╔██║ ╚███╔╝ ██████╔╝██║     ██║   ██║██║   ██║
+ ██║     ██╔══██║██║╚██╔╝██║ ██╔██╗ ██╔═══╝ ██║     ██║   ██║██║   ██║
+ ╚██████╗██║  ██║██║ ╚═╝ ██║██╔╝ ██╗██║     ███████╗╚██████╔╝██║   ██║
+  ╚═════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝     ╚══════╝ ╚═════╝ ╚═╝   ╚═╝
+  {Color.GREEN}ADVANCED CAMERA RECONNAISSANCE TOOLKIT | v2.0.2-Android{Color.RESET}
+    """
+    print(banner)
+
+class Color:
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    RESET = '\033[0m'
+
 def scan_single_target(target_ip, specific_port=None):
     print(f"\n{SCAN} Scanning target IP: {target_ip}")
+
+    # 1. Geolocation & OSINT (New)
+    geo_data = get_geolocation(target_ip)
+    get_osint_links(target_ip)
+
     success_cred = None # Initialize to avoid UnboundLocalError
     mac, vendor = get_mac_vendor(target_ip)
     if mac != "Unknown":
@@ -1331,33 +1472,46 @@ def scan_single_target(target_ip, specific_port=None):
             elif "dahua" in content or "dahua" in server: brand = "Dahua"
             elif "axis" in content or "axis" in server: brand = "Axis"
 
-        print(f"\n  [{RADR}] Fingerprinting {target_ip}:")
+        print(f"\n  [{RADR}] Fingerprinting {target_ip} (parallel)...")
         for p in sorted(web_ports):
             proto = "https" if p in [443, 8443] else "http"
+
+            # If the port analysis failed, skip deep fingerprinting
+            if p not in open_ports: continue
+
             found_any = False
-            for path in FINGERPRINT_PATHS:
+
+            def check_path(path):
                 try:
                     url = f"{proto}://{target_ip}:{p}{path}"
-                    r = requests.get(url, timeout=3, verify=False)
+                    r = make_request(url, timeout=3, verify=False)
                     if r.status_code == 200:
+                        return url, r.text
+                except: pass
+                return None
+
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = {executor.submit(check_path, path): path for path in FINGERPRINT_PATHS}
+                for future in as_completed(futures):
+                    res = future.result()
+                    if res:
+                        url, text = res
                         print(f"    {OPEN} Found Sensitive Data/Config: {url}")
                         found_any = True
 
-                        # Extract more info if it looks like XML/JSON/Plaintext
-                        info = parse_firmware_data(r.text, brand)
+                        info = parse_firmware_data(text, brand)
                         if info["model"] != "Unknown" or info["firmware"] != "Unknown":
                             print(f"       {PLD} Extracted Intel:")
                             print(f"         - Model: {info['model']}")
                             print(f"         - Firmware: {info['firmware']}")
                             print(f"         - Build: {info['build']}")
 
+                        path = futures[future]
                         if "axis" in path: brand = "Axis"
                         elif "hikvision" in path: brand = "Hikvision"
 
-                        # Check for exposed config or debug
                         if any(x in path.lower() for x in ["config", "log", "shell", "kmsg"]):
                             print(f"       {FIRE} CRITICAL: Exposed system component detected!")
-                except: pass
 
             # Run directory enumeration
             auth_info = (success_cred[0], success_cred[1]) if success_cred else None
@@ -1366,17 +1520,16 @@ def scan_single_target(target_ip, specific_port=None):
             if not found_any:
                 print(f"    {INFO} Port {p}: No firmware data exposed.")
 
-            # Cloud and Resilience Tests
-            if p in [80, 443, 8080, 8000]:
-                test_dos_resilience(target_ip, p)
-
             # CamOver Exploit Check
             camover_creds = cam_over_exploit(target_ip, p, proto)
             if camover_creds:
                 success_cred = (camover_creds[0], camover_creds[1], f"{proto}://{target_ip}:{p}/")
 
         # New ONVIF Discovery Step
-        discover_onvif(target_ip)
+        discover_onvif(target_ip, open_ports=open_ports)
+
+        # 1. Google Dorking Suggestions (New)
+        get_dork_suggestions(brand)
 
         if brand in CVE_DATABASE:
             print(f"\n  [{SHLD}] Known Vulnerabilities for {brand}:")
@@ -1411,8 +1564,13 @@ def scan_single_target(target_ip, specific_port=None):
             if pair not in test_creds:
                 test_creds.append(pair)
 
-        for user, pwd in test_creds:
+        total_creds = len(test_creds)
+        print(f"    {INFO} Starting credential test for {total_creds} candidates...")
+        for idx, (user, pwd) in enumerate(test_creds, 1):
             if success_cred: break
+
+            if idx % 2 == 0 or idx == total_creds:
+                print(f"    {PLD} Progress: Testing {idx}/{total_creds} default credentials...")
 
             # Test HTTP
             if web_ports:
@@ -1728,6 +1886,7 @@ def get_local_ip():
         return "127.0.0.1"
 
 def main(target_input=None):
+    print_banner()
     if not target_input: return
 
     print(f"\n{SCAN} Initiating CamVigil Reconnaissance...")

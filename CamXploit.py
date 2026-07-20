@@ -94,9 +94,9 @@ os.environ['PYTHONIOENCODING'] = 'utf-8'
 FORCE_MAX_MODE = True  # Set to True for maximum scanning
 
 if FORCE_MAX_MODE:
-    MAX_THREADS = 40
-    TIMEOUT = 8
-    print("⚡ STORM BREAKER MODE ACTIVATED - Maximum Aggression")
+    MAX_THREADS = 25
+    TIMEOUT = 4
+    print("⚡ STORM BREAKER MODE ACTIVATED - Optimized for Android")
 
 try:
     from onvif import ONVIFCamera
@@ -121,7 +121,7 @@ try:
     import shodan
 except ImportError:
     shodan = None
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Suppress SSL warnings
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
@@ -1225,7 +1225,7 @@ def scan_single_target(target_ip, specific_port=None):
         nonlocal count
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(0.7) # Optimized timeout
+                s.settimeout(0.6) # Slightly faster connect check
                 if s.connect_ex((target_ip, p)) == 0:
                     with lock: open_ports.append(p)
                     service = PORT_SERVICE_MAP.get(p, "Unknown Service")
@@ -1244,6 +1244,9 @@ def scan_single_target(target_ip, specific_port=None):
             count += 1
             if not specific_port and (count % 100 == 0 or count == len(ports_to_scan)):
                 print(f"  {PLD} Progress: {count}/{len(ports_to_scan)} ports...")
+            # Add a microscopic sleep to prevent socket exhaustion on lower-end devices
+            if count % 10 == 0:
+                time.sleep(0.01)
 
     with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
         executor.map(scan_port, ports_to_scan)
