@@ -16,7 +16,9 @@ data class SavedCamera(
     val brand: String = "Unknown",
     val lastSeen: Long = System.currentTimeMillis(),
     val isOnline: Boolean = false,
-    val remoteUrl: String? = null // New field for internet access
+    val remoteUrl: String? = null, // New field for internet access
+    val mac: String? = null, // To uniquely identify even if IP changes
+    val isAutoDiscovered: Boolean = false // To distinguish between manual and auto
 ) {
     fun toStreamSource(): StreamSource {
         val finalUrl = remoteUrl ?: streamUrl

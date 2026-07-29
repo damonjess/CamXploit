@@ -14,10 +14,14 @@ class CameraMonitorService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var monitorJob: Job? = null
     private lateinit var cameraDao: CameraDao
+    private lateinit var discoveryCoordinator: DiscoveryCoordinator
+    private val scanCache = mutableMapOf<String, Long>() // IP to last scan timestamp
+    private val CACHE_EXPIRATION = 5 * 60 * 1000L // 5 minutes
 
     override fun onCreate() {
         super.onCreate()
         cameraDao = CameraDatabase.getDatabase(this).cameraDao()
+        discoveryCoordinator = DiscoveryCoordinator(this)
         createNotificationChannel()
     }
 
@@ -31,14 +35,21 @@ class CameraMonitorService : Service() {
     private fun startMonitoring() {
         monitorJob?.cancel()
         monitorJob = serviceScope.launch {
-            while (isActive) {
-                val cameras = cameraDao.getCameraList()
+            // Collect discovery results
+            launch {
+                discoveryCoordinator.discoveryFlow.collect { result ->
+                    handleDiscoveryResult(result)
+                }
+            }
 
+            while (isActive) {
+                // 1. Check status of existing cameras
+                val cameras = cameraDao.getCameraList()
                 updateForegroundNotification(cameras.size)
 
                 for (camera in cameras) {
                     val isReachable = try {
-                        InetAddress.getByName(camera.ip).isReachable(1000)
+                        java.net.InetAddress.getByName(camera.ip).isReachable(1000)
                     } catch (e: Exception) {
                         false
                     }
@@ -52,8 +63,63 @@ class CameraMonitorService : Service() {
                     }
                 }
                 
-                delay(5 * 60 * 1000) // 5 minutes
+                // 2. Start a new discovery cycle
+                discoveryCoordinator.startDiscovery()
+                
+                delay(5 * 60 * 1000) // Run a full scan every 5 minutes
             }
+        }
+    }
+
+    private suspend fun handleDiscoveryResult(result: DiscoveryCoordinator.DiscoveryResult) {
+        val now = System.currentTimeMillis()
+        val lastScan = scanCache[result.ip] ?: 0L
+
+        // Skip if recently scanned (deep probe avoidance as requested)
+        if (now - lastScan < CACHE_EXPIRATION) return
+        
+        // Identify if it's a camera
+        val isCam = result.source == "ONVIF" || 
+                     result.source.startsWith("SSDP") || 
+                     result.playableUrl != null ||
+                     result.ssdpInfo?.friendlyName?.lowercase()?.contains("camera") == true ||
+                     (result.device?.openPorts?.any { it in listOf(554, 8554, 8899, 37777, 34567) } == true)
+
+        if (!isCam) return
+
+        scanCache[result.ip] = now
+
+        val mac = result.device?.mac ?: LanScanner(this).readArpTable()[result.ip] ?: "Unknown"
+        val existingByMac = if (mac != "Unknown") cameraDao.getCameraByMac(mac) else null
+        val existingByIp = cameraDao.getCameraByIp(result.ip)
+
+        val existing = existingByMac ?: existingByIp
+
+        if (existing == null) {
+            // New camera discovered
+            val nickname = result.ssdpInfo?.friendlyName ?: result.ssdpInfo?.modelName ?: "Auto ${result.device?.vendor ?: "Camera"}"
+            val newCamera = SavedCamera(
+                nickname = nickname,
+                ip = result.ip,
+                mac = mac,
+                brand = result.device?.vendor ?: result.ssdpInfo?.manufacturer ?: "Unknown",
+                streamUrl = result.playableUrl ?: "",
+                isOnline = true,
+                isAutoDiscovered = true,
+                lastSeen = now
+            )
+            cameraDao.insertCamera(newCamera)
+            sendNotification("New Camera Discovered", "Found ${newCamera.nickname} at ${newCamera.ip}")
+        } else {
+            // Update existing camera
+            val updated = existing.copy(
+                ip = result.ip, // Update IP in case it changed (if matched by MAC)
+                mac = if (existing.mac == null || existing.mac == "Unknown") mac else existing.mac,
+                isOnline = true,
+                lastSeen = now,
+                streamUrl = if (existing.streamUrl.isEmpty()) result.playableUrl ?: "" else existing.streamUrl
+            )
+            cameraDao.updateCamera(updated)
         }
     }
 

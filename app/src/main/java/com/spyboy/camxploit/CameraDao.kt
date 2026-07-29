@@ -27,4 +27,7 @@ interface CameraDao {
 
     @Query("SELECT * FROM saved_cameras WHERE ip = :ip LIMIT 1")
     suspend fun getCameraByIp(ip: String): SavedCamera?
+
+    @Query("SELECT * FROM saved_cameras WHERE mac = :mac LIMIT 1")
+    suspend fun getCameraByMac(mac: String): SavedCamera?
 }

@@ -121,6 +121,16 @@
             android:textColor="#FFFFFF"/>
 
         <Button
+            android:id="@+id/btnPip"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginHorizontal="2dp"
+            android:text="📺 PiP"
+            android:backgroundTint="#0000AA"
+            android:textColor="#FFFFFF"/>
+
+        <Button
             android:id="@+id/btnRecord"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
