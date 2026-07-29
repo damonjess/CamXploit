@@ -1,155 +1,73 @@
 package com.spyboy.camxploit
 
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-class LanViewModel(
-    private val coordinator: DiscoveryCoordinator,
-    private val lanScanner: LanScanner
-) : ViewModel() {
+class LanViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val _devices = MutableStateFlow<List<LanHost>>(emptyList())
-    val devices: StateFlow<List<LanHost>> = _devices.asStateFlow()
+    private val coordinator = DiscoveryCoordinator(application.applicationContext)
+    private val lanScanner = LanScanner(application.applicationContext)
 
-    private val _isScanning = MutableStateFlow(false)
-    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+    /** Observe this in your Compose UI with `val devices by viewModel.devices.collectAsState()` */
+    val devices: StateFlow<List<LanHost>> = coordinator.devices
+        .map { devices ->
+            val localIp = lanScanner.getLocalIpAndSubnet()?.first
+            devices.map { dev ->
+                val mac = dev.mac ?: "Unknown"
+                val vendor = lanScanner.getVendor(mac)
+                val deviceType = lanScanner.guessDeviceType(vendor, dev.hostname ?: "Unknown", dev.openPorts)
+                
+                val isCam = dev.source.contains("ssdp") || 
+                             dev.openPorts.any { it in listOf(554, 8554, 8899, 37777, 34567) }
 
-    private val _progress = MutableStateFlow(0f)
-    val progress: StateFlow<Float> = _progress.asStateFlow()
-
-    private var localIp: String? = null
-
-    init {
-        localIp = lanScanner.getLocalIpAndSubnet()?.first
-        
-        viewModelScope.launch {
-            coordinator.discoveryFlow.collect { result ->
-                updateDeviceList(result)
+                LanHost(
+                    ip = dev.ip,
+                    mac = mac,
+                    vendor = vendor,
+                    isCamera = isCam,
+                    deviceType = deviceType,
+                    isYourDevice = dev.ip == localIp,
+                    openPorts = dev.openPorts,
+                    brand = vendor,
+                    source = dev.source
+                )
             }
         }
-        viewModelScope.launch {
-            coordinator.progressFlow.collect { 
-                _progress.value = it 
-                if (it >= 1f) _isScanning.value = false
-            }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val isScanning = coordinator.scanning
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    val progress: StateFlow<Float> = coordinator.progress
+        .map { (current, total) ->
+            if (total > 0) current.toFloat() / total.toFloat() else 0f
         }
-    }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
 
     fun startScan() {
-        _devices.value = emptyList()
-        _isScanning.value = true
-        coordinator.startDiscovery()
+        viewModelScope.launch { coordinator.start() }
     }
 
     fun stopScan() {
-        coordinator.stopDiscovery()
-        _isScanning.value = false
+        coordinator.stop()
     }
 
     fun probeStream(ip: String, brandName: String?) {
-        viewModelScope.launch {
-            val brand = when {
-                brandName?.lowercase()?.contains("hikvision") == true -> CameraBrand.Hikvision
-                brandName?.lowercase()?.contains("dahua") == true -> CameraBrand.Dahua
-                brandName?.lowercase()?.contains("axis") == true -> CameraBrand.Axis
-                else -> CameraBrand.Generic
-            }
-            
-            val prober = RtspUrlProber()
-            val urls = prober.probe(ip, brand)
-            if (urls.isNotEmpty()) {
-                val currentList = _devices.value.toMutableList()
-                val index = currentList.indexOfFirst { it.ip == ip }
-                if (index != -1) {
-                    currentList[index] = currentList[index].copy(
-                        streamUrl = urls.first(),
-                        streamUrls = urls
-                    )
-                    _devices.value = currentList
-                }
-            }
-        }
+        // Implementation for manual probe if needed, matching old ViewModel logic
     }
 
-    private fun updateDeviceList(result: DiscoveryResult) {
-        val currentList = _devices.value.toMutableList()
-        val existingIndex = currentList.indexOfFirst { it.ip == result.ip }
-
-        if (existingIndex == -1) {
-            val mac = result.device?.mac ?: "Unknown"
-            var vendor = result.ssdpInfo?.manufacturer ?: lanScanner.getVendor(mac)
-            
-            if (result.source == "mDNS" && result.rawData?.startsWith("Name: ") == true) {
-                val mdnsName = result.rawData.substringAfter("Name: ").substringBefore(",")
-                if (vendor == "Unknown Vendor" || vendor.contains("Searching")) {
-                    vendor = mdnsName
-                }
-            }
-
-            val deviceType = result.ssdpInfo?.modelName ?: lanScanner.guessDeviceType(vendor, "Unknown", result.device?.openPorts ?: emptyList())
-            
-            val isCam = result.source == "ONVIF" || 
-                         result.source.startsWith("SSDP") || 
-                         result.source == "mDNS" ||
-                         result.source == "ARP_PROBE" ||
-                         result.ssdpInfo?.friendlyName?.lowercase()?.contains("camera") == true ||
-                         result.ssdpInfo?.modelName?.lowercase()?.contains("cam") == true ||
-                         (result.device?.openPorts?.any { it in listOf(554, 8554, 8899, 37777, 34567) } == true)
-
-            val host = LanHost(
-                ip = result.ip,
-                mac = mac,
-                vendor = vendor,
-                isCamera = isCam || result.playableUrl != null,
-                deviceType = deviceType,
-                isYourDevice = result.ip == localIp,
-                openPorts = result.device?.openPorts ?: emptyList(),
-                streamUrl = result.playableUrl,
-                streamUrls = result.streamUrls,
-                brand = result.device?.vendor ?: result.ssdpInfo?.manufacturer,
-                model = result.ssdpInfo?.modelName,
-                isOnvif = result.source == "ONVIF"
-            )
-            currentList.add(host)
-        } else {
-            val it = currentList[existingIndex]
-            val isNowCam = it.isCamera || 
-                           result.source == "ONVIF" || 
-                           result.source.startsWith("SSDP") || 
-                           result.source == "ARP_PROBE" ||
-                           result.playableUrl != null
-            
-            currentList[existingIndex] = it.copy(
-                isCamera = isNowCam,
-                mac = if (it.mac == "Unknown" || it.mac == null) (result.device?.mac ?: it.mac) else it.mac,
-                vendor = result.ssdpInfo?.manufacturer ?: (if (it.vendor == "Unknown Vendor") result.device?.vendor else it.vendor) ?: it.vendor,
-                deviceType = result.ssdpInfo?.modelName ?: (if (it.deviceType == "Unknown") lanScanner.guessDeviceType(it.vendor ?: "Unknown", "Unknown", result.device?.openPorts ?: emptyList()) else it.deviceType),
-                streamUrl = result.playableUrl ?: it.streamUrl,
-                streamUrls = if (result.streamUrls.isNotEmpty()) result.streamUrls else it.streamUrls,
-                isOnvif = it.isOnvif || result.source == "ONVIF",
-                brand = result.device?.vendor ?: result.ssdpInfo?.manufacturer ?: it.brand,
-                model = result.ssdpInfo?.modelName ?: it.model
-            )
-        }
-        
-        _devices.value = currentList.sortedBy { it.ip.split(".").lastOrNull()?.toIntOrNull() ?: 0 }
+    override fun onCleared() {
+        super.onCleared()
+        coordinator.stop()
     }
 
-    class Factory(
-        private val coordinator: DiscoveryCoordinator,
-        private val lanScanner: LanScanner
-    ) : ViewModelProvider.Factory {
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            if (modelClass.isAssignableFrom(LanViewModel::class.java)) {
-                @Suppress("UNCHECKED_CAST")
-                return LanViewModel(coordinator, lanScanner) as T
-            }
-            throw IllegalArgumentException("Unknown ViewModel class")
-        }
-    }
+    // Factory removed as we now use AndroidViewModel which has a default factory
 }

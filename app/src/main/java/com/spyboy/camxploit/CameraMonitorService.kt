@@ -64,7 +64,7 @@ class CameraMonitorService : Service() {
                 }
                 
                 // 2. Start a new discovery cycle
-                discoveryCoordinator.startDiscovery()
+                discoveryCoordinator.start()
                 
                 delay(5 * 60 * 1000) // Run a full scan every 5 minutes
             }

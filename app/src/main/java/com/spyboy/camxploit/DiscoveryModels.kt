@@ -12,12 +12,13 @@ data class LanHost(
     val streamUrls: List<String> = emptyList(),
     val brand: String? = null,
     val model: String? = null,
-    val isOnvif: Boolean = false
+    val isOnvif: Boolean = false,
+    val source: String? = null
 )
 
 data class DiscoveryResult(
     val ip: String,
-    val source: String, // "SSDP", "mDNS", "ARP", "PING", "ONVIF"
+    val source: String, // "ssdp", "tcp", "icmp"
     val rawData: String? = null,
     val onvifInfo: OnvifDeviceInfo? = null,
     val ssdpInfo: SsdpDeviceInfo? = null,

@@ -382,9 +382,7 @@ fun CamGuardianApp() {
     var viewingFile by remember { mutableStateOf<File?>(null) }
     var selectedTab by remember { mutableIntStateOf(0) }
     
-    val lanViewModel: LanViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
-        factory = LanViewModel.Factory(remember { DiscoveryCoordinator(context) }, remember { LanScanner(context) })
-    )
+    val lanViewModel: LanViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val lanScanResults by lanViewModel.devices.collectAsState()
     val lanIsScanning by lanViewModel.isScanning.collectAsState()
     val lanProgress by lanViewModel.progress.collectAsState()

@@ -1,6 +1,8 @@
 package com.spyboy.camxploit
 
 import java.net.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class SsdpDiscoveryHelper {
 
@@ -12,15 +14,15 @@ class SsdpDiscoveryHelper {
         HOST: 239.255.255.250:1900
         MAN: "ssdp:discover"
         MX: 2
-        ST: urn:schemas-upnp-org:device:Camera:1
+        ST: ssdp:all
         
     """.trimIndent()
 
-    suspend fun discover(timeoutMs: Int = 3000): List<SsdpDevice> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        val devices = mutableListOf<SsdpDevice>()
+    suspend fun discover(timeoutMs: Int = 3000, onResult: (ip: String, info: String) -> Unit) = withContext(Dispatchers.IO) {
         val socket = MulticastSocket(null).apply {
             broadcast = true
             soTimeout = timeoutMs
+            reuseAddress = true
         }
 
         try {
@@ -40,7 +42,9 @@ class SsdpDiscoveryHelper {
                     val response = DatagramPacket(buffer, buffer.size)
                     socket.receive(response)
                     val text = String(response.data, 0, response.length)
-                    parseResponse(text)?.let { devices.add(it) }
+                    parseResponse(text)?.let { (ip, info) ->
+                        onResult(ip, info)
+                    }
                 } catch (e: SocketTimeoutException) { 
                     break 
                 } catch (e: Exception) {
@@ -52,15 +56,14 @@ class SsdpDiscoveryHelper {
         } finally {
             socket.close()
         }
-        devices.distinctBy { it.ip }
     }
 
-    private fun parseResponse(data: String): SsdpDevice? {
+    private fun parseResponse(data: String): Pair<String, String>? {
         val location = Regex("LOCATION:\\s*(.+)", RegexOption.IGNORE_CASE)
             .find(data)?.groupValues?.get(1)?.trim() ?: return null
         val ip = Regex("http://([0-9.]+)").find(location)?.groupValues?.get(1) ?: return null
-        return SsdpDevice(ip, location)
+        val server = Regex("SERVER:\\s*(.+)", RegexOption.IGNORE_CASE)
+            .find(data)?.groupValues?.get(1)?.trim() ?: "SSDP Device"
+        return ip to server
     }
 }
-
-data class SsdpDevice(val ip: String, val locationUrl: String)

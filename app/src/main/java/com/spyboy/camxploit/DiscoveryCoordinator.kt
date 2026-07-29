@@ -1,189 +1,118 @@
 package com.spyboy.camxploit
 
 import android.content.Context
-import android.net.wifi.WifiManager
+import android.util.Log
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.ConcurrentHashMap
 
 class DiscoveryCoordinator(private val context: Context) {
 
-    private val passiveDiscovery = PassiveDiscovery(context)
-    private val onvifProber = OnvifProber()
-    private val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-    private var multicastLock: WifiManager.MulticastLock? = null
+    private val tag = "DiscoveryCoordinator"
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val scanner = RobustLanScanner(context)
+    private val ssdpHelper = SsdpDiscoveryHelper()
+    private val lanScanner = LanScanner(context)
+
+    private val _devices = MutableStateFlow<List<RobustLanScanner.Device>>(emptyList())
+    val devices: StateFlow<List<RobustLanScanner.Device>> = _devices.asStateFlow()
+
+    private val _scanning = MutableStateFlow(false)
+    val scanning: StateFlow<Boolean> = _scanning.asStateFlow()
+
+    private val _progress = MutableStateFlow(0 to 0) // current, total
+    val progress: StateFlow<Pair<Int, Int>> = _progress.asStateFlow()
 
     private val _discoveryFlow = MutableSharedFlow<DiscoveryResult>()
-    val discoveryFlow: SharedFlow<DiscoveryResult> = _discoveryFlow
+    val discoveryFlow: SharedFlow<DiscoveryResult> = _discoveryFlow.asSharedFlow()
 
-    private var scanJob: Job? = null
+    private val deviceMap = ConcurrentHashMap<String, RobustLanScanner.Device>()
 
-    private val _progressFlow = MutableStateFlow(0f)
-    val progressFlow: StateFlow<Float> = _progressFlow
+    fun start() {
+        if (_scanning.value) return
+        _scanning.value = true
+        deviceMap.clear()
+        _devices.value = emptyList()
+        _progress.value = 0 to 0
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    fun startDiscovery() {
-        scanJob?.cancel()
-        _progressFlow.value = 0f
-
-        // Acquire Multicast Lock to receive SSDP/mDNS
-        try {
-            multicastLock?.release()
-            multicastLock = wifiManager.createMulticastLock("CamXploitDiscovery").apply {
-                setReferenceCounted(false)
-                acquire()
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        scanJob = CoroutineScope(Dispatchers.IO).launch {
-            val robustScanner = RobustLanScanner(context)
-            val lanScanner = LanScanner(context)
-            val fingerprinter = CameraFingerprinter()
-
-            // Main Robust Discovery Layer (ARP, SSDP, TCP Sweep)
-            launch {
-                // Update progress occasionally during the sweep
-                var discoveredCount = 0
-                robustScanner.scanNetwork().collect { device ->
-                    discoveredCount++
-                    // We can't easily get the "index" of the current host being scanned from the flow,
-                    // but we can at least show that work is happening.
-                    if (discoveredCount % 10 == 0 && _progressFlow.value < 0.7f) {
-                        _progressFlow.value += 0.05f
-                    }
-                    
-                    launch {
-                        val ip = device.ip
-                        val openPorts = device.openPorts
-                        val mac = device.mac ?: "Unknown"
-                        val vendor = lanScanner.getVendor(mac)
-                        
-                        // Emit initial discovery result immediately
-                        val networkDevice = NetworkDevice(ip, device.hostname ?: "Unknown", mac, vendor, openPorts)
-                        _discoveryFlow.emit(DiscoveryResult(
-                            ip = ip,
-                            source = device.source.name,
-                            device = networkDevice
-                        ))
-
-                        // Background deep probe
-                        launch {
-                            val brand = fingerprinter.identify(ip, openPorts)
-                            val streamUrls = discoverPlayableUrls(ip, brand, null)
-                            
-                            // Re-emit with deep probe results
-                            val updatedNetworkDevice = networkDevice.copy(vendor = if (brand != CameraBrand.Generic) brand.displayName else vendor)
-                            _discoveryFlow.emit(DiscoveryResult(
+        scope.launch {
+            // Run SSDP in parallel (finds UPnP cameras / routers)
+            val ssdpJob = launch {
+                try {
+                    ssdpHelper.discover(onResult = { ip, info ->
+                        addOrMerge(
+                            RobustLanScanner.Device(
                                 ip = ip,
-                                source = device.source.name,
-                                device = updatedNetworkDevice,
-                                playableUrl = streamUrls.firstOrNull(),
-                                streamUrls = streamUrls
-                            ))
-                        }
-                    }
-                }
-                _progressFlow.value = 1.0f
-            }
-            
-            // Layer 1.5: Passive mDNS (Still handled separately)
-            launch {
-                passiveDiscovery.discoverCameraServices().collect { service ->
-                    @Suppress("DEPRECATION")
-                    val ip = service.host?.hostAddress ?: return@collect
-                    val info = "Name: ${service.serviceName}, Type: ${service.serviceType}"
-                    _discoveryFlow.emit(DiscoveryResult(ip, "mDNS", rawData = info))
+                                mac = null,
+                                hostname = info,
+                                openPorts = emptyList(),
+                                source = "ssdp"
+                            )
+                        )
+                    })
+                } catch (e: Exception) {
+                    Log.e(tag, "SSDP discovery error", e)
                 }
             }
 
-            // Layer 3: Deep (ONVIF Probe)
-            launch {
-                onvifProber.probe().forEach { onvif ->
-                    val streamUrls = discoverPlayableUrls(onvif.ip, CameraBrand.Generic, onvif)
-                    _discoveryFlow.emit(DiscoveryResult(
-                        ip = onvif.ip, 
-                        source = "ONVIF", 
-                        onvifInfo = onvif, 
-                        playableUrl = streamUrls.firstOrNull(),
-                        streamUrls = streamUrls
-                    ))
-                }
-            }
-        }
-    }
-
-    fun stopDiscovery() {
-        scanJob?.cancel()
-        scanJob = null
-        try {
-            multicastLock?.release()
-            multicastLock = null
-        } catch (e: Exception) {}
-    }
-
-    private suspend fun discoverPlayableUrls(ip: String, brand: CameraBrand, onvifInfo: OnvifDeviceInfo?): List<String> = withContext(Dispatchers.IO) {
-        val prober = RtspUrlProber()
-        val results = mutableListOf<String>()
-        
-        // 1. Try ONVIF if available
-        onvifInfo?.xAddrs?.split(" ")?.firstOrNull()?.let { xAddr ->
-            onvifProber.getStreamUri(xAddr)?.let { uri ->
-                // Basic check for ONVIF URI
-                if (uri.isNotBlank()) results.add(uri)
-            }
-        }
-
-        // 2. Try brand-specific paths from RtspUrlProber
-        results.addAll(prober.probe(ip, brand))
-
-        // 3. Try common paths as fallback if nothing found yet
-        if (results.isEmpty()) {
-            val commonPaths = listOf(
-                "/Streaming/Channels/101",
-                "/cam/realmonitor?channel=1&subtype=0",
-                "/live/ch0",
-                "/onvif/Media",
-                "/mpeg4/ch1/main/av_stream",
-                "/video.m4v",
-                "/live.sdp"
+            // Run active TCP/ICMP scan
+            val scanJob = scanner.scan(
+                timeoutMs = 1000,
+                onResult = { addOrMerge(it) },
+                onProgress = { cur, tot -> _progress.value = cur to tot },
+                onFinished = { }
             )
-            
-            commonPaths.map { path ->
-                async {
-                    val url = "rtsp://$ip:554$path"
-                    if (isEndpointValidInternal(url)) url else null
-                }
-            }.awaitAll().filterNotNull().forEach { results.add(it) }
-        }
 
-        results.distinct()
+            scanJob.join()
+            delay(800) // let late SSDP responses trickle in
+            ssdpJob.cancelAndJoin()
+
+            _scanning.value = false
+        }
     }
 
-    private suspend fun isEndpointValidInternal(url: String): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val uri = java.net.URI.create(url)
-            val host = uri.host ?: return@withContext false
-            val port = if (uri.port == -1) 554 else uri.port
-            
-            java.net.Socket().use { socket ->
-                socket.connect(java.net.InetSocketAddress(host, port), 2000)
-                socket.soTimeout = 2000
-                val writer = socket.getOutputStream().bufferedWriter()
-                val reader = socket.getInputStream().bufferedReader()
+    private fun addOrMerge(dev: RobustLanScanner.Device) {
+        val existing = deviceMap[dev.ip]
+        val merged = if (existing != null) {
+            existing.copy(
+                mac = dev.mac ?: existing.mac,
+                hostname = dev.hostname ?: existing.hostname,
+                openPorts = (existing.openPorts + dev.openPorts).distinct().sorted(),
+                source = if (existing.source.contains(dev.source)) existing.source
+                         else "${existing.source},${dev.source}"
+            )
+        } else dev
 
-                writer.write("DESCRIBE $url RTSP/1.0\r\n")
-                writer.write("CSeq: 1\r\n")
-                writer.write("User-Agent: CamXploit\r\n")
-                writer.write("Accept: application/sdp\r\n")
-                writer.write("\r\n")
-                writer.flush()
+        deviceMap[dev.ip] = merged
+        _devices.value = deviceMap.values.sortedBy { it.ip }
 
-                val response = reader.readLine() ?: ""
-                response.contains("200") || response.contains("401")
-            }
-        } catch (_: Exception) {
-            false
+        // Emit for background monitor and logging
+        scope.launch {
+            val mac = merged.mac ?: "Unknown"
+            val vendor = lanScanner.getVendor(mac)
+            val networkDevice = NetworkDevice(
+                ip = merged.ip,
+                hostname = merged.hostname ?: "Unknown",
+                mac = mac,
+                vendor = vendor,
+                openPorts = merged.openPorts
+            )
+            _discoveryFlow.emit(DiscoveryResult(
+                ip = merged.ip,
+                source = merged.source,
+                device = networkDevice
+            ))
         }
+    }
+
+    fun stop() {
+        scanner.cancel()
+        scope.cancel()
     }
 }

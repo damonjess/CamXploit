@@ -1,0 +1,3 @@
+- [x] Replace `StormBreakerScreen.kt` content with Tidy Storm design
+- [x] Verify build
+- [x] Take screenshot to confirm UI change
