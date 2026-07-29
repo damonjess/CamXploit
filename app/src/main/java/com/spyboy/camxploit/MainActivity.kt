@@ -374,15 +374,21 @@ class TerminalOutputStream(val onText: (String) -> Unit) : OutputStream() {
 
 @Composable
 fun CamGuardianApp() {
+    val context = LocalContext.current
     var terminalText by remember { mutableStateOf("> System Initialized. Awaiting Target...\n") }
     var currentPulse by remember { mutableStateOf("") }
     var consoleIpInput by remember { mutableStateOf("") }
     var isScanning by remember { mutableStateOf(false) }
     var viewingFile by remember { mutableStateOf<File?>(null) }
     var selectedTab by remember { mutableIntStateOf(0) }
-    var lanScanResults by remember { mutableStateOf<List<LanHost>>(emptyList()) }
-    var lanIsScanning by remember { mutableStateOf(false) }
-    var lanProgress by remember { mutableStateOf(0f) }
+    
+    val lanViewModel: LanViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+        factory = LanViewModel.Factory(remember { DiscoveryCoordinator(context) }, remember { LanScanner(context) })
+    )
+    val lanScanResults by lanViewModel.devices.collectAsState()
+    val lanIsScanning by lanViewModel.isScanning.collectAsState()
+    val lanProgress by lanViewModel.progress.collectAsState()
+
     var lanSubnet by remember { mutableStateOf("") }
     var networkSummary by remember { mutableStateOf<NetworkDiscoveryHelper.NetworkSummary?>(null) }
     var showDisclaimer by remember { mutableStateOf(false) }
@@ -405,14 +411,11 @@ fun CamGuardianApp() {
     
     var isMonitorServiceRunning by remember { mutableStateOf(CameraMonitorService.isRunning) }
 
-    val context = LocalContext.current
     val cameras by CameraDatabase.getDatabase(context).cameraDao().getAllCameras().collectAsState(initial = emptyList())
     val view = LocalView.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
 
-    val discoveryCoordinator = remember { DiscoveryCoordinator(context) }
-    
     val toggleMonitorService = {
         val intent = Intent(context, CameraMonitorService::class.java)
         if (isMonitorServiceRunning) {
@@ -430,83 +433,11 @@ fun CamGuardianApp() {
     
     DisposableEffect(Unit) {
         onDispose {
-            discoveryCoordinator.stopDiscovery()
+            // Coordinator cleanup handled by ViewModel/Activity lifecycle
         }
     }
     
-    LaunchedEffect(Unit) {
-        discoveryCoordinator.progressFlow.collect { lanProgress = it }
-    }
-    
-    LaunchedEffect(Unit) {
-        val scanner = LanScanner(context)
-        discoveryCoordinator.discoveryFlow.collect { result ->
-            val existing = lanScanResults.find { it.ip == result.ip }
-            if (existing == null) {
-                // New device found
-                val arp = scanner.readArpTable()
-                val mac = arp[result.ip] ?: result.device?.mac ?: "Unknown"
-                var vendor = result.ssdpInfo?.manufacturer ?: scanner.getVendor(mac)
-                
-                // If mDNS provided a service name, it often contains the model or brand
-                if (result.source == "mDNS" && result.rawData?.startsWith("Name: ") == true) {
-                    val mdnsName = result.rawData.substringAfter("Name: ").substringBefore(",")
-                    if (vendor == "Unknown Vendor" || vendor.contains("Searching")) {
-                        vendor = mdnsName
-                    }
-                }
-
-                val deviceType = result.ssdpInfo?.modelName ?: scanner.guessDeviceType(vendor, "Unknown", result.device?.openPorts ?: emptyList())
-                
-                val isCam = result.source == "ONVIF" || 
-                             result.source.startsWith("SSDP") || 
-                             result.source == "mDNS" ||
-                             result.source == "ARP_PROBE" ||
-                             result.ssdpInfo?.friendlyName?.lowercase()?.contains("camera") == true ||
-                             result.ssdpInfo?.modelName?.lowercase()?.contains("cam") == true ||
-                             (result.device?.openPorts?.any { it in listOf(554, 8554, 8899, 37777, 34567) } == true)
-                
-                val host = LanHost(
-                    ip = result.ip,
-                    mac = mac,
-                    vendor = result.ssdpInfo?.manufacturer ?: vendor,
-                    isCamera = isCam || result.playableUrl != null,
-                    deviceType = deviceType,
-                    isYourDevice = result.ip == networkSummary?.localIp,
-                    openPorts = result.device?.openPorts ?: emptyList(),
-                    streamUrl = result.playableUrl,
-                    streamUrls = result.streamUrls,
-                    brand = result.device?.vendor ?: result.ssdpInfo?.manufacturer,
-                    model = result.ssdpInfo?.modelName,
-                    isOnvif = result.source == "ONVIF"
-                )
-                lanScanResults = lanScanResults + host
-            } else {
-                // Update existing device if new info is available
-                lanScanResults = lanScanResults.map { 
-                    if (it.ip == result.ip) {
-                        val isNowCam = it.isCamera || 
-                                       result.source == "ONVIF" || 
-                                       result.source.startsWith("SSDP") || 
-                                       result.source == "ARP_PROBE" ||
-                                       result.playableUrl != null
-                        
-                        it.copy(
-                            isCamera = isNowCam,
-                            mac = if (it.mac == "Unknown" || it.mac == null) (result.device?.mac ?: it.mac) else it.mac,
-                            vendor = result.ssdpInfo?.manufacturer ?: (if (it.vendor == "Unknown Vendor") result.device?.vendor else it.vendor) ?: it.vendor,
-                            deviceType = result.ssdpInfo?.modelName ?: (if (it.deviceType == "Unknown") scanner.guessDeviceType(it.vendor ?: "Unknown", "Unknown", result.device?.openPorts ?: emptyList()) else it.deviceType),
-                            streamUrl = result.playableUrl ?: it.streamUrl,
-                            streamUrls = if (result.streamUrls.isNotEmpty()) result.streamUrls else it.streamUrls,
-                            isOnvif = it.isOnvif || result.source == "ONVIF",
-                            brand = result.device?.vendor ?: result.ssdpInfo?.manufacturer ?: it.brand,
-                            model = result.ssdpInfo?.modelName ?: it.model
-                        )
-                    } else it 
-                }
-            }
-        }
-    }
+    // collectors removed (now in LanViewModel)
 
     val startReconScan = { targetIp: String ->
         if (targetIp.isBlank()) {
@@ -594,10 +525,6 @@ fun CamGuardianApp() {
         if (!(permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false) && !(permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false)) Toast.makeText(context, "Location permission required", Toast.LENGTH_LONG).show()
     }
 
-    LaunchedEffect(Unit) {
-        discoveryCoordinator.progressFlow.collect { lanProgress = it }
-    }
-    
     LaunchedEffect(Unit) {
         val permissions = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -744,22 +671,13 @@ fun CamGuardianApp() {
                         isMonitorRunning = isMonitorServiceRunning,
                         onToggleMonitor = toggleMonitorService,
                         onScanStart = { 
-                            lanIsScanning = true
-                            lanScanResults = emptyList()
-                            lanProgress = 0f
                             lanScanOutput = "> Initiating Multi-Layer Discovery...\n"
                             
                             // Get network summary if not already there
                             val discoveryHelper = NetworkDiscoveryHelper(context)
                             networkSummary = discoveryHelper.getNetworkSummary()
                             
-                            discoveryCoordinator.startDiscovery()
-                            
-                            // Auto-stop after some time if needed, or keep listening
-                            scope.launch {
-                                delay(30000) // 30 seconds for active layers
-                                if (lanIsScanning) lanIsScanning = false
-                            }
+                            lanViewModel.startScan()
                         }, 
                         { selectedTab = it }, 
                         { consoleIpInput = it; selectedTab = 0 }, 
@@ -1014,20 +932,6 @@ fun StormTab(onAutoRescan: (String) -> Unit, onSaveResults: (String, String) -> 
 
 fun extractCredentials(text: String): Pair<String, String> { val u = Regex("""User:\s*(\S+)""").find(text)?.groupValues?.get(1) ?: "admin"; val p = Regex("""Pass:\s*(\S+)""").find(text)?.groupValues?.get(1) ?: "admin"; return u to p }
 fun buildAuthUrl(u: String, user: String, pass: String): String { if (user.isBlank() || pass.isBlank() || u.contains("@")) return u; return try { if (u.startsWith("rtsp://")) u.replace("rtsp://", "rtsp://$user:$pass@") else if (u.startsWith("http://")) u.replace("http://", "http://$user:$pass@") else u } catch (e: Exception) { u } }
-data class LanHost(
-    val ip: String,
-    val mac: String? = null,
-    val vendor: String? = null,
-    val deviceType: String = "Unknown",
-    val isYourDevice: Boolean = false,
-    val openPorts: List<Int> = emptyList(),
-    val isCamera: Boolean = false,
-    val streamUrl: String? = null,
-    val streamUrls: List<String> = emptyList(),
-    val brand: String? = null,
-    val model: String? = null,
-    val isOnvif: Boolean = false
-)
 
 @Composable
 fun SavedCamerasTab(onPlay: (SavedCamera) -> Unit, onIpSelected: (String) -> Unit) {

@@ -12,17 +12,6 @@ class DiscoveryCoordinator(private val context: Context) {
     private val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
     private var multicastLock: WifiManager.MulticastLock? = null
 
-    data class DiscoveryResult(
-        val ip: String,
-        val source: String, // "SSDP", "mDNS", "ARP", "PING", "ONVIF"
-        val rawData: String? = null,
-        val onvifInfo: OnvifDeviceInfo? = null,
-        val ssdpInfo: SsdpDeviceInfo? = null,
-        val device: NetworkDevice? = null,
-        val playableUrl: String? = null,
-        val streamUrls: List<String> = emptyList()
-    )
-
     private val _discoveryFlow = MutableSharedFlow<DiscoveryResult>()
     val discoveryFlow: SharedFlow<DiscoveryResult> = _discoveryFlow
 

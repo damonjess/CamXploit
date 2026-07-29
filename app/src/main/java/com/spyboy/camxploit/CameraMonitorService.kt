@@ -71,7 +71,7 @@ class CameraMonitorService : Service() {
         }
     }
 
-    private suspend fun handleDiscoveryResult(result: DiscoveryCoordinator.DiscoveryResult) {
+    private suspend fun handleDiscoveryResult(result: DiscoveryResult) {
         val now = System.currentTimeMillis()
         val lastScan = scanCache[result.ip] ?: 0L
 
