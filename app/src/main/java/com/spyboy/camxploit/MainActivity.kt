@@ -425,25 +425,45 @@ fun CamGuardianApp() {
                 val scanner = LanScanner(context)
                 val arp = scanner.readArpTable()
                 val mac = arp[result.ip] ?: result.device?.mac ?: "Unknown"
-                val vendor = scanner.getVendor(mac)
-                val deviceType = scanner.guessDeviceType(vendor, "Unknown", result.device?.openPorts ?: emptyList())
-                val isCam = result.source == "ONVIF" || result.source == "SSDP" || 
+                var vendor = result.ssdpInfo?.manufacturer ?: scanner.getVendor(mac)
+                
+                // If mDNS provided a service name, it often contains the model or brand
+                if (result.source == "mDNS" && result.rawData?.startsWith("Name: ") == true) {
+                    val mdnsName = result.rawData.substringAfter("Name: ").substringBefore(",")
+                    if (vendor == "Unknown Vendor" || vendor.contains("Searching")) {
+                        vendor = mdnsName
+                    }
+                }
+
+                val deviceType = result.ssdpInfo?.modelName ?: scanner.guessDeviceType(vendor, "Unknown", result.device?.openPorts ?: emptyList())
+                
+                val isCam = result.source == "ONVIF" || 
+                             result.source.startsWith("SSDP") || 
+                             result.source == "mDNS" ||
+                             result.ssdpInfo?.friendlyName?.lowercase()?.contains("camera") == true ||
+                             result.ssdpInfo?.modelName?.lowercase()?.contains("cam") == true ||
                              (result.device?.openPorts?.any { it in listOf(554, 8554, 8899, 37777, 34567) } == true)
                 
                 val host = LanHost(
                     ip = result.ip,
                     mac = mac,
-                    vendor = vendor,
+                    vendor = result.ssdpInfo?.friendlyName ?: vendor,
                     isCamera = isCam,
                     deviceType = deviceType,
                     isYourDevice = result.ip == networkSummary?.localIp,
                     openPorts = result.device?.openPorts ?: emptyList()
                 )
                 lanScanResults = lanScanResults + host
-            } else if (result.source == "ONVIF" || result.source == "SSDP") {
-                // Update existing device if it's confirmed as a camera
+            } else if (result.source == "ONVIF" || result.source.startsWith("SSDP")) {
+                // Update existing device if it's confirmed as a camera or has better info
                 lanScanResults = lanScanResults.map { 
-                    if (it.ip == result.ip) it.copy(isCamera = true) else it 
+                    if (it.ip == result.ip) {
+                        it.copy(
+                            isCamera = true,
+                            vendor = result.ssdpInfo?.friendlyName ?: it.vendor,
+                            deviceType = result.ssdpInfo?.modelName ?: it.deviceType
+                        )
+                    } else it 
                 }
             }
         }
@@ -865,7 +885,11 @@ fun LanHostCard(host: LanHost, onClick: () -> Unit) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Devices, null, tint = if (host.isCamera) Color.Cyan else Color.Gray)
             Spacer(modifier = Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) { Text(text = host.ip, color = Color.White, fontWeight = FontWeight.Bold); Text(text = host.vendor ?: "Unknown Vendor", color = Color.Gray, fontSize = 11.sp) }
+            Column(Modifier.weight(1f)) { 
+                Text(text = host.ip, color = Color.White, fontWeight = FontWeight.Bold)
+                val subtitle = if (host.deviceType != "Unknown") "${host.vendor} | ${host.deviceType}" else host.vendor ?: "Unknown Vendor"
+                Text(text = subtitle, color = Color.Gray, fontSize = 11.sp) 
+            }
             if (host.isCamera) Button(onClick = onClick, modifier = Modifier.height(24.dp), contentPadding = PaddingValues(horizontal = 8.dp)) { Text("LIVE", fontSize = 9.sp) }
         }
     }

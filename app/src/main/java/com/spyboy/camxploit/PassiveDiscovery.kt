@@ -57,10 +57,10 @@ class PassiveDiscovery(private val context: Context) {
      */
     fun discoverCameraServices() = callbackFlow {
         val serviceTypes = listOf(
-            "_onvif._tcp.",
-            "_axis-video._tcp.",
-            "_http._tcp.",
-            "_rtsp._tcp."
+            "_onvif._tcp",
+            "_axis-video._tcp",
+            "_http._tcp",
+            "_rtsp._tcp"
         )
 
         val listeners = serviceTypes.map { type ->

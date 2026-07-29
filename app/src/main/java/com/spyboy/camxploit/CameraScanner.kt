@@ -198,15 +198,16 @@ class CameraScanner {
             }
             val code = conn.responseCode
             val contentType = conn.contentType?.lowercase() ?: ""
-            val server = conn.getHeaderField("Server") ?: ""
-            val auth = conn.getHeaderField("WWW-Authenticate") ?: ""
             
+            val headers = conn.headerFields.entries.joinToString("\n") { (k, v) -> "$k: ${v.joinToString(",")}" }
+            val body = if (code == 200) {
+                try { conn.inputStream.bufferedReader().use { it.readText() } } catch (_: Exception) { "" }
+            } else ""
+
             conn.disconnect()
 
             // Heuristics to confirm it's a camera
-            var brand: String? = null
-            if (server.contains("Hikvision") || auth.contains("Hikvision")) brand = "Hikvision"
-            if (server.contains("Dahua") || auth.contains("Dahua")) brand = "Dahua"
+            val brand = HttpFingerprinter().match(headers, body)
 
             val isLikelyMedia = contentType.contains("image") || 
                                contentType.contains("video") || 

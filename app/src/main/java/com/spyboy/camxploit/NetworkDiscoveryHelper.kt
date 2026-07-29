@@ -55,11 +55,11 @@ class NetworkDiscoveryHelper(private val context: Context) {
 
     fun discoverMDNS() = callbackFlow {
         val serviceTypes = listOf(
-            "_onvif._tcp.",
-            "_axis-video._tcp.",
-            "_http._tcp.",
-            "_rtsp._tcp.",
-            "_printer._tcp.", // Cameras sometimes announce as printers? Rare but seen.
+            "_onvif._tcp",
+            "_axis-video._tcp",
+            "_http._tcp",
+            "_rtsp._tcp",
+            "_printer._tcp",
             "_services._dns-sd._udp"
         )
 

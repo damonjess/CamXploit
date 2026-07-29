@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import kotlinx.coroutines.*
-import kotlinx.coroutines.sync.Semaphore
 import java.io.BufferedReader
 import java.io.FileReader
 import java.net.InetAddress
@@ -22,8 +21,8 @@ data class NetworkDevice(
 
 class LanScanner(private val context: Context) {
 
-    private val cameraPorts = listOf(81, 554, 8080, 8554, 8899, 37777, 34567)
-    private val commonPorts = listOf(80, 443, 8443, 22, 21, 445, 5000, 9000)
+    private val cameraPorts = listOf(80, 81, 88, 443, 554, 8080, 8443, 8554, 8899, 10554)
+    private val commonPorts = listOf(22, 21, 445, 5000, 9000, 37777, 34567)
     private val devicePorts = listOf(62078, 7000, 49152, 5353)
     private val allPorts get() = (cameraPorts + commonPorts + devicePorts).distinct()
 
@@ -86,69 +85,63 @@ class LanScanner(private val context: Context) {
         } catch (e: Exception) { null }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     suspend fun scanNetwork(
         onProgress: (String) -> Unit,
         onDeviceFound: (NetworkDevice) -> Unit
     ) = coroutineScope {
-        withContext(Dispatchers.IO) {
+        val (localIp, subnet) = getLocalIpAndSubnet()
+            ?: run { onProgress("❌ Could not get local IP"); return@coroutineScope }
 
-            val (localIp, subnet) = getLocalIpAndSubnet()
-                ?: run { onProgress("❌ Could not get local IP"); return@withContext }
+        onProgress("📱 Your IP: $localIp")
+        onProgress("🌐 Scanning $subnet.1 - $subnet.254 ...\n")
 
-            onProgress("📱 Your IP: $localIp")
-            onProgress("🌐 Scanning $subnet.1 - $subnet.254 ...\n")
+        val scanDispatcher = Dispatchers.IO.limitedParallelism(50)
 
-            // Phase 1: parallel ping sweep (fast)
-            val liveHosts = (1..254).map { i ->
-                async {
-                    val ip = "$subnet.$i"
-                    try {
-                        if (InetAddress.getByName(ip).isReachable(200)) ip else null
-                    } catch (_: Exception) { null }
-                }
-            }.awaitAll().filterNotNull()
+        // Phase 1: parallel ping sweep (fast)
+        val liveHosts = (1..254).map { i ->
+            async(scanDispatcher) {
+                val ip = "$subnet.$i"
+                try {
+                    if (InetAddress.getByName(ip).isReachable(200)) ip else null
+                } catch (_: Exception) { null }
+            }
+        }.awaitAll().filterNotNull()
 
-            onProgress("✅ Found ${liveHosts.size} live host(s), checking ports...\n")
+        onProgress("✅ Found ${liveHosts.size} live host(s), checking ports...\n")
 
-            val arpTable = readArpTable()
+        val arpTable = readArpTable()
 
-            // Phase 2: parallel port checking (32 hosts at a time for fast layer)
-            val semaphore = Semaphore(32)
-            liveHosts.sorted().map { ip ->
-                async {
-                    semaphore.acquire()
-                    try {
-                        // Check all ports for this host in parallel
-                        val openPorts = allPorts.map { port ->
-                            async {
-                                try {
-                                    Socket().use { s ->
-                                        s.connect(InetSocketAddress(ip, port), 300)
-                                        port
-                                    }
-                                } catch (_: Exception) { null }
+        // Phase 2: parallel port checking
+        liveHosts.sorted().map { ip ->
+            async(scanDispatcher) {
+                // Check all ports for this host in parallel
+                val openPorts = allPorts.map { port ->
+                    async(scanDispatcher) {
+                        try {
+                            Socket().use { s ->
+                                s.connect(InetSocketAddress(ip, port), 250)
+                                port
                             }
-                        }.awaitAll().filterNotNull()
-
-                        val hostname = try {
-                            val h = InetAddress.getByName(ip).canonicalHostName
-                            if (h == ip) "Unknown" else h
-                        } catch (_: Exception) { "Unknown" }
-
-                        val mac = arpTable[ip] ?: "Unknown"
-                        val vendor = getVendor(mac)
-
-                        val device = NetworkDevice(ip, hostname, mac, vendor, openPorts)
-                        withContext(Dispatchers.Main) {
-                            onDeviceFound(device)
-                            onProgress(formatDevice(device))
-                        }
-                    } finally {
-                        semaphore.release()
+                        } catch (_: Exception) { null }
                     }
+                }.awaitAll().filterNotNull()
+
+                val hostname = try {
+                    val h = InetAddress.getByName(ip).canonicalHostName
+                    if (h == ip) "Unknown" else h
+                } catch (_: Exception) { "Unknown" }
+
+                val mac = arpTable[ip] ?: "Unknown"
+                val vendor = getVendor(mac)
+
+                val device = NetworkDevice(ip, hostname, mac, vendor, openPorts)
+                withContext(Dispatchers.Main) {
+                    onDeviceFound(device)
+                    onProgress(formatDevice(device))
                 }
-            }.awaitAll()
-        }
+            }
+        }.awaitAll()
     }
 
     fun readArpTable(): Map<String, String> {
