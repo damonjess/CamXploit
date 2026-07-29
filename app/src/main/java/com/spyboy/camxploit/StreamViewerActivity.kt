@@ -91,65 +91,54 @@ class StreamViewerActivity : AppCompatActivity() {
         }
     }
 
-    private var player: ExoPlayer? = null
-
     private fun startPlayback(source: StreamSource) {
-        val streamUrl = source.getAuthenticatedUrl()
-        
-        if (source is StreamSource.Mjpeg) {
-            // Fallback for MJPEG if needed, or focus on RTSP as requested
-            viewModel.startStream(source)
-            return
-        }
-
-        player?.release()
-        player = ExoPlayer.Builder(this).build().apply {
-            val mediaItem = MediaItem.fromUri(android.net.Uri.parse(streamUrl))
-            
-            // RTSP-specific factory for robustness (handles handshake, RTP over TCP/UDP)
-            val rtspFactory = RtspMediaSource.Factory()
-                .setForceUseRtpTcp(true) // Common for camera stability over NAT/Firewalls
-            
-            val mediaSource = rtspFactory.createMediaSource(mediaItem)
-
-            addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(state: Int) {
-                    when (state) {
-                        Player.STATE_BUFFERING -> findViewById<android.widget.TextView>(R.id.tvStreamStatus).apply {
-                            text = "● BUFFERING"
-                            setTextColor(0xFFFFA500.toInt())
-                        }
-                        Player.STATE_READY -> {
-                            findViewById<android.widget.TextView>(R.id.tvStreamStatus).apply {
-                                text = "● LIVE"
-                                setTextColor(0xFF00FF00.toInt())
-                            }
-                            val format = videoFormat
-                            if (format != null) {
-                                findViewById<android.widget.TextView>(R.id.tvStreamInfo).text = 
-                                    "Resolution: ${format.width}x${format.height} | Codec: ${format.codecs ?: "H.264"}"
-                            }
-                        }
-                        Player.STATE_ENDED -> findViewById<android.widget.TextView>(R.id.tvStreamStatus).text = "● ENDED"
-                        Player.STATE_IDLE -> findViewById<android.widget.TextView>(R.id.tvStreamStatus).text = "● IDLE"
-                    }
-                }
-
-                override fun onPlayerError(error: PlaybackException) {
-                    findViewById<android.widget.TextView>(R.id.tvStreamStatus).apply {
-                        text = "● ERROR"
-                        setTextColor(0xFFFF0000.toInt())
-                    }
-                    Toast.makeText(this@StreamViewerActivity, "Stream Error: ${error.message}", Toast.LENGTH_SHORT).show()
-                }
-            })
-
-            setMediaSource(mediaSource)
-            prepare()
-            playWhenReady = true
-        }
-        playerView.player = player
+        viewModel.startStream(source)
         updateRenderingViews()
+    }
+
+    private fun updateRenderingViews() {
+        when (streamSource) {
+            is StreamSource.Mjpeg -> {
+                playerView.visibility = View.GONE
+                ivMjpeg.visibility = View.VISIBLE
+            }
+            else -> {
+                playerView.visibility = View.VISIBLE
+                playerView.player = viewModel.getPlayer()
+                ivMjpeg.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun showCredentialDialog() {
+        val layout = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(50, 40, 50, 10)
+        }
+        val userField = android.widget.EditText(this).apply { hint = "Username" }
+        val passField = android.widget.EditText(this).apply { 
+            hint = "Password"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        layout.addView(userField)
+        layout.addView(passField)
+
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Authentication Required")
+            .setMessage("Enter credentials for $targetIp")
+            .setView(layout)
+            .setPositiveButton("Connect") { _, _ ->
+                val user = userField.text.toString()
+                val pass = passField.text.toString()
+                val brand = when {
+                    targetIp.lowercase().contains("hik") -> CameraBrand.Hikvision
+                    targetIp.lowercase().contains("dahua") -> CameraBrand.Dahua
+                    else -> CameraBrand.Generic
+                }
+                viewModel.probeWithCredentials(targetIp, brand, user, pass)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun observeViewModel() {
@@ -205,6 +194,11 @@ class StreamViewerActivity : AppCompatActivity() {
                                 statusText.setTextColor(0xFF00FF00.toInt())
                                 updateRenderingViews()
                             }
+                            is StreamStatus.Unauthorized -> {
+                                statusText.text = "● UNAUTHORIZED"
+                                statusText.setTextColor(0xFFFF0000.toInt())
+                                showCredentialDialog()
+                            }
                             is StreamStatus.Error -> {
                                 statusText.text = "● ERROR"
                                 statusText.setTextColor(0xFFFF0000.toInt())
@@ -231,20 +225,6 @@ class StreamViewerActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateRenderingViews() {
-        when (streamSource) {
-            is StreamSource.Mjpeg -> {
-                playerView.visibility = View.GONE
-                ivMjpeg.visibility = View.VISIBLE
-            }
-            else -> {
-                playerView.visibility = View.VISIBLE
-                playerView.player = player
-                ivMjpeg.visibility = View.GONE
-            }
-        }
-    }
-
     private fun takeSnapshot() {
         if (ivMjpeg.visibility == View.VISIBLE) {
             val drawable = ivMjpeg.drawable as? android.graphics.drawable.BitmapDrawable
@@ -256,8 +236,8 @@ class StreamViewerActivity : AppCompatActivity() {
             return
         }
 
-        val currentPlayer = player
-        if (currentPlayer == null || currentPlayer.playbackState != Player.STATE_READY) {
+        val currentPlayer = viewModel.getPlayer()
+        if (currentPlayer.playbackState != Player.STATE_READY) {
             Toast.makeText(this, "Wait for stream to be ready", Toast.LENGTH_SHORT).show()
             return
         }
@@ -366,11 +346,9 @@ class StreamViewerActivity : AppCompatActivity() {
         }
     }
 
-    override fun onPause()   { super.onPause(); player?.playWhenReady = false }
-    override fun onResume()  { super.onResume(); player?.playWhenReady = true }
+    override fun onPause()   { super.onPause(); viewModel.getPlayer().playWhenReady = false }
+    override fun onResume()  { super.onResume(); viewModel.getPlayer().playWhenReady = true }
     override fun onDestroy() { 
         super.onDestroy()
-        player?.release()
-        player = null
     }
 }

@@ -1,7 +1,6 @@
 package com.spyboy.camxploit
 
 import android.content.Context
-import android.net.wifi.WifiManager
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -34,21 +33,24 @@ class RobustLanScanner(
     enum class DiscoverySource { ARP, TCP_SCAN, SSDP, MDNS }
 
     fun scanNetwork(): Flow<DiscoveredDevice> = channelFlow {
-        val subnet = getSubnet()
-        val localIp = getLocalIpAddress() ?: return@channelFlow
+        val lanHelper = LanScanner(context)
+        val (localIp, subnet) = lanHelper.getLocalIpAndSubnet() ?: ("127.0.0.1" to "127.0.0")
         
-        Log.d("LAN_SCAN", "Scanning subnet: $subnet.0/24 from $localIp")
+        Log.d("LAN_SCAN", "Starting scan: My IP=$localIp, Subnet=$subnet.0/24")
 
         // Layer 1: Read ARP table instantly (finds recently contacted devices)
         val arpDevices = readArpTable().filter { it.ip.startsWith(subnet) && it.ip != localIp }
+        Log.d("LAN_SCAN", "ARP Table found ${arpDevices.size} potential devices")
         arpDevices.forEach { 
             send(it.copy(source = DiscoverySource.ARP)) 
         }
 
         // Layer 2: SSDP multicast (finds UPnP cameras/routers instantly)
         launch {
-            ssdpDiscover().forEach { device ->
-                send(device.copy(source = DiscoverySource.SSDP))
+            ssdpDiscover().collect { device ->
+                if (device.ip.startsWith(subnet)) {
+                    send(device.copy(source = DiscoverySource.SSDP))
+                }
             }
         }
 
@@ -57,49 +59,64 @@ class RobustLanScanner(
             arpDevices.forEach { put(it.ip, true) }
         }
 
-        (1..254).map { i ->
+        // Divide 254 IPs into smaller chunks to avoid overwhelming the system
+        val hostRange = (1..254)
+        hostRange.map { i ->
             async(dispatcher) {
                 val ip = "$subnet.$i"
                 if (ip == localIp || alreadyFound.containsKey(ip)) return@async
 
-                // Try ICMP first (works on some devices, fails silently on others)
-                if (isHostReachableByTcp(ip, 7)) { // Echo port
-                    val ports = probePorts(ip)
-                    if (ports.isNotEmpty()) {
-                        val device = DiscoveredDevice(
-                            ip = ip,
-                            mac = getMacFromArp(ip),
-                            openPorts = ports,
-                            hostname = resolveHostname(ip),
-                            source = DiscoverySource.TCP_SCAN
-                        )
-                        if (!isClosedForSend) send(device)
-                    }
-                } else {
-                    // Even if ICMP fails, try common camera ports
-                    val ports = probePorts(ip)
-                    if (ports.isNotEmpty()) {
-                        val device = DiscoveredDevice(
-                            ip = ip,
-                            mac = getMacFromArp(ip),
-                            openPorts = ports,
-                            hostname = resolveHostname(ip),
-                            source = DiscoverySource.TCP_SCAN
-                        )
-                        send(device)
-                    }
+                // Directly probe common ports. Don't rely on Port 7 or ICMP
+                val ports = probePorts(ip)
+                if (ports.isNotEmpty()) {
+                    val device = DiscoveredDevice(
+                        ip = ip,
+                        mac = getMacFromArp(ip),
+                        openPorts = ports,
+                        hostname = resolveHostname(ip),
+                        source = DiscoverySource.TCP_SCAN
+                    )
+                    send(device)
                 }
             }
         }.awaitAll()
+        
+        Log.d("LAN_SCAN", "TCP Sweep complete")
     }
 
     // --- TCP Connect Scan (works without root) ---
     private suspend fun probePorts(ip: String): List<Int> = withContext(dispatcher) {
-        probePorts.map { port ->
-            async {
-                if (isHostReachableByTcp(ip, port, timeoutMs = 800)) port else null
+        // First check port 80 as a "liveness" indicator for web-based devices/cameras
+        if (isHostReachableByTcp(ip, 80, timeoutMs = 500)) {
+            // If 80 is open, check others more slowly
+            probePorts.map { port ->
+                if (port == 80) return@map async { 80 }
+                async {
+                    if (isHostReachableByTcp(ip, port, timeoutMs = 800)) port else null
+                }
+            }.awaitAll().filterNotNull()
+        } else {
+            // If 80 is closed, check 554 (RTSP) and 443 (HTTPS) which are common for cameras
+            val keyPorts = listOf(554, 443, 8080, 8000, 37777)
+            val foundKeyPorts = keyPorts.map { port ->
+                async {
+                    if (isHostReachableByTcp(ip, port, timeoutMs = 600)) port else null
+                }
+            }.awaitAll().filterNotNull()
+            
+            if (foundKeyPorts.isNotEmpty()) {
+                // If we found a key port, check the rest of the list
+                val remaining = probePorts.filter { it !in keyPorts }
+                val remainingFound = remaining.map { port ->
+                    async {
+                        if (isHostReachableByTcp(ip, port, timeoutMs = 800)) port else null
+                    }
+                }.awaitAll().filterNotNull()
+                (foundKeyPorts + remainingFound).distinct()
+            } else {
+                emptyList()
             }
-        }.awaitAll().filterNotNull()
+        }
     }
 
     private fun isHostReachableByTcp(ip: String, port: Int, timeoutMs: Int = 1000): Boolean {
@@ -155,15 +172,14 @@ class RobustLanScanner(
     }
 
     // --- SSDP Discovery ---
-    private suspend fun ssdpDiscover(): List<DiscoveredDevice> = withContext(dispatcher) {
-        val devices = mutableListOf<DiscoveredDevice>()
-        try {
-            val socket = MulticastSocket(null).apply {
-                broadcast = true
-                soTimeout = 3000
-                reuseAddress = true
-            }
+    private fun ssdpDiscover(): Flow<DiscoveredDevice> = flow {
+        val socket = MulticastSocket(null).apply {
+            broadcast = true
+            soTimeout = 3000
+            reuseAddress = true
+        }
 
+        try {
             val packet = DatagramPacket(
                 SSDP_MESSAGE.toByteArray(),
                 SSDP_MESSAGE.length,
@@ -179,15 +195,15 @@ class RobustLanScanner(
                     val response = DatagramPacket(buffer, buffer.size)
                     socket.receive(response)
                     val text = String(response.data, 0, response.length)
-                    parseSsdpResponse(text)?.let { devices.add(it) }
+                    parseSsdpResponse(text)?.let { emit(it) }
                 } catch (e: SocketTimeoutException) { break }
             }
-            socket.close()
         } catch (e: Exception) {
             Log.e("LAN_SCAN", "SSDP failed: ${e.message}")
+        } finally {
+            socket.close()
         }
-        devices
-    }
+    }.flowOn(dispatcher)
 
     private fun parseSsdpResponse(data: String): DiscoveredDevice? {
         val location = Regex("LOCATION:\\s*(.+)", RegexOption.IGNORE_CASE)
@@ -201,27 +217,6 @@ class RobustLanScanner(
                 .find(data)?.groupValues?.get(1)?.trim(),
             source = DiscoverySource.SSDP
         )
-    }
-
-    // --- Helpers ---
-    private fun getSubnet(): String {
-        val ip = getLocalIpAddress() ?: return "192.168.1"
-        return ip.substringBeforeLast(".")
-    }
-
-    @Suppress("DEPRECATION")
-    private fun getLocalIpAddress(): String? {
-        return try {
-            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val ipInt = wifiManager.connectionInfo.ipAddress
-            String.format(
-                Locale.US,
-                "%d.%d.%d",
-                ipInt and 0xff,
-                ipInt shr 8 and 0xff,
-                ipInt shr 16 and 0xff
-            )
-        } catch (_: Exception) { "192.168.1" }
     }
 
     private fun resolveHostname(ip: String): String? {

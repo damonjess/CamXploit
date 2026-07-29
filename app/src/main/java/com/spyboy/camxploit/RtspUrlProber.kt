@@ -25,7 +25,7 @@ class RtspUrlProber {
      * Checks if an RTSP endpoint is reachable and valid.
      * Returns true for 200 OK or 401 Unauthorized (which implies the path exists).
      */
-    private fun isRtspEndpointValid(url: String): Boolean {
+    fun isRtspEndpointValid(url: String): Boolean {
         return try {
             val uri = URI.create(url)
             val host = uri.host ?: return false

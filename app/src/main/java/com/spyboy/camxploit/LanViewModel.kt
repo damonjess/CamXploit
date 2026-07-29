@@ -51,6 +51,31 @@ class LanViewModel(
         _isScanning.value = false
     }
 
+    fun probeStream(ip: String, brandName: String?) {
+        viewModelScope.launch {
+            val brand = when {
+                brandName?.lowercase()?.contains("hikvision") == true -> CameraBrand.Hikvision
+                brandName?.lowercase()?.contains("dahua") == true -> CameraBrand.Dahua
+                brandName?.lowercase()?.contains("axis") == true -> CameraBrand.Axis
+                else -> CameraBrand.Generic
+            }
+            
+            val prober = RtspUrlProber()
+            val urls = prober.probe(ip, brand)
+            if (urls.isNotEmpty()) {
+                val currentList = _devices.value.toMutableList()
+                val index = currentList.indexOfFirst { it.ip == ip }
+                if (index != -1) {
+                    currentList[index] = currentList[index].copy(
+                        streamUrl = urls.first(),
+                        streamUrls = urls
+                    )
+                    _devices.value = currentList
+                }
+            }
+        }
+    }
+
     private fun updateDeviceList(result: DiscoveryResult) {
         val currentList = _devices.value.toMutableList()
         val existingIndex = currentList.indexOfFirst { it.ip == result.ip }

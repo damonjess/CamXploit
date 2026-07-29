@@ -43,28 +43,48 @@ class DiscoveryCoordinator(private val context: Context) {
 
             // Main Robust Discovery Layer (ARP, SSDP, TCP Sweep)
             launch {
+                // Update progress occasionally during the sweep
+                var discoveredCount = 0
                 robustScanner.scanNetwork().collect { device ->
+                    discoveredCount++
+                    // We can't easily get the "index" of the current host being scanned from the flow,
+                    // but we can at least show that work is happening.
+                    if (discoveredCount % 10 == 0 && _progressFlow.value < 0.7f) {
+                        _progressFlow.value += 0.05f
+                    }
+                    
                     launch {
                         val ip = device.ip
                         val openPorts = device.openPorts
-                        
-                        val brand = fingerprinter.identify(ip, openPorts)
-                        val streamUrls = discoverPlayableUrls(ip, brand, null)
-                        
                         val mac = device.mac ?: "Unknown"
                         val vendor = lanScanner.getVendor(mac)
                         
+                        // Emit initial discovery result immediately
                         val networkDevice = NetworkDevice(ip, device.hostname ?: "Unknown", mac, vendor, openPorts)
                         _discoveryFlow.emit(DiscoveryResult(
                             ip = ip,
                             source = device.source.name,
-                            device = networkDevice,
-                            playableUrl = streamUrls.firstOrNull(),
-                            streamUrls = streamUrls
+                            device = networkDevice
                         ))
+
+                        // Background deep probe
+                        launch {
+                            val brand = fingerprinter.identify(ip, openPorts)
+                            val streamUrls = discoverPlayableUrls(ip, brand, null)
+                            
+                            // Re-emit with deep probe results
+                            val updatedNetworkDevice = networkDevice.copy(vendor = if (brand != CameraBrand.Generic) brand.displayName else vendor)
+                            _discoveryFlow.emit(DiscoveryResult(
+                                ip = ip,
+                                source = device.source.name,
+                                device = updatedNetworkDevice,
+                                playableUrl = streamUrls.firstOrNull(),
+                                streamUrls = streamUrls
+                            ))
+                        }
                     }
                 }
-                _progressFlow.value = 0.8f
+                _progressFlow.value = 1.0f
             }
             
             // Layer 1.5: Passive mDNS (Still handled separately)

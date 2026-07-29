@@ -402,6 +402,10 @@ fun CamGuardianApp() {
     val streamViewModel: StreamViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val isRecording by streamViewModel.isRecording.collectAsState()
     val recordingDuration by streamViewModel.recordingDuration.collectAsState()
+
+    val stormViewModel: StormViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+        factory = StormViewModel.Factory(context)
+    )
     
     var lanNmapMode by remember { mutableStateOf(false) }
     var lanScanOutput by remember { mutableStateOf("") }
@@ -687,7 +691,7 @@ fun CamGuardianApp() {
                         },
                         onHostClick = { selectedHostForDetail = it }
                     )
-                    5 -> StormTab({ startReconScan(it); Toast.makeText(context, "Running post-stress scan...", Toast.LENGTH_SHORT).show() }, { ip: String, out: String -> saveContentToFile(context, out, "[STORM] - $ip", "txt"); Toast.makeText(context, "Saved to Archive", Toast.LENGTH_SHORT).show() })
+                    5 -> StormBreakerScreen(stormViewModel)
                     6 -> SavedCamerasTab({ cam -> StreamViewerActivity.launch(context, cam.toStreamSource(), cam.ip) }, { consoleIpInput = it; selectedTab = 0 })
                     7 -> SentinelTab(savedCameras = cameras)
                 }
@@ -724,6 +728,9 @@ fun CamGuardianApp() {
                     } catch (e: Exception) {
                         Toast.makeText(context, "Cannot open browser", Toast.LENGTH_SHORT).show()
                     }
+                },
+                onProbe = { ip, brand ->
+                    lanViewModel.probeStream(ip, brand)
                 }
             )
         }
@@ -834,7 +841,7 @@ fun StreamTab(
         }
         if (selectedUrl.isNotEmpty()) {
             val auth = buildAuthUrl(selectedUrl, extractCredentials(terminalText).first, extractCredentials(terminalText).second); Column(Modifier.weight(1f)) {
-                if (selectedUrl.startsWith("rtsp")) { AndroidView(factory = { ctx -> ExoPlayer.Builder(ctx).build().apply { setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).createMediaSource(MediaItem.fromUri(auth))); prepare(); playWhenReady = true; currentExoPlayer = this }.let { PlayerView(ctx).apply { player = it; currentTextureView = TextureView(ctx); try { this.javaClass.getMethod("setVideoSurfaceView", android.view.View::class.java).invoke(this, currentTextureView) } catch (e: Exception) {} } } }, Modifier.fillMaxWidth().weight(1f)) }
+                if (selectedUrl.startsWith("rtsp")) { AndroidView(factory = { ctx -> ExoPlayer.Builder(ctx).build().apply { setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).setDebugLoggingEnabled(true).createMediaSource(MediaItem.fromUri(auth))); prepare(); playWhenReady = true; currentExoPlayer = this }.let { PlayerView(ctx).apply { player = it; currentTextureView = TextureView(ctx); try { this.javaClass.getMethod("setVideoSurfaceView", android.view.View::class.java).invoke(this, currentTextureView) } catch (e: Exception) {} } } }, Modifier.fillMaxWidth().weight(1f)) }
                 else { AndroidView(factory = { ctx -> WebView(ctx).apply { currentWebView = this; settings.javaScriptEnabled = true; loadUrl(auth) } }, Modifier.fillMaxSize().weight(1f)) }
                 Row(Modifier.align(Alignment.CenterHorizontally).padding(8.dp), Arrangement.spacedBy(16.dp)) {
                     IconButton(onClick = { scope.launch { val b = if (selectedUrl.startsWith("rtsp")) currentTextureView?.getBitmap() else currentWebView?.let { val bmp = Bitmap.createBitmap(it.width, it.height, Bitmap.Config.ARGB_8888); it.draw(Canvas(bmp)); bmp }; b?.let { if (saveBitmapToGallery(context, it)) Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() } } }) { Icon(Icons.Default.PhotoCamera, null, tint = Color.Cyan) }
@@ -863,6 +870,11 @@ fun ArchiveTab(context: Context, selectedTab: Int, terminalText: String, targetI
 
 @Composable
 fun LanScanTab(scanResults: List<LanHost>, isScanning: Boolean, progress: Float, networkSummary: NetworkDiscoveryHelper.NetworkSummary?, nmapMode: Boolean, onNmapModeChange: (Boolean) -> Unit, nmapOutput: String, isMonitorRunning: Boolean, onToggleMonitor: () -> Unit, onScanStart: () -> Unit, onTabSwitch: (Int) -> Unit, onIpSelected: (String) -> Unit, onViewStream: (String) -> Unit, onHostClick: (LanHost) -> Unit) {
+    LaunchedEffect(Unit) {
+        if (scanResults.isEmpty() && !isScanning) {
+            onScanStart()
+        }
+    }
     Column(Modifier.fillMaxSize()) {
         Text(text = "NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
         networkSummary?.let { Card(Modifier.fillMaxWidth().padding(vertical = 8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)), border = BorderStroke(1.dp, Color(0xFF1A1A1A))) { Column(Modifier.padding(16.dp)) { Text(text = it.ssid, color = Color.White, fontWeight = FontWeight.Bold); Text("Local IP: ${it.localIp}", color = Color.Gray, fontFamily = FontFamily.Monospace, fontSize = 12.sp) } } }
@@ -881,28 +893,119 @@ fun LanScanTab(scanResults: List<LanHost>, isScanning: Boolean, progress: Float,
             Text("DEVICES: ${scanResults.size}", color = Color.Green, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
             Button(onClick = onScanStart, enabled = !isScanning, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20)), shape = RoundedCornerShape(4.dp)) { 
-                Icon(if (isScanning) Icons.Default.Refresh else Icons.Default.Search, null, Modifier.size(16.dp))
+                if (isScanning) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        color = Color(0xFF00FF88),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(Icons.Default.Search, null, Modifier.size(16.dp))
+                }
                 Spacer(Modifier.width(8.dp))
                 Text(if (isScanning) "SCANNING..." else "SCAN") 
             }
         }
         if (isScanning) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), color = Color.Green, trackColor = Color.Transparent)
-        LazyColumn(Modifier.weight(1f)) { items(scanResults.sortedBy { it.ip }) { host -> LanHostCard(host = host, onClick = { onHostClick(host) }) } }
+        LazyColumn(Modifier.weight(1f)) { 
+            items(scanResults.sortedBy { it.ip }, key = { it.ip }) { host -> 
+                LanHostCard(host = host, onClick = { onHostClick(host) }) 
+            } 
+        }
     }
 }
 
 @Composable
 fun LanHostCard(host: LanHost, onClick: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onClick() }, colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)), border = BorderStroke(1.dp, if (host.isYourDevice) Color.Green else Color(0xFF111111))) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onClick() },
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
+        border = BorderStroke(1.dp, if (host.isYourDevice) Color.Green else Color(0xFF111111))
+    ) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Devices, null, tint = if (host.isCamera) Color.Cyan else Color.Gray)
+            Icon(
+                if (host.isCamera) Icons.Default.Videocam else Icons.Default.Devices,
+                null,
+                tint = if (host.isCamera) Color(0xFF00FF88) else Color.Gray,
+                modifier = Modifier.size(32.dp)
+            )
             Spacer(modifier = Modifier.width(12.dp))
             Column(Modifier.weight(1f)) { 
-                Text(text = host.ip, color = Color.White, fontWeight = FontWeight.Bold)
-                val subtitle = if (host.deviceType != "Unknown") "${host.vendor} | ${host.deviceType}" else host.vendor ?: "Unknown Vendor"
-                Text(text = subtitle, color = Color.Gray, fontSize = 11.sp) 
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = host.ip, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    if (host.isYourDevice) {
+                        Spacer(Modifier.width(8.dp))
+                        Surface(
+                            color = Color(0xFF00FF88),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                "YOU",
+                                color = Color.Black,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+                
+                val brandText = when {
+                    host.isYourDevice -> android.os.Build.MODEL
+                    host.brand?.lowercase()?.contains("hikvision") == true -> "Hikvision NVR"
+                    host.brand?.lowercase()?.contains("dahua") == true -> "Dahua Camera"
+                    host.brand?.lowercase()?.contains("axis") == true -> "Axis Camera"
+                    host.isCamera -> "IP Camera"
+                    else -> host.vendor ?: "Unknown Device"
+                }
+                
+                Text(
+                    text = brandText,
+                    color = if (host.isCamera) Color(0xFF00FF88) else Color.Gray,
+                    fontSize = 13.sp
+                )
+                
+                if (host.openPorts.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(top = 4.dp)
+                    ) {
+                        host.openPorts.take(4).forEach { port ->
+                            val label = when (port) {
+                                80 -> "HTTP"
+                                443 -> "HTTPS"
+                                554 -> "RTSP"
+                                8080 -> "WEB"
+                                else -> "$port"
+                            }
+                            AssistChip(
+                                onClick = {},
+                                label = { Text(label, fontSize = 9.sp) },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    labelColor = Color(0xFF00FF88),
+                                    containerColor = Color(0xFF0D3B1E)
+                                ),
+                                border = null,
+                                modifier = Modifier.height(20.dp)
+                            )
+                        }
+                    }
+                }
             }
-            if (host.isCamera) Button(onClick = onClick, modifier = Modifier.height(24.dp), contentPadding = PaddingValues(horizontal = 8.dp)) { Text("LIVE", fontSize = 9.sp) }
+            if (host.streamUrl != null) {
+                Button(
+                    onClick = onClick,
+                    modifier = Modifier.height(28.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00FF88), contentColor = Color.Black)
+                ) {
+                    Text("LIVE", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            } else if (host.isCamera) {
+                TextButton(onClick = onClick, modifier = Modifier.height(28.dp)) {
+                    Text("UNLOCK", color = Color(0xFFFFAA00), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
         }
     }
 }
@@ -917,18 +1020,6 @@ fun generatePdfReport(context: Context, content: String) { val pdf = PdfDocument
 fun generateDetailedPdfReport(context: Context, terminalText: String, targetIp: String) { generatePdfReport(context, "Target: $targetIp\n\n$terminalText") }
 fun saveJsonReport(context: Context, content: String, ip: String) { try { val json = JSONObject().apply { put("target", ip); put("log", content) }; saveContentToFile(context, json.toString(), "Report_$ip", "json") } catch (e: Exception) {} }
 
-@Composable
-fun StormTab(onAutoRescan: (String) -> Unit, onSaveResults: (String, String) -> Unit) {
-    var targetIp by remember { mutableStateOf("") }; var stormLog by remember { mutableStateOf("> Ready.\n") }; var isRunning by remember { mutableStateOf(false) }; val scope = rememberCoroutineScope(); val scrollState = rememberScrollState()
-    Column(Modifier.fillMaxSize()) {
-        Text(text = "⚡ STORM BREAKER", color = Color.Yellow, fontSize = 18.sp, fontWeight = FontWeight.Black)
-        Row {
-            TextField(value = targetIp, onValueChange = { targetIp = it }, modifier = Modifier.weight(1f))
-            Button(onClick = { isRunning = true; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); py.getModule("sys").put("stdout", TerminalOutputStream { stormLog += it }); py.getModule("CamXploit").callAttr("test_dos_resilience", targetIp, 80); withContext(Dispatchers.Main) { isRunning = false; onSaveResults(targetIp, stormLog); onAutoRescan(targetIp) } } catch (e: Exception) { isRunning = false } } }, enabled = !isRunning && targetIp.isNotEmpty()) { Text("START") }
-        }
-        Surface(modifier = Modifier.fillMaxWidth().weight(1f).border(1.dp, Color.Red), color = Color.Black) { Text(text = stormLog, color = Color.Red, modifier = Modifier.verticalScroll(scrollState)) }
-    }
-}
 
 fun extractCredentials(text: String): Pair<String, String> { val u = Regex("""User:\s*(\S+)""").find(text)?.groupValues?.get(1) ?: "admin"; val p = Regex("""Pass:\s*(\S+)""").find(text)?.groupValues?.get(1) ?: "admin"; return u to p }
 fun buildAuthUrl(u: String, user: String, pass: String): String { if (user.isBlank() || pass.isBlank() || u.contains("@")) return u; return try { if (u.startsWith("rtsp://")) u.replace("rtsp://", "rtsp://$user:$pass@") else if (u.startsWith("http://")) u.replace("http://", "http://$user:$pass@") else u } catch (e: Exception) { u } }
@@ -966,7 +1057,8 @@ fun CameraDetailBottomSheet(
     onDismiss: () -> Unit,
     onViewStream: (String) -> Unit,
     onTestCredentials: (String) -> Unit,
-    onOpenWebUi: (String) -> Unit
+    onOpenWebUi: (String) -> Unit,
+    onProbe: (String, String?) -> Unit
 ) {
     val context = LocalContext.current
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -1089,13 +1181,15 @@ fun CameraDetailBottomSheet(
                     modifier = Modifier.weight(1f),
                     enabled = host.streamUrls.isNotEmpty() || host.streamUrl != null || host.isCamera
                 ) {
-                    if (host.streamUrls.size > 1) {
-                        // For now, play the first one, but in a real app we'd show a picker
+                    if (host.streamUrl != null) {
+                        onViewStream(host.streamUrl!!)
+                    } else if (host.streamUrls.isNotEmpty()) {
                         onViewStream(host.streamUrls.first())
+                    } else if (host.isCamera) {
+                        onProbe(host.ip, host.brand)
+                        Toast.makeText(context, "Probing RTSP paths...", Toast.LENGTH_SHORT).show()
                     } else {
-                        host.streamUrls.firstOrNull()?.let { onViewStream(it) } 
-                            ?: host.streamUrl?.let { onViewStream(it) } 
-                            ?: onViewStream("http://${host.ip}")
+                        onViewStream("http://${host.ip}")
                     }
                 }
                 DetailActionItem(

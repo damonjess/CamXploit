@@ -18,6 +18,7 @@ sealed class StreamStatus {
     object Connecting : StreamStatus()
     object Buffering : StreamStatus()
     object Live : StreamStatus()
+    object Unauthorized : StreamStatus()
     data class Error(val message: String) : StreamStatus()
 }
 
@@ -66,7 +67,11 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
                     }
 
                     override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                        _status.value = StreamStatus.Error(error.message ?: "Playback error")
+                        if (error.message?.contains("401") == true) {
+                            _status.value = StreamStatus.Unauthorized
+                        } else {
+                            _status.value = StreamStatus.Error(error.message ?: "Playback error")
+                        }
                     }
                 })
             }
@@ -99,6 +104,7 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
         
         // RTSP-specific factory for robustness (handles handshake, RTP over TCP/UDP)
         val rtspSource = RtspMediaSource.Factory()
+            .setDebugLoggingEnabled(true)
             .setForceUseRtpTcp(true) // Common for camera stability over NAT/Firewalls
             .createMediaSource(mediaItem)
         
@@ -179,6 +185,34 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
             while (isActive) {
                 delay(1000)
                 _recordingDuration.value += 1
+            }
+        }
+    }
+
+    fun probeWithCredentials(ip: String, brand: CameraBrand, user: String, pass: String) {
+        viewModelScope.launch {
+            _status.value = StreamStatus.Connecting
+            val prober = RtspUrlProber()
+            val urls = brand.rtspUrls.map { it.replace("{ip}", ip) }
+            
+            var foundUrl: String? = null
+            withContext(Dispatchers.IO) {
+                for (baseUrl in urls) {
+                    val authUrl = if (baseUrl.startsWith("rtsp://")) {
+                        baseUrl.replace("rtsp://", "rtsp://$user:$pass@")
+                    } else baseUrl
+                    
+                    if (prober.isRtspEndpointValid(authUrl)) {
+                        foundUrl = baseUrl
+                        break
+                    }
+                }
+            }
+            
+            if (foundUrl != null) {
+                startStream(StreamSource.Rtsp(foundUrl!!, user, pass))
+            } else {
+                _status.value = StreamStatus.Error("Failed to authenticate or invalid path")
             }
         }
     }

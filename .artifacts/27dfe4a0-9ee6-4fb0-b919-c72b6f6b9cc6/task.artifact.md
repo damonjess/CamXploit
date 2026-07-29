@@ -1,0 +1,4 @@
+- [x] Fix `RobustLanScanner.kt` (Subnet detection and scan logic)
+- [x] Update `LanScanner.kt` (Unified IP detection)
+- [x] Update `DiscoveryCoordinator.kt` (Integration and progress)
+- [x] Verify discovery in Logcat and UI

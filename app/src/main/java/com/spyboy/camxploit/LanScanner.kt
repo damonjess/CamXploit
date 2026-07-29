@@ -3,12 +3,6 @@ package com.spyboy.camxploit
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.LinkProperties
-import kotlinx.coroutines.*
-import java.io.BufferedReader
-import java.io.FileReader
-import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.net.NetworkInterface
 
 data class NetworkDevice(
@@ -20,11 +14,6 @@ data class NetworkDevice(
 )
 
 class LanScanner(private val context: Context) {
-
-    private val cameraPorts = listOf(80, 81, 88, 443, 554, 8080, 8443, 8554, 8899, 10554)
-    private val commonPorts = listOf(22, 21, 445, 5000, 9000, 37777, 34567)
-    private val devicePorts = listOf(62078, 7000, 49152, 5353)
-    private val allPorts get() = (cameraPorts + commonPorts + devicePorts).distinct()
 
     companion object {
         private var cachedVendorMap: Map<String, String>? = null
@@ -54,14 +43,18 @@ class LanScanner(private val context: Context) {
 
     fun getLocalIpAndSubnet(): Pair<String, String>? {
         return try {
-            // Android 10+ compatible method via ConnectivityManager
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val network = cm.activeNetwork ?: return fallbackSubnet()
             val props: LinkProperties = cm.getLinkProperties(network) ?: return fallbackSubnet()
+            
             val addr = props.linkAddresses
                 .firstOrNull { it.address is java.net.Inet4Address && !it.address.isLoopbackAddress }
                 ?: return fallbackSubnet()
+            
             val ip = addr.address.hostAddress ?: return fallbackSubnet()
+            
+            // Correctly get subnet from the LinkAddress prefix length if possible,
+            // but for home networks /24 is most common.
             val subnet = ip.substringBeforeLast(".")
             Pair(ip, subnet)
         } catch (e: Exception) {
@@ -70,94 +63,22 @@ class LanScanner(private val context: Context) {
     }
 
     private fun fallbackSubnet(): Pair<String, String>? {
-        // Try reading from network interfaces directly
         return try {
-            NetworkInterface.getNetworkInterfaces().toList()
-                .flatMap { it.inetAddresses.toList() }
-                .firstOrNull { addr ->
-                    addr is java.net.Inet4Address &&
-                    !addr.isLoopbackAddress &&
-                    addr.hostAddress?.startsWith("192.168") == true
-                }?.let {
-                    val ip = it.hostAddress ?: return null
-                    Pair(ip, ip.substringBeforeLast("."))
+            val interfaces = NetworkInterface.getNetworkInterfaces().toList()
+            for (iface in interfaces) {
+                if (iface.isLoopback || !iface.isUp) continue
+                
+                for (addr in iface.inetAddresses) {
+                    if (addr is java.net.Inet4Address && !addr.isLoopbackAddress) {
+                        val host = addr.hostAddress ?: continue
+                        if (host.startsWith("192.168") || host.startsWith("10.") || host.startsWith("172.")) {
+                            return Pair(host, host.substringBeforeLast("."))
+                        }
+                    }
                 }
+            }
+            null
         } catch (e: Exception) { null }
-    }
-
-    @OptIn(ExperimentalCoroutinesApi::class)
-    suspend fun scanNetwork(
-        onProgress: (String) -> Unit,
-        onDeviceFound: (NetworkDevice) -> Unit
-    ) = coroutineScope {
-        val (localIp, subnet) = getLocalIpAndSubnet()
-            ?: run { onProgress("❌ Could not get local IP"); return@coroutineScope }
-
-        onProgress("📱 Your IP: $localIp")
-        onProgress("🌐 Scanning $subnet.1 - $subnet.254 ...\n")
-
-        val scanDispatcher = Dispatchers.IO.limitedParallelism(50)
-
-        // Phase 1: parallel ping sweep (fast)
-        val liveHosts = (1..254).map { i ->
-            async(scanDispatcher) {
-                val ip = "$subnet.$i"
-                try {
-                    if (InetAddress.getByName(ip).isReachable(200)) ip else null
-                } catch (_: Exception) { null }
-            }
-        }.awaitAll().filterNotNull()
-
-        onProgress("✅ Found ${liveHosts.size} live host(s), checking ports...\n")
-
-        val arpTable = readArpTable()
-
-        // Phase 2: parallel port checking
-        liveHosts.sorted().map { ip ->
-            async(scanDispatcher) {
-                // Check all ports for this host in parallel
-                val openPorts = allPorts.map { port ->
-                    async(scanDispatcher) {
-                        try {
-                            Socket().use { s ->
-                                s.connect(InetSocketAddress(ip, port), 250)
-                                port
-                            }
-                        } catch (_: Exception) { null }
-                    }
-                }.awaitAll().filterNotNull()
-
-                val hostname = try {
-                    val h = InetAddress.getByName(ip).canonicalHostName
-                    if (h == ip) "Unknown" else h
-                } catch (_: Exception) { "Unknown" }
-
-                val mac = arpTable[ip] ?: "Unknown"
-                val vendor = getVendor(mac)
-
-                val device = NetworkDevice(ip, hostname, mac, vendor, openPorts)
-                withContext(Dispatchers.Main) {
-                    onDeviceFound(device)
-                    onProgress(formatDevice(device))
-                }
-            }
-        }.awaitAll()
-    }
-
-    fun readArpTable(): Map<String, String> {
-        val arpMap = mutableMapOf<String, String>()
-        try {
-            BufferedReader(FileReader("/proc/net/arp")).use { reader ->
-                reader.readLine()
-                reader.forEachLine { line ->
-                    val parts = line.trim().split("\\s+".toRegex())
-                    if (parts.size >= 4 && parts[3] != "00:00:00:00:00:00") {
-                        arpMap[parts[0]] = parts[3].uppercase()
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-        return arpMap
     }
 
     fun getVendor(mac: String): String {
@@ -168,6 +89,22 @@ class LanScanner(private val context: Context) {
         
         val oui = cleanMac.substring(0, 6)
         return vendorMap[oui] ?: "Unknown Device"
+    }
+
+    fun readArpTable(): Map<String, String> {
+        val arpMap = mutableMapOf<String, String>()
+        try {
+            java.io.BufferedReader(java.io.FileReader("/proc/net/arp")).use { reader ->
+                reader.readLine()
+                reader.forEachLine { line ->
+                    val parts = line.trim().split("\\s+".toRegex())
+                    if (parts.size >= 4 && parts[3] != "00:00:00:00:00:00") {
+                        arpMap[parts[0]] = parts[3].uppercase()
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        return arpMap
     }
 
     fun guessDeviceType(vendor: String, hostname: String, openPorts: List<Int>): String {
@@ -188,21 +125,5 @@ class LanScanner(private val context: Context) {
             h.contains("printer") || v.contains("canon") || v.contains("epson") || v.contains("brother") -> "Printer"
             else -> "Unknown"
         }
-    }
-
-    private fun formatDevice(device: NetworkDevice): String {
-        val sb = StringBuilder()
-        sb.appendLine("━━━━━━━━━━━━━━━━━━━━━━━")
-        sb.appendLine("📍 IP      : ${device.ip}")
-        sb.appendLine("🏷️  Name    : ${device.hostname}")
-        sb.appendLine("🔌 MAC     : ${device.mac}")
-        sb.appendLine("🏭 Device  : ${device.vendor}")
-        if (device.openPorts.isNotEmpty()) {
-            sb.appendLine("🔓 Ports   : ${device.openPorts.joinToString(", ")}")
-            if (device.openPorts.any { it in cameraPorts + listOf(80, 8080) }) {
-                sb.appendLine("📷 Possible camera detected!")
-            }
-        }
-        return sb.toString()
     }
 }
