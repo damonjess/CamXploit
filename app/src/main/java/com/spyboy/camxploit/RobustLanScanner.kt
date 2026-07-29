@@ -161,9 +161,11 @@ class RobustLanScanner(private val context: Context) {
                     .firstOrNull { parts ->
                         parts.size >= 4 &&
                         parts[0] == ip &&
-                        parts[3] != "00:00:00:00:00:00"
+                        !parts[3].equals("00:00:00:00:00:00", ignoreCase = true) &&
+                        !parts[3].contains("incomplete", ignoreCase = true)
                     }
                     ?.get(3)
+                    ?.uppercase()
             }
         } catch (_: Exception) { null }
     }

@@ -18,6 +18,8 @@ class LanScanner(private val context: Context) {
     companion object {
         private var cachedVendorMap: Map<String, String>? = null
 
+        private val prefixLine = Regex("^([0-9A-Fa-f]{6,9})\\s+(.+)$")
+
         private fun loadVendorMap(context: Context): Map<String, String> {
             cachedVendorMap?.let { return it }
             val map = mutableMapOf<String, String>()
@@ -25,10 +27,8 @@ class LanScanner(private val context: Context) {
                 context.assets.open("nmap_data/nmap-mac-prefixes").bufferedReader().useLines { lines ->
                     lines.forEach { line ->
                         if (line.startsWith("#") || line.isBlank()) return@forEach
-                        val parts = line.split(" ", limit = 2)
-                        if (parts.size == 2) {
-                            map[parts[0].uppercase()] = parts[1].trim()
-                        }
+                        val match = prefixLine.matchEntire(line.trim()) ?: return@forEach
+                        map[match.groupValues[1].uppercase()] = match.groupValues[2].trim()
                     }
                 }
             } catch (e: Exception) {
@@ -81,14 +81,31 @@ class LanScanner(private val context: Context) {
         } catch (e: Exception) { null }
     }
 
+    fun normalizeMac(mac: String?): String? {
+        if (mac.isNullOrBlank() || mac.equals("Unknown", ignoreCase = true)) return null
+        val cleaned = mac.replace(":", "").replace("-", "").replace(".", "").uppercase()
+        if (cleaned.length < 6 || cleaned.contains("INCOMPLETE")) return null
+        if (cleaned.all { it == '0' }) return null
+        // Re-format as AA:BB:CC:DD:EE:FF when possible
+        return if (cleaned.length >= 12) {
+            cleaned.chunked(2).take(6).joinToString(":")
+        } else {
+            mac.uppercase()
+        }
+    }
+
     fun getVendor(mac: String): String {
-        if (mac == "Unknown") return "Unknown Device"
-        // Clean MAC to get OUI (first 6 chars, uppercase, no colons)
-        val cleanMac = mac.replace(":", "").uppercase()
+        val normalized = normalizeMac(mac) ?: return "Unknown Device"
+        val cleanMac = normalized.replace(":", "").replace("-", "").replace(".", "").uppercase()
         if (cleanMac.length < 6) return "Unknown Device"
-        
-        val oui = cleanMac.substring(0, 6)
-        return vendorMap[oui] ?: "Unknown Device"
+
+        // nmap-mac-prefixes uses 6-, 7-, and 9-char prefixes; longest match wins
+        for (len in intArrayOf(9, 7, 6)) {
+            if (cleanMac.length >= len) {
+                vendorMap[cleanMac.substring(0, len)]?.let { return it }
+            }
+        }
+        return "Unknown Device"
     }
 
     fun readArpTable(): Map<String, String> {
@@ -98,8 +115,8 @@ class LanScanner(private val context: Context) {
                 reader.readLine()
                 reader.forEachLine { line ->
                     val parts = line.trim().split("\\s+".toRegex())
-                    if (parts.size >= 4 && parts[3] != "00:00:00:00:00:00") {
-                        arpMap[parts[0]] = parts[3].uppercase()
+                    if (parts.size >= 4) {
+                        normalizeMac(parts[3])?.let { arpMap[parts[0]] = it }
                     }
                 }
             }

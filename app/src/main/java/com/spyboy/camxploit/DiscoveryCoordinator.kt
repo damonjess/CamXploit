@@ -73,28 +73,48 @@ class DiscoveryCoordinator(private val context: Context) {
             delay(800) // let late SSDP responses trickle in
             ssdpJob.cancelAndJoin()
 
+            enrichMacsFromArp()
             _scanning.value = false
         }
     }
 
+    private fun enrichMacsFromArp() {
+        val arpTable = lanScanner.readArpTable()
+        if (arpTable.isEmpty()) return
+
+        var changed = false
+        deviceMap.forEach { (ip, dev) ->
+            if (dev.mac == null) {
+                arpTable[ip]?.let { mac ->
+                    deviceMap[ip] = dev.copy(mac = mac)
+                    changed = true
+                }
+            }
+        }
+        if (changed) {
+            _devices.value = deviceMap.values.sortedBy { it.ip }
+        }
+    }
+
     private fun addOrMerge(dev: RobustLanScanner.Device) {
+        val arpMac = dev.mac ?: lanScanner.readArpTable()[dev.ip]
         val existing = deviceMap[dev.ip]
         val merged = if (existing != null) {
             existing.copy(
-                mac = dev.mac ?: existing.mac,
+                mac = arpMac ?: existing.mac,
                 hostname = dev.hostname ?: existing.hostname,
                 openPorts = (existing.openPorts + dev.openPorts).distinct().sorted(),
                 source = if (existing.source.contains(dev.source)) existing.source
                          else "${existing.source},${dev.source}"
             )
-        } else dev
+        } else dev.copy(mac = arpMac)
 
         deviceMap[dev.ip] = merged
         _devices.value = deviceMap.values.sortedBy { it.ip }
 
         // Emit for background monitor and logging
         scope.launch {
-            val mac = merged.mac ?: "Unknown"
+            val mac = lanScanner.normalizeMac(merged.mac) ?: "Unknown"
             val vendor = lanScanner.getVendor(mac)
             val networkDevice = NetworkDevice(
                 ip = merged.ip,
