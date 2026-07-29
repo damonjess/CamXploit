@@ -22,8 +22,8 @@ class MjpegFrameGrabber(private val streamUrl: String) {
      * @param onError  Called if connection or parsing fails
      */
     suspend fun stream(
-        onFrame: (Bitmap) -> Unit,
-        onError: (String) -> Unit
+        onFrame: suspend (Bitmap) -> Unit,
+        onError: suspend (String) -> Unit
     ) = withContext(Dispatchers.IO) {
         try {
             val conn = (URL(streamUrl).openConnection() as HttpURLConnection).apply {

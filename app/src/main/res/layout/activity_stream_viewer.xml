@@ -45,13 +45,26 @@
             android:textSize="12sp"/>
     </LinearLayout>
 
-    <!-- Player -->
-    <androidx.media3.ui.PlayerView
-        android:id="@+id/playerView"
+    <!-- Player Container -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:background="#000000"/>
+        android:background="#000000">
+
+        <androidx.media3.ui.PlayerView
+            android:id="@+id/playerView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="visible"/>
+
+        <ImageView
+            android:id="@+id/ivMjpeg"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="fitCenter"
+            android:visibility="gone"/>
+    </FrameLayout>
 
     <!-- Stream Info -->
     <LinearLayout
@@ -102,9 +115,19 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:layout_marginStart="4dp"
-            android:text="📷 Snapshot"
+            android:layout_marginHorizontal="2dp"
+            android:text="📷 Snap"
             android:backgroundTint="#00AA00"
+            android:textColor="#FFFFFF"/>
+
+        <Button
+            android:id="@+id/btnRecord"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="2dp"
+            android:text="⏺ Record"
+            android:backgroundTint="#AA0000"
             android:textColor="#FFFFFF"/>
     </LinearLayout>
 

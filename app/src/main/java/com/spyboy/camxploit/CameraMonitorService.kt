@@ -80,7 +80,7 @@ class CameraMonitorService : Service() {
         }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("CamVigil Monitor")
+            .setContentTitle("CamXploit Monitor")
             .setContentText(content)
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setContentIntent(pendingIntent)

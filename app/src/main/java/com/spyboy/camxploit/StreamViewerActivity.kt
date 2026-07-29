@@ -8,12 +8,16 @@ import android.os.Bundle
 import android.os.Environment
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.media3.common.*
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -22,19 +26,21 @@ import java.util.*
 @UnstableApi
 class StreamViewerActivity : AppCompatActivity() {
 
-    private var player: ExoPlayer? = null
+    private val viewModel: StreamViewModel by viewModels()
     private lateinit var playerView: PlayerView
-    private var streamUrl: String = ""
+    private lateinit var ivMjpeg: android.widget.ImageView
+    
+    private var streamSource: StreamSource? = null
     private var targetIp: String = ""
 
     companion object {
-        private const val EXTRA_URL = "stream_url"
-        private const val EXTRA_IP  = "target_ip"
+        private const val EXTRA_SOURCE = "stream_source"
+        private const val EXTRA_IP     = "target_ip"
 
-        fun launch(context: Context, url: String, ip: String) {
+        fun launch(context: Context, source: StreamSource, ip: String) {
             val intent = Intent(context, StreamViewerActivity::class.java).apply {
-                putExtra(EXTRA_URL, url)
-                putExtra(EXTRA_IP,  ip)
+                putExtra(EXTRA_SOURCE, source)
+                putExtra(EXTRA_IP,     ip)
             }
             context.startActivity(intent)
         }
@@ -44,137 +50,164 @@ class StreamViewerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_stream_viewer)
 
-        // Keep screen on while viewing
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        streamUrl = intent.getStringExtra(EXTRA_URL) ?: ""
-        targetIp  = intent.getStringExtra(EXTRA_IP)  ?: ""
+        streamSource = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(EXTRA_SOURCE, StreamSource::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(EXTRA_SOURCE)
+        }
+        targetIp = intent.getStringExtra(EXTRA_IP) ?: ""
 
         playerView = findViewById(R.id.playerView)
+        ivMjpeg = findViewById(R.id.ivMjpeg)
 
-        findViewById<android.widget.TextView>(R.id.tvStreamUrl).text = "URL: $streamUrl"
+        findViewById<android.widget.TextView>(R.id.tvStreamUrl).text = "URL: ${streamSource?.url ?: ""}"
         findViewById<android.widget.TextView>(R.id.tvStreamTitle).text = targetIp
 
-        findViewById<android.widget.ImageButton>(R.id.btnBack).setOnClickListener {
-            finish()
-        }
+        findViewById<android.widget.ImageButton>(R.id.btnBack).setOnClickListener { finish() }
+        findViewById<android.widget.Button>(R.id.btnRetry).setOnClickListener { streamSource?.let { viewModel.startStream(it) } }
+        findViewById<android.widget.Button>(R.id.btnSnapshot).setOnClickListener { takeSnapshot() }
+        
+        val btnRecord = findViewById<android.widget.Button>(R.id.btnRecord)
+        btnRecord.setOnClickListener { viewModel.toggleRecording() }
 
-        findViewById<android.widget.Button>(R.id.btnRetry).setOnClickListener {
-            releasePlayer()
-            initPlayer()
-        }
+        observeViewModel()
 
-        findViewById<android.widget.Button>(R.id.btnSnapshot).setOnClickListener {
-            takeSnapshot()
+        if (savedInstanceState == null) {
+            streamSource?.let { viewModel.startStream(it) }
         }
-
-        initPlayer()
     }
 
-    private fun initPlayer() {
+    private fun observeViewModel() {
         val statusText = findViewById<android.widget.TextView>(R.id.tvStreamStatus)
         val infoText   = findViewById<android.widget.TextView>(R.id.tvStreamInfo)
+        val btnRecord  = findViewById<android.widget.Button>(R.id.btnRecord)
 
-        player = ExoPlayer.Builder(this).build().also { exo ->
-            playerView.player = exo
-
-            val mediaItem = MediaItem.fromUri(streamUrl)
-
-            // Use RTSP source for rtsp:// URLs, default for http://
-            if (streamUrl.startsWith("rtsp://")) {
-                val rtspSource = RtspMediaSource.Factory()
-                    .setForceUseRtpTcp(true) // TCP more reliable than UDP on LAN
-                    .createMediaSource(mediaItem)
-                exo.setMediaSource(rtspSource)
-            } else {
-                exo.setMediaItem(mediaItem)
-            }
-
-            exo.addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(state: Int) {
-                    when (state) {
-                        Player.STATE_BUFFERING -> {
-                            statusText.text     = "● BUFFERING"
-                            statusText.setTextColor(0xFFFFA500.toInt())
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    viewModel.isRecording.collectLatest { isRecording ->
+                        if (isRecording) {
+                            btnRecord.text = "⏹ Stop"
+                            btnRecord.setBackgroundColor(0xFF888888.toInt())
+                        } else {
+                            btnRecord.text = "⏺ Record"
+                            btnRecord.setBackgroundColor(0xFFAA0000.toInt())
                         }
-                        Player.STATE_READY -> {
-                            statusText.text = "● LIVE"
-                            statusText.setTextColor(0xFF00FF00.toInt())
-
-                            // Show resolution and codec
-                            val format = exo.videoFormat
-                            if (format != null) {
-                                infoText.text = "Resolution: ${format.width}x${format.height}" +
-                                    " | Codec: ${format.codecs ?: "unknown"}"
-                            }
-                        }
-                        Player.STATE_ENDED -> {
-                            statusText.text = "● ENDED"
-                            statusText.setTextColor(0xFF888888.toInt())
-                        }
-                        Player.STATE_IDLE -> {
-                            statusText.text = "● IDLE"
-                            statusText.setTextColor(0xFF888888.toInt())
+                    }
+                }
+                
+                launch {
+                    viewModel.recordingDuration.collectLatest { duration ->
+                        if (viewModel.isRecording.value) {
+                            val mins = duration / 60
+                            val secs = duration % 60
+                            statusText.text = "● RECORDING ${String.format("%02d:%02d", mins, secs)}"
+                            statusText.setTextColor(0xFFFF0000.toInt())
                         }
                     }
                 }
 
-                override fun onPlayerError(error: PlaybackException) {
-                    statusText.text = "● ERROR"
-                    statusText.setTextColor(0xFFFF0000.toInt())
-                    Toast.makeText(
-                        this@StreamViewerActivity,
-                        "Stream error: ${error.message}",
-                        Toast.LENGTH_LONG
-                    ).show()
+                launch {
+                    viewModel.status.collectLatest { status ->
+                        // Don't override recording status text
+                        if (viewModel.isRecording.value && status is StreamStatus.Live) return@collectLatest
+                        
+                        when (status) {
+                            is StreamStatus.Idle -> {
+                                statusText.text = "● IDLE"
+                                statusText.setTextColor(0xFF888888.toInt())
+                            }
+                            is StreamStatus.Connecting -> {
+                                statusText.text = "● CONNECTING"
+                                statusText.setTextColor(0xFFFFA500.toInt())
+                            }
+                            is StreamStatus.Buffering -> {
+                                statusText.text = "● BUFFERING"
+                                statusText.setTextColor(0xFFFFA500.toInt())
+                            }
+                            is StreamStatus.Live -> {
+                                statusText.text = "● LIVE"
+                                statusText.setTextColor(0xFF00FF00.toInt())
+                                updateRenderingViews()
+                            }
+                            is StreamStatus.Error -> {
+                                statusText.text = "● ERROR"
+                                statusText.setTextColor(0xFFFF0000.toInt())
+                                Toast.makeText(this@StreamViewerActivity, status.message, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
                 }
-            })
+                
+                launch {
+                    viewModel.mjpegBitmap.collectLatest { bitmap ->
+                        if (bitmap != null) {
+                            ivMjpeg.setImageBitmap(bitmap)
+                        }
+                    }
+                }
 
-            exo.prepare()
-            exo.playWhenReady = true
+                launch {
+                    viewModel.streamInfo.collectLatest { info ->
+                        infoText.text = info
+                    }
+                }
+            }
+        }
+    }
+
+    private fun updateRenderingViews() {
+        when (streamSource) {
+            is StreamSource.Mjpeg -> {
+                playerView.visibility = android.view.View.GONE
+                ivMjpeg.visibility = android.view.View.VISIBLE
+            }
+            else -> {
+                playerView.visibility = android.view.View.VISIBLE
+                playerView.player = viewModel.getPlayer()
+                ivMjpeg.visibility = android.view.View.GONE
+            }
         }
     }
 
     private fun takeSnapshot() {
-        val statusText = findViewById<android.widget.TextView>(R.id.tvStreamStatus)
+        if (ivMjpeg.visibility == android.view.View.VISIBLE) {
+            val drawable = ivMjpeg.drawable as? android.graphics.drawable.BitmapDrawable
+            if (drawable != null) {
+                saveSnapshotToArchive(drawable.bitmap)
+            } else {
+                Toast.makeText(this, "No frame available", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
 
-        // Must be in READY state to grab a frame
-        if (player?.playbackState != Player.STATE_READY) {
+        val player = viewModel.getPlayer()
+        if (player.playbackState != Player.STATE_READY) {
             Toast.makeText(this, "Wait for stream to be ready", Toast.LENGTH_SHORT).show()
             return
         }
 
         try {
-            // Use PixelCopy for reliable frame capture from SurfaceView
             val surfaceView = playerView.videoSurfaceView as? android.view.SurfaceView
                 ?: run {
                     Toast.makeText(this, "Surface not available", Toast.LENGTH_SHORT).show()
                     return
                 }
 
-            val bitmap = Bitmap.createBitmap(
-                surfaceView.width,
-                surfaceView.height,
-                Bitmap.Config.ARGB_8888
-            )
+            val bitmap = Bitmap.createBitmap(surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888)
 
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                android.view.PixelCopy.request(
-                    surfaceView,
-                    bitmap,
-                    { result ->
-                        if (result == android.view.PixelCopy.SUCCESS) {
-                            saveSnapshotToArchive(bitmap)
-                        } else {
-                            runOnUiThread {
-                                Toast.makeText(this, "Frame capture failed", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                    android.os.Handler(android.os.Looper.getMainLooper())
-                )
+                android.view.PixelCopy.request(surfaceView, bitmap, { result ->
+                    if (result == android.view.PixelCopy.SUCCESS) {
+                        saveSnapshotToArchive(bitmap)
+                    } else {
+                        runOnUiThread { Toast.makeText(this, "Capture failed", Toast.LENGTH_SHORT).show() }
+                    }
+                }, android.os.Handler(android.os.Looper.getMainLooper()))
             } else {
-                // Fallback for older Android
                 val canvas = Canvas(bitmap)
                 surfaceView.draw(canvas)
                 saveSnapshotToArchive(bitmap)
@@ -201,7 +234,7 @@ class StreamViewerActivity : AppCompatActivity() {
             val meta = org.json.JSONObject().apply {
                 put("type",      "snapshot")
                 put("target_ip", targetIp)
-                put("stream_url", streamUrl)
+                put("stream_url", streamSource?.url ?: "")
                 put("timestamp", System.currentTimeMillis())
                 put("filename",  filename)
                 put("width",     bitmap.width)
@@ -226,12 +259,7 @@ class StreamViewerActivity : AppCompatActivity() {
         }
     }
 
-    private fun releasePlayer() {
-        player?.release()
-        player = null
-    }
-
-    override fun onPause()   { super.onPause();   player?.pause() }
-    override fun onResume()  { super.onResume();  player?.play()  }
-    override fun onDestroy() { super.onDestroy(); releasePlayer() }
+    override fun onPause()   { super.onPause();   }
+    override fun onResume()  { super.onResume();  }
+    override fun onDestroy() { super.onDestroy(); }
 }

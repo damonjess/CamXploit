@@ -1889,7 +1889,7 @@ def main(target_input=None):
     print_banner()
     if not target_input: return
 
-    print(f"\n{SCAN} Initiating CamVigil Reconnaissance...")
+    print(f"\n{SCAN} Initiating CamXploit Reconnaissance...")
 
     # 1. Broad Discovery (UPnP/SSDP) - Disabled to prevent freeze
     # upnp_results = discover_upnp_ssdp()

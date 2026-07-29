@@ -17,7 +17,8 @@ class DiscoveryCoordinator(private val context: Context) {
         val rawData: String? = null,
         val onvifInfo: OnvifDeviceInfo? = null,
         val ssdpInfo: SsdpDeviceInfo? = null,
-        val device: NetworkDevice? = null
+        val device: NetworkDevice? = null,
+        val playableUrl: String? = null
     )
 
     private val _discoveryFlow = MutableSharedFlow<DiscoveryResult>()
@@ -92,8 +93,9 @@ class DiscoveryCoordinator(private val context: Context) {
                             brand = HttpFingerprinter().identify(ip, openPorts.first()) ?: "Unknown"
                         }
 
+                        val playableUrl = if (brand != "Unknown") discoverPlayableUrl(ip, brand, null) else null
                         val device = NetworkDevice(ip, "Unknown", "Unknown", brand, openPorts)
-                        _discoveryFlow.emit(DiscoveryResult(ip, "ACTIVE_SCAN", device = device))
+                        _discoveryFlow.emit(DiscoveryResult(ip, "ACTIVE_SCAN", device = device, playableUrl = playableUrl))
                         _progressFlow.value = 0.5f + (index.toFloat() / liveHosts.size * 0.5f)
                     }
                 }
@@ -102,7 +104,8 @@ class DiscoveryCoordinator(private val context: Context) {
             // Layer 3: Deep (ONVIF Probe)
             launch {
                 onvifProber.probe().forEach { onvif ->
-                    _discoveryFlow.emit(DiscoveryResult(onvif.ip, "ONVIF", onvifInfo = onvif))
+                    val playableUrl = discoverPlayableUrl(onvif.ip, "ONVIF", onvif)
+                    _discoveryFlow.emit(DiscoveryResult(onvif.ip, "ONVIF", onvifInfo = onvif, playableUrl = playableUrl))
                 }
             }
         }
@@ -111,5 +114,38 @@ class DiscoveryCoordinator(private val context: Context) {
     fun stopDiscovery() {
         scanJob?.cancel()
         scanJob = null
+    }
+
+    private suspend fun discoverPlayableUrl(ip: String, brand: String, onvifInfo: OnvifDeviceInfo?): String? = withContext(Dispatchers.IO) {
+        val prober = RtspProber()
+        
+        // 1. Try ONVIF if available
+        onvifInfo?.xAddrs?.split(" ")?.firstOrNull()?.let { xAddr ->
+            onvifProber.getStreamUri(xAddr)?.let { uri ->
+                if (prober.probe(uri)) return@withContext uri
+            }
+        }
+
+        // 2. Try brand-specific paths
+        val fingerprint = CameraFingerprint.all.find { it.brandName.equals(brand, ignoreCase = true) }
+        fingerprint?.rtspPaths?.forEach { path ->
+            val url = "rtsp://$ip:554$path"
+            if (prober.probe(url)) return@withContext url
+        }
+
+        // 3. Try common paths as fallback
+        val commonPaths = listOf(
+            "/Streaming/Channels/101",
+            "/cam/realmonitor?channel=1&subtype=0",
+            "/live/ch0",
+            "/onvif/Media",
+            "/mpeg4/ch1/main/av_stream"
+        )
+        commonPaths.forEach { path ->
+            val url = "rtsp://$ip:554$path"
+            if (prober.probe(url)) return@withContext url
+        }
+
+        null
     }
 }

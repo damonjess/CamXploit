@@ -391,8 +391,11 @@ fun CamGuardianApp() {
     var shodanApiKey by remember { mutableStateOf("") }
     var shodanQuery by remember { mutableStateOf("webcam") }
     var selectedUrl by remember { mutableStateOf("") }
-    var isRecording by remember { mutableStateOf(false) }
-    var recordingDuration by remember { mutableLongStateOf(0L) }
+    
+    val streamViewModel: StreamViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val isRecording by streamViewModel.isRecording.collectAsState()
+    val recordingDuration by streamViewModel.recordingDuration.collectAsState()
+    
     var lanNmapMode by remember { mutableStateOf(false) }
     var lanScanOutput by remember { mutableStateOf("") }
     var showExternalSearchDialog by remember { mutableStateOf(false) }
@@ -403,7 +406,6 @@ fun CamGuardianApp() {
     val view = LocalView.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
-    val projectionManager = remember { context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager }
 
     val discoveryCoordinator = remember { DiscoveryCoordinator(context) }
     
@@ -448,20 +450,22 @@ fun CamGuardianApp() {
                     ip = result.ip,
                     mac = mac,
                     vendor = result.ssdpInfo?.friendlyName ?: vendor,
-                    isCamera = isCam,
+                    isCamera = isCam || result.playableUrl != null,
                     deviceType = deviceType,
                     isYourDevice = result.ip == networkSummary?.localIp,
-                    openPorts = result.device?.openPorts ?: emptyList()
+                    openPorts = result.device?.openPorts ?: emptyList(),
+                    streamUrl = result.playableUrl
                 )
                 lanScanResults = lanScanResults + host
-            } else if (result.source == "ONVIF" || result.source.startsWith("SSDP")) {
+            } else if (result.source == "ONVIF" || result.source.startsWith("SSDP") || result.playableUrl != null) {
                 // Update existing device if it's confirmed as a camera or has better info
                 lanScanResults = lanScanResults.map { 
                     if (it.ip == result.ip) {
                         it.copy(
                             isCamera = true,
                             vendor = result.ssdpInfo?.friendlyName ?: it.vendor,
-                            deviceType = result.ssdpInfo?.modelName ?: it.deviceType
+                            deviceType = result.ssdpInfo?.modelName ?: it.deviceType,
+                            streamUrl = result.playableUrl ?: it.streamUrl
                         )
                     } else it 
                 }
@@ -550,24 +554,6 @@ fun CamGuardianApp() {
             }
         }
     }
-
-    val recordLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
-            val serviceIntent = Intent(context, ScreenCaptureService::class.java).apply { action = "ACTION_START"; putExtra("RESULT_CODE", result.resultCode); putExtra("DATA", result.data) }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(serviceIntent) else context.startService(serviceIntent)
-            isRecording = true
-        }
-    }
-
-    val receiver = remember { object : BroadcastReceiver() { override fun onReceive(context: Context?, intent: Intent?) { if (intent?.action == "COM_SPYBOY_CAMXPLOIT_RECORDING_STOPPED") { isRecording = false; val path = intent.getStringExtra("FILE_PATH") ?: ""; Toast.makeText(context, "Recording saved: $path", Toast.LENGTH_LONG).show() } } } }
-
-    DisposableEffect(Unit) {
-        val filter = IntentFilter("COM_SPYBOY_CAMXPLOIT_RECORDING_STOPPED")
-        ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
-        onDispose { context.unregisterReceiver(receiver) }
-    }
-
-    LaunchedEffect(isRecording) { if (isRecording) { recordingDuration = 0L; while (isRecording) { delay(1000); recordingDuration++ } } }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
         if (!(permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false) && !(permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false)) Toast.makeText(context, "Location permission required", Toast.LENGTH_LONG).show()
@@ -691,10 +677,24 @@ fun CamGuardianApp() {
 
             Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).weight(1f)) {
                 when (selectedTab) {
-                    0 -> ConsoleTab(consoleIpInput, { consoleIpInput = it }, terminalText + currentPulse, { terminalText = "> Console Reset.\n" }, isScanning, scrollState, { startReconScan(consoleIpInput) }, { url, _ -> selectedUrl = buildAuthUrl(url, extractCredentials(terminalText).first, extractCredentials(terminalText).second); selectedTab = 3 }, shodanApiKey = shodanApiKey, onDeepShodan = { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } })
+                    0 -> ConsoleTab(consoleIpInput, { consoleIpInput = it }, terminalText + currentPulse, { terminalText = "> Console Reset.\n" }, isScanning, scrollState, { startReconScan(consoleIpInput) }, { url, _ -> 
+                        val source = if (url.startsWith("rtsp://")) StreamSource.Rtsp(url) else StreamSource.Mjpeg(url)
+                        StreamViewerActivity.launch(context, source, consoleIpInput) 
+                    }, shodanApiKey = shodanApiKey, onDeepShodan = { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } })
                     1 -> IntelTab(consoleIpInput, terminalText, publicIntel, shodanApiKey, { terminalText += it }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val b64 = py.getModule("CamXploit").callAttr("manual_snapshot_capture", consoleIpInput, 80, extractCredentials(terminalText).first, extractCredentials(terminalText).second).toString(); if (b64 != "None") { val b = Base64.decode(b64, Base64.DEFAULT); val bmp = BitmapFactory.decodeByteArray(b, 0, b.size); withContext(Dispatchers.Main) { capturedBitmap = bmp; val f = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Snap_${System.currentTimeMillis()}.png"); FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }; Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() } } } catch (e: Exception) {} } }, { url -> val finalUrl = if (url.contains("shodan.io") || url.contains("censys.io") || url.contains("zoomeye.org")) url else buildAuthUrl(url, extractCredentials(terminalText).first, extractCredentials(terminalText).second); selectedUrl = finalUrl; selectedTab = 3 }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); py.getModule("sys").put("stdout", TerminalOutputStream { t -> scope.launch(Dispatchers.Main) { terminalText += t } }); py.getModule("CamXploit").callAttr("discover_onvif", consoleIpInput) } catch (e: Exception) {} } }, { val targetHost = if (consoleIpInput.contains(":")) consoleIpInput.substringBefore(":") else consoleIpInput; val targetPort = if (consoleIpInput.contains(":")) consoleIpInput.substringAfter(":").toIntOrNull() ?: 80 else 80; val vendorMatch = Regex("""Device:\s*([^\n\r]+)""").find(terminalText)?.groupValues?.get(1); scope.launch { terminalText += "🔍 Probing endpoints on $targetHost:$targetPort ...\n"; CameraScanner().scanEndpoints(host = targetHost, port = targetPort, vendor = vendorMatch, onResult = { result -> val brandTag = if (result.brand != null) "[${result.brand}] " else ""; terminalText += "  🎯 Found $brandTag${result.type}: ${result.url} (HTTP ${result.httpCode})\n" }, onDone = { terminalText += "✅ Endpoint scan complete.\n" }) } }, { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } }, { showExternalSearchDialog = true }, { showDorksDialog = true })
                     2 -> ArchiveTab(context, selectedTab, terminalText, consoleIpInput) { viewingFile = it }
-                    3 -> StreamTab(terminalText, selectedUrl, { selectedUrl = it }, isRecording, recordingDuration, { recordLauncher.launch(projectionManager.createScreenCaptureIntent()) }, { context.startService(Intent(context, ScreenCaptureService::class.java).apply { action = "ACTION_STOP" }) })
+                    3 -> StreamTab(
+                        terminalText = terminalText,
+                        selectedUrl = selectedUrl,
+                        onUrlSelected = { url -> 
+                            selectedUrl = url
+                            val source = if (url.startsWith("rtsp://")) StreamSource.Rtsp(url) else StreamSource.Mjpeg(url)
+                            streamViewModel.startStream(source)
+                        },
+                        isRecording = isRecording,
+                        recordingDuration = recordingDuration,
+                        onToggleRecording = { streamViewModel.toggleRecording() }
+                    )
                     4 -> LanScanTab(
                         lanScanResults, 
                         lanIsScanning, 
@@ -723,10 +723,13 @@ fun CamGuardianApp() {
                         }, 
                         { selectedTab = it }, 
                         { consoleIpInput = it; selectedTab = 0 }, 
-                        { selectedUrl = it; selectedTab = 3 }
+                        { url -> 
+                            val source = if (url.startsWith("rtsp://")) StreamSource.Rtsp(url) else StreamSource.Mjpeg(url)
+                            StreamViewerActivity.launch(context, source, consoleIpInput.ifBlank { "Unknown" })
+                        }
                     )
                     5 -> StormTab({ startReconScan(it); Toast.makeText(context, "Running post-stress scan...", Toast.LENGTH_SHORT).show() }, { ip: String, out: String -> saveContentToFile(context, out, "[STORM] - $ip", "txt"); Toast.makeText(context, "Saved to Archive", Toast.LENGTH_SHORT).show() })
-                    6 -> SavedCamerasTab({ selectedUrl = it; selectedTab = 3 }, { consoleIpInput = it; selectedTab = 0 })
+                    6 -> SavedCamerasTab({ cam -> StreamViewerActivity.launch(context, cam.toStreamSource(), cam.ip) }, { consoleIpInput = it; selectedTab = 0 })
                     7 -> SentinelTab(savedCameras = cameras)
                 }
                 capturedBitmap?.let { bmp ->
@@ -825,7 +828,14 @@ fun IntelSection(title: String, items: List<String>, color: Color, icon: android
 }
 
 @Composable
-fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String) -> Unit, isRecording: Boolean, recordingDuration: Long, onStartRecording: () -> Unit, onStopRecording: () -> Unit) {
+fun StreamTab(
+    terminalText: String, 
+    selectedUrl: String, 
+    onUrlSelected: (String) -> Unit, 
+    isRecording: Boolean, 
+    recordingDuration: Long, 
+    onToggleRecording: () -> Unit
+) {
     val context = LocalContext.current; val scope = rememberCoroutineScope(); var currentExoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }; var currentWebView by remember { mutableStateOf<WebView?>(null) }; var currentTextureView by remember { mutableStateOf<TextureView?>(null) }
     DisposableEffect(selectedUrl) { onDispose { currentExoPlayer?.release(); currentExoPlayer = null } }
     val streamUrls = remember(terminalText) { val start = terminalText.indexOf("===LINKS_START==="); val end = terminalText.indexOf("===LINKS_END==="); if (start != -1 && end != -1) terminalText.substring(start, end).lines().filter { it.contains("|") }.mapNotNull { val p = it.split("|"); if (p.size >= 2) p[1].trim() to p[0].trim() else null }.distinctBy { it.first } else emptyList() }
@@ -841,7 +851,7 @@ fun StreamTab(terminalText: String, selectedUrl: String, onUrlSelected: (String)
                 else { AndroidView(factory = { ctx -> WebView(ctx).apply { currentWebView = this; settings.javaScriptEnabled = true; loadUrl(auth) } }, Modifier.fillMaxSize().weight(1f)) }
                 Row(Modifier.align(Alignment.CenterHorizontally).padding(8.dp), Arrangement.spacedBy(16.dp)) {
                     IconButton(onClick = { scope.launch { val b = if (selectedUrl.startsWith("rtsp")) currentTextureView?.getBitmap() else currentWebView?.let { val bmp = Bitmap.createBitmap(it.width, it.height, Bitmap.Config.ARGB_8888); it.draw(Canvas(bmp)); bmp }; b?.let { if (saveBitmapToGallery(context, it)) Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() } } }) { Icon(Icons.Default.PhotoCamera, null, tint = Color.Cyan) }
-                    IconButton(onClick = { if (isRecording) onStopRecording() else onStartRecording() }) { Icon(if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord, null, tint = Color.White) }
+                    IconButton(onClick = { onToggleRecording() }) { Icon(if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord, null, tint = Color.White) }
                 }
             }
         }
@@ -923,9 +933,9 @@ fun buildAuthUrl(u: String, user: String, pass: String): String { if (user.isBla
 data class LanHost(val ip: String, val mac: String? = null, val vendor: String? = null, val deviceType: String = "Unknown", val isYourDevice: Boolean = false, val openPorts: List<Int> = emptyList(), val isCamera: Boolean = false, val streamUrl: String? = null)
 
 @Composable
-fun SavedCamerasTab(onPlay: (String) -> Unit, onIpSelected: (String) -> Unit) {
+fun SavedCamerasTab(onPlay: (SavedCamera) -> Unit, onIpSelected: (String) -> Unit) {
     val context = LocalContext.current; val cameras by CameraDatabase.getDatabase(context).cameraDao().getAllCameras().collectAsState(initial = emptyList())
-    LazyColumn(Modifier.fillMaxSize()) { items(cameras) { cam -> Card(Modifier.fillMaxWidth().padding(6.dp).clickable { onIpSelected(cam.ip) }) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(cam.nickname, fontWeight = FontWeight.Bold); Text(cam.ip, fontSize = 12.sp) }; IconButton(onClick = { onPlay(cam.streamUrl) }) { Icon(Icons.Default.PlayArrow, null) } } } } }
+    LazyColumn(Modifier.fillMaxSize()) { items(cameras) { cam -> Card(Modifier.fillMaxWidth().padding(6.dp).clickable { onIpSelected(cam.ip) }) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(cam.nickname, fontWeight = FontWeight.Bold); Text(cam.ip, fontSize = 12.sp) }; IconButton(onClick = { onPlay(cam) }) { Icon(Icons.Default.PlayArrow, null) } } } } }
 }
 
 @Composable

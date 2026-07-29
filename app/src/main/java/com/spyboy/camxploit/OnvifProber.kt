@@ -4,7 +4,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.HttpURLConnection
 import java.net.InetAddress
+import java.net.URL
 import java.util.UUID
 
 data class OnvifDeviceInfo(
@@ -81,5 +83,44 @@ class OnvifProber {
         val types = Regex("""<[a-z0-9:]*?Types>(.*?)</[a-z0-9:]*?Types>""", RegexOption.IGNORE_CASE).find(xml)?.groupValues?.get(1)
         val xAddrs = Regex("""<[a-z0-9:]*?XAddrs>(.*?)</[a-z0-9:]*?XAddrs>""", RegexOption.IGNORE_CASE).find(xml)?.groupValues?.get(1)
         return OnvifDeviceInfo(ip, epAddress, types, xAddrs)
+    }
+
+    /**
+     * Attempts to fetch the RTSP stream URI from an ONVIF device.
+     */
+    suspend fun getStreamUri(xAddr: String): String? = withContext(Dispatchers.IO) {
+        val body = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
+              <s:Body>
+                <trt:GetStreamUri>
+                  <trt:StreamSetup>
+                    <trt:Stream>RTP-Unicast</trt:Stream>
+                    <trt:Transport><trt:Protocol>RTSP</trt:Protocol></trt:Transport>
+                  </trt:StreamSetup>
+                  <trt:ProfileToken>profile_1</trt:ProfileToken>
+                </trt:GetStreamUri>
+              </s:Body>
+            </s:Envelope>
+        """.trimIndent()
+
+        try {
+            val conn = (URL(xAddr).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 3000
+                readTimeout = 3000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/soap+xml; charset=utf-8")
+            }
+
+            conn.outputStream.use { it.write(body.toByteArray()) }
+
+            if (conn.responseCode == 200) {
+                val response = conn.inputStream.bufferedReader().use { it.readText() }
+                return@withContext Regex("""<[a-z0-9:]*?Uri>(.*?)</[a-z0-9:]*?Uri>""", RegexOption.IGNORE_CASE)
+                    .find(response)?.groupValues?.get(1)
+            }
+        } catch (_: Exception) { }
+        null
     }
 }

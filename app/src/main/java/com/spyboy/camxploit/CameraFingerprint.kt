@@ -4,12 +4,14 @@ sealed class CameraFingerprint(
     val brandName: String,
     val ports: List<Int> = listOf(80, 81, 8080, 8081, 88),
     val paths: List<String> = listOf("/", "/login", "/doc/page/login.asp", "/cgi-bin/hello"),
+    val rtspPaths: List<String> = emptyList(),
     val matchers: List<Regex>
 ) {
     object Hikvision : CameraFingerprint(
         brandName = "Hikvision",
         ports = listOf(80, 8000, 8080),
         paths = listOf("/", "/doc/page/login.asp", "/ISAPI/System/deviceInfo"),
+        rtspPaths = listOf("/Streaming/Channels/101", "/ISAPI/Streaming/channels/101"),
         matchers = listOf(
             "hikvision".toRegex(RegexOption.IGNORE_CASE),
             "webLib".toRegex(RegexOption.IGNORE_CASE)
@@ -20,6 +22,7 @@ sealed class CameraFingerprint(
         brandName = "Dahua",
         ports = listOf(80, 37777, 8000),
         paths = listOf("/", "/cgi-bin/login.asp"),
+        rtspPaths = listOf("/cam/realmonitor?channel=1&subtype=0"),
         matchers = listOf(
             "dahua".toRegex(RegexOption.IGNORE_CASE),
             "DNVRS".toRegex(RegexOption.IGNORE_CASE)
@@ -29,6 +32,7 @@ sealed class CameraFingerprint(
     object Axis : CameraFingerprint(
         brandName = "Axis",
         ports = listOf(80, 443),
+        rtspPaths = listOf("/axis-media/media.amp"),
         matchers = listOf(
             "axis".toRegex(RegexOption.IGNORE_CASE),
             "Basic realm=\"camera\"".toRegex(RegexOption.IGNORE_CASE)

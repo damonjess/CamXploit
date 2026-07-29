@@ -17,4 +17,18 @@ data class SavedCamera(
     val lastSeen: Long = System.currentTimeMillis(),
     val isOnline: Boolean = false,
     val remoteUrl: String? = null // New field for internet access
-)
+) {
+    fun toStreamSource(): StreamSource {
+        val finalUrl = remoteUrl ?: streamUrl
+        return when (streamType.uppercase()) {
+            "RTSP" -> StreamSource.Rtsp(finalUrl, username, password)
+            "MJPEG" -> StreamSource.Mjpeg(finalUrl)
+            "ONVIF" -> StreamSource.Onvif(finalUrl, "profile_1", username, password)
+            else -> if (finalUrl.startsWith("rtsp://")) {
+                StreamSource.Rtsp(finalUrl, username, password)
+            } else {
+                StreamSource.Mjpeg(finalUrl)
+            }
+        }
+    }
+}
