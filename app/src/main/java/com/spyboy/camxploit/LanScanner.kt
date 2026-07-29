@@ -22,8 +22,8 @@ data class NetworkDevice(
 
 class LanScanner(private val context: Context) {
 
-    private val cameraPorts = listOf(554, 8554, 37777, 34567)
-    private val commonPorts = listOf(80, 443, 8080, 8443, 22, 21, 445, 5000, 9000)
+    private val cameraPorts = listOf(81, 554, 8080, 8554, 8899, 37777, 34567)
+    private val commonPorts = listOf(80, 443, 8443, 22, 21, 445, 5000, 9000)
     private val devicePorts = listOf(62078, 7000, 49152, 5353)
     private val allPorts get() = (cameraPorts + commonPorts + devicePorts).distinct()
 
@@ -98,12 +98,12 @@ class LanScanner(private val context: Context) {
             onProgress("📱 Your IP: $localIp")
             onProgress("🌐 Scanning $subnet.1 - $subnet.254 ...\n")
 
-            // Phase 1: parallel ping sweep
+            // Phase 1: parallel ping sweep (fast)
             val liveHosts = (1..254).map { i ->
                 async {
                     val ip = "$subnet.$i"
                     try {
-                        if (InetAddress.getByName(ip).isReachable(300)) ip else null
+                        if (InetAddress.getByName(ip).isReachable(200)) ip else null
                     } catch (_: Exception) { null }
                 }
             }.awaitAll().filterNotNull()
@@ -112,8 +112,8 @@ class LanScanner(private val context: Context) {
 
             val arpTable = readArpTable()
 
-            // Phase 2: parallel port checking (16 hosts at a time)
-            val semaphore = Semaphore(16)
+            // Phase 2: parallel port checking (32 hosts at a time for fast layer)
+            val semaphore = Semaphore(32)
             liveHosts.sorted().map { ip ->
                 async {
                     semaphore.acquire()

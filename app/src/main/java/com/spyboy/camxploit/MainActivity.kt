@@ -405,6 +405,50 @@ fun CamGuardianApp() {
     val scrollState = rememberScrollState()
     val projectionManager = remember { context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager }
 
+    val discoveryCoordinator = remember { DiscoveryCoordinator(context) }
+    
+    DisposableEffect(Unit) {
+        onDispose {
+            discoveryCoordinator.stopDiscovery()
+        }
+    }
+    
+    LaunchedEffect(Unit) {
+        discoveryCoordinator.progressFlow.collect { lanProgress = it }
+    }
+    
+    LaunchedEffect(Unit) {
+        discoveryCoordinator.discoveryFlow.collect { result ->
+            val existing = lanScanResults.find { it.ip == result.ip }
+            if (existing == null) {
+                // New device found
+                val scanner = LanScanner(context)
+                val arp = scanner.readArpTable()
+                val mac = arp[result.ip] ?: result.device?.mac ?: "Unknown"
+                val vendor = scanner.getVendor(mac)
+                val deviceType = scanner.guessDeviceType(vendor, "Unknown", result.device?.openPorts ?: emptyList())
+                val isCam = result.source == "ONVIF" || result.source == "SSDP" || 
+                             (result.device?.openPorts?.any { it in listOf(554, 8554, 8899, 37777, 34567) } == true)
+                
+                val host = LanHost(
+                    ip = result.ip,
+                    mac = mac,
+                    vendor = vendor,
+                    isCamera = isCam,
+                    deviceType = deviceType,
+                    isYourDevice = result.ip == networkSummary?.localIp,
+                    openPorts = result.device?.openPorts ?: emptyList()
+                )
+                lanScanResults = lanScanResults + host
+            } else if (result.source == "ONVIF" || result.source == "SSDP") {
+                // Update existing device if it's confirmed as a camera
+                lanScanResults = lanScanResults.map { 
+                    if (it.ip == result.ip) it.copy(isCamera = true) else it 
+                }
+            }
+        }
+    }
+
     val startReconScan = { targetIp: String ->
         if (targetIp.isBlank()) {
             Toast.makeText(context, "⚠️ Please select a target IP", Toast.LENGTH_SHORT).show()
@@ -509,6 +553,10 @@ fun CamGuardianApp() {
         if (!(permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false) && !(permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false)) Toast.makeText(context, "Location permission required", Toast.LENGTH_LONG).show()
     }
 
+    LaunchedEffect(Unit) {
+        discoveryCoordinator.progressFlow.collect { lanProgress = it }
+    }
+    
     LaunchedEffect(Unit) {
         val permissions = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) permissions.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -627,7 +675,36 @@ fun CamGuardianApp() {
                     1 -> IntelTab(consoleIpInput, terminalText, publicIntel, shodanApiKey, { terminalText += it }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val b64 = py.getModule("CamXploit").callAttr("manual_snapshot_capture", consoleIpInput, 80, extractCredentials(terminalText).first, extractCredentials(terminalText).second).toString(); if (b64 != "None") { val b = Base64.decode(b64, Base64.DEFAULT); val bmp = BitmapFactory.decodeByteArray(b, 0, b.size); withContext(Dispatchers.Main) { capturedBitmap = bmp; val f = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Snap_${System.currentTimeMillis()}.png"); FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }; Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() } } } catch (e: Exception) {} } }, { url -> val finalUrl = if (url.contains("shodan.io") || url.contains("censys.io") || url.contains("zoomeye.org")) url else buildAuthUrl(url, extractCredentials(terminalText).first, extractCredentials(terminalText).second); selectedUrl = finalUrl; selectedTab = 3 }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); py.getModule("sys").put("stdout", TerminalOutputStream { t -> scope.launch(Dispatchers.Main) { terminalText += t } }); py.getModule("CamXploit").callAttr("discover_onvif", consoleIpInput) } catch (e: Exception) {} } }, { val targetHost = if (consoleIpInput.contains(":")) consoleIpInput.substringBefore(":") else consoleIpInput; val targetPort = if (consoleIpInput.contains(":")) consoleIpInput.substringAfter(":").toIntOrNull() ?: 80 else 80; val vendorMatch = Regex("""Device:\s*([^\n\r]+)""").find(terminalText)?.groupValues?.get(1); scope.launch { terminalText += "🔍 Probing endpoints on $targetHost:$targetPort ...\n"; CameraScanner().scanEndpoints(host = targetHost, port = targetPort, vendor = vendorMatch, onResult = { result -> val brandTag = if (result.brand != null) "[${result.brand}] " else ""; terminalText += "  🎯 Found $brandTag${result.type}: ${result.url} (HTTP ${result.httpCode})\n" }, onDone = { terminalText += "✅ Endpoint scan complete.\n" }) } }, { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } }, { showExternalSearchDialog = true }, { showDorksDialog = true })
                     2 -> ArchiveTab(context, selectedTab, terminalText, consoleIpInput) { viewingFile = it }
                     3 -> StreamTab(terminalText, selectedUrl, { selectedUrl = it }, isRecording, recordingDuration, { recordLauncher.launch(projectionManager.createScreenCaptureIntent()) }, { context.startService(Intent(context, ScreenCaptureService::class.java).apply { action = "ACTION_STOP" }) })
-                    4 -> LanScanTab(lanScanResults, lanIsScanning, lanProgress, networkSummary, lanNmapMode, { lanNmapMode = it }, lanScanOutput, { lanIsScanning = true; lanScanResults = emptyList(); lanProgress = 0f; lanScanOutput = "> Initiating scan...\n"; scope.launch(Dispatchers.IO) { val discoveryHelper = NetworkDiscoveryHelper(context); val summary = discoveryHelper.getNetworkSummary(); withContext(Dispatchers.Main) { networkSummary = summary }; launch { val publicIp = discoveryHelper.getPublicIp(); withContext(Dispatchers.Main) { networkSummary = networkSummary?.copy(publicIp = publicIp) } }; val subnet = summary.localIp.substringBeforeLast("."); withContext(Dispatchers.Main) { lanSubnet = subnet }; val scanner = LanScanner(context); if (lanNmapMode) { subnetScan(context = context, subnet = "$subnet.0/24", onOutput = { line -> if (line.contains("Nmap scan report")) { val ip = line.substringAfter("for ").trim().split(" ").first(); if (lanScanResults.none { it.ip == ip }) { val arp = scanner.readArpTable(); val mac = arp[ip] ?: "Unknown"; val vendor = scanner.getVendor(mac); val deviceType = scanner.guessDeviceType(vendor, "Unknown", emptyList()); scope.launch(Dispatchers.Main) { lanScanResults = lanScanResults + LanHost(ip = ip, mac = mac, vendor = vendor, deviceType = deviceType, isYourDevice = ip == summary.localIp) } } } ; lanScanOutput += "$line\n" }, onComplete = { lanIsScanning = false }) } else { val arp = scanner.readArpTable(); coroutineScope { (1..254).map { i -> async { val ip = "$subnet.$i"; try { if (InetAddress.getByName(ip).isReachable(300)) { val mac = arp[ip] ?: "Unknown"; val vendor = scanner.getVendor(mac); val openPorts = mutableListOf<Int>(); listOf(80, 443, 554, 8000, 37777, 34567, 8080).forEach { port -> try { java.net.Socket().use { s -> s.connect(java.net.InetSocketAddress(ip, port), 150); openPorts.add(port) } } catch (_: Exception) { } }; val isCam = openPorts.any { it in listOf(554, 8000, 37777, 34567) } || vendor.lowercase().contains("camera") || vendor.lowercase().contains("hikvision") || vendor.lowercase().contains("dahua"); val deviceType = scanner.guessDeviceType(vendor, "Unknown", openPorts); withContext(Dispatchers.Main) { if (lanScanResults.none { it.ip == ip }) { val host = LanHost(ip = ip, mac = mac, vendor = vendor, isCamera = isCam, deviceType = deviceType, isYourDevice = ip == summary.localIp, openPorts = openPorts); lanScanResults = lanScanResults + host; if (isCam) { scope.launch(Dispatchers.IO) { val camScanner = CameraScanner(); camScanner.scanEndpoints(host = ip, port = if (openPorts.contains(80)) 80 else 8080, vendor = vendor, onResult = { result -> if (result.type == "MJPEG_STREAM" || result.type == "SNAPSHOT") { scope.launch(Dispatchers.Main) { lanScanResults = lanScanResults.map { if (it.ip == ip) it.copy(streamUrl = result.url) else it } } } }, onDone = {}) } } } } } } catch (e: Exception) {} ; withContext(Dispatchers.Main) { lanProgress = i / 254f } } }.awaitAll() }; withContext(Dispatchers.Main) { lanIsScanning = false } } } }, { selectedTab = it }, { consoleIpInput = it; selectedTab = 0 }, { selectedUrl = it; selectedTab = 3 })
+                    4 -> LanScanTab(
+                        lanScanResults, 
+                        lanIsScanning, 
+                        lanProgress, 
+                        networkSummary, 
+                        lanNmapMode, 
+                        { lanNmapMode = it }, 
+                        lanScanOutput, 
+                        onScanStart = { 
+                            lanIsScanning = true
+                            lanScanResults = emptyList()
+                            lanProgress = 0f
+                            lanScanOutput = "> Initiating Multi-Layer Discovery...\n"
+                            
+                            // Get network summary if not already there
+                            val discoveryHelper = NetworkDiscoveryHelper(context)
+                            networkSummary = discoveryHelper.getNetworkSummary()
+                            
+                            discoveryCoordinator.startDiscovery()
+                            
+                            // Auto-stop after some time if needed, or keep listening
+                            scope.launch {
+                                delay(30000) // 30 seconds for active layers
+                                if (lanIsScanning) lanIsScanning = false
+                            }
+                        }, 
+                        { selectedTab = it }, 
+                        { consoleIpInput = it; selectedTab = 0 }, 
+                        { selectedUrl = it; selectedTab = 3 }
+                    )
                     5 -> StormTab({ startReconScan(it); Toast.makeText(context, "Running post-stress scan...", Toast.LENGTH_SHORT).show() }, { ip: String, out: String -> saveContentToFile(context, out, "[STORM] - $ip", "txt"); Toast.makeText(context, "Saved to Archive", Toast.LENGTH_SHORT).show() })
                     6 -> SavedCamerasTab({ selectedUrl = it; selectedTab = 3 }, { consoleIpInput = it; selectedTab = 0 })
                     7 -> SentinelTab(savedCameras = cameras)

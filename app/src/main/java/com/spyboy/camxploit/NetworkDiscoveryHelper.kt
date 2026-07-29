@@ -54,28 +54,38 @@ class NetworkDiscoveryHelper(private val context: Context) {
     }
 
     fun discoverMDNS() = callbackFlow {
-        val discoveryListener = object : NsdManager.DiscoveryListener {
-            override fun onDiscoveryStarted(regType: String) {}
-            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-                    override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
-                    override fun onServiceResolved(resolvedServiceInfo: NsdServiceInfo) {
-                        trySend(resolvedServiceInfo)
-                    }
-                })
+        val serviceTypes = listOf(
+            "_onvif._tcp.",
+            "_axis-video._tcp.",
+            "_http._tcp.",
+            "_rtsp._tcp.",
+            "_printer._tcp.", // Cameras sometimes announce as printers? Rare but seen.
+            "_services._dns-sd._udp"
+        )
+
+        val listeners = serviceTypes.map { type ->
+            val listener = object : NsdManager.DiscoveryListener {
+                override fun onDiscoveryStarted(regType: String) {}
+                override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                    nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                        override fun onResolveFailed(si: NsdServiceInfo, errorCode: Int) {}
+                        override fun onServiceResolved(resolvedServiceInfo: NsdServiceInfo) {
+                            trySend(resolvedServiceInfo)
+                        }
+                    })
+                }
+                override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
+                override fun onDiscoveryStopped(regType: String) {}
+                override fun onStartDiscoveryFailed(regType: String, errorCode: Int) {}
+                override fun onStopDiscoveryFailed(regType: String, errorCode: Int) {}
             }
-            override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
-            override fun onDiscoveryStopped(regType: String) {}
-            override fun onStartDiscoveryFailed(regType: String, errorCode: Int) {
-                nsdManager.stopServiceDiscovery(this)
-            }
-            override fun onStopDiscoveryFailed(regType: String, errorCode: Int) {
-                nsdManager.stopServiceDiscovery(this)
-            }
+            nsdManager.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, listener)
+            listener
         }
 
-        nsdManager.discoverServices("_services._dns-sd._udp", NsdManager.PROTOCOL_DNS_SD, discoveryListener)
-        awaitClose { nsdManager.stopServiceDiscovery(discoveryListener) }
+        awaitClose {
+            listeners.forEach { nsdManager.stopServiceDiscovery(it) }
+        }
     }
     
     // Simple SSDP Discovery (Lightweight implementation)
