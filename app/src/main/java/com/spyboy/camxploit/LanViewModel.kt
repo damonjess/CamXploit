@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
 
 class LanViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val coordinator = DiscoveryCoordinator(application.applicationContext)
+    private val coordinator = DiscoveryCoordinator.getInstance(application)
     private val lanScanner = LanScanner(application.applicationContext)
 
     /** Observe this in your Compose UI with `val devices by viewModel.devices.collectAsState()` */

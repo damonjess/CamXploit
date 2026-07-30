@@ -7,7 +7,6 @@ import android.content.*
 import android.content.pm.PackageManager
 import android.graphics.*
 import android.net.Uri
-import android.net.wifi.WifiManager
 import android.os.*
 import android.provider.MediaStore
 import android.media.projection.MediaProjectionManager
@@ -79,6 +78,10 @@ import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import com.spyboy.camxploit.pentest.TlsAuditor
+import com.spyboy.camxploit.ui.SentinelScreen
+import com.spyboy.camxploit.ui.SentinelViewModel
+import com.spyboy.camxploit.ui.ToolsScreen
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -351,8 +354,14 @@ fun CamGuardianApp() {
     val lanScanResults by lanViewModel.devices.collectAsState()
     val lanIsScanning by lanViewModel.isScanning.collectAsState()
     val lanProgress by lanViewModel.progress.collectAsState()
+    
+    val rawDevices by DiscoveryCoordinator.getInstance(context).devices.collectAsState()
+    val sentinelViewModel: SentinelViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 
-    var lanSubnet by remember { mutableStateOf("") }
+    LaunchedEffect(rawDevices) {
+        sentinelViewModel.setDevices(rawDevices)
+    }
+
     var networkSummary by remember { mutableStateOf<NetworkDiscoveryHelper.NetworkSummary?>(null) }
     var showDisclaimer by remember { mutableStateOf(false) }
     var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -378,7 +387,6 @@ fun CamGuardianApp() {
     
     var isMonitorServiceRunning by remember { mutableStateOf(CameraMonitorService.isRunning) }
 
-    val cameras by CameraDatabase.getDatabase(context).cameraDao().getAllCameras().collectAsState(initial = emptyList())
     val view = LocalView.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
@@ -594,6 +602,7 @@ fun CamGuardianApp() {
                         Icons.Default.Wifi to "LAN",
                         Icons.Default.Bolt to "STORM",
                         Icons.Default.Bookmarks to "SAVED",
+                        Icons.Default.Build to "TOOLS",
                         Icons.Default.Shield to "SENTINEL"
                     )
                     tabs.forEachIndexed { index, (icon, label) ->
@@ -640,7 +649,7 @@ fun CamGuardianApp() {
                         val source = if (url.startsWith("rtsp://")) StreamSource.Rtsp(url) else StreamSource.Mjpeg(url)
                         StreamViewerActivity.launch(context, source, consoleIpInput) 
                     }, shodanApiKey = shodanApiKey, onDeepShodan = { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } })
-                    1 -> IntelTab(consoleIpInput, terminalText, publicIntel, shodanApiKey, { terminalText += it }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val b64 = py.getModule("CamXploit").callAttr("manual_snapshot_capture", consoleIpInput, 80, extractCredentials(terminalText).first, extractCredentials(terminalText).second).toString(); if (b64 != "None") { val b = Base64.decode(b64, Base64.DEFAULT); val bmp = BitmapFactory.decodeByteArray(b, 0, b.size); withContext(Dispatchers.Main) { capturedBitmap = bmp; val f = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Snap_${System.currentTimeMillis()}.png"); FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }; Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() } } } catch (e: Exception) {} } }, { url -> val finalUrl = if (url.contains("shodan.io") || url.contains("censys.io") || url.contains("zoomeye.org")) url else buildAuthUrl(url, extractCredentials(terminalText).first, extractCredentials(terminalText).second); selectedUrl = finalUrl; selectedTab = 3 }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); py.getModule("sys").put("stdout", TerminalOutputStream { t -> scope.launch(Dispatchers.Main) { terminalText += t } }); py.getModule("CamXploit").callAttr("discover_onvif", consoleIpInput) } catch (e: Exception) {} } }, { val targetHost = if (consoleIpInput.contains(":")) consoleIpInput.substringBefore(":") else consoleIpInput; val targetPort = if (consoleIpInput.contains(":")) consoleIpInput.substringAfter(":").toIntOrNull() ?: 80 else 80; val vendorMatch = Regex("""Device:\s*([^\n\r]+)""").find(terminalText)?.groupValues?.get(1); scope.launch { terminalText += "🔍 Probing endpoints on $targetHost:$targetPort ...\n"; CameraScanner().scanEndpoints(host = targetHost, port = targetPort, vendor = vendorMatch, onResult = { result -> val brandTag = if (result.brand != null) "[${result.brand}] " else ""; terminalText += "  🎯 Found $brandTag${result.type}: ${result.url} (HTTP ${result.httpCode})\n" }, onDone = { terminalText += "✅ Endpoint scan complete.\n" }) } }, { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } }, { showExternalSearchDialog = true }, { showDorksDialog = true })
+                    1 -> IntelTab(consoleIpInput, terminalText, publicIntel, shodanApiKey, { terminalText += it }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val b64 = py.getModule("CamXploit").callAttr("manual_snapshot_capture", consoleIpInput, 80, extractCredentials(terminalText).first, extractCredentials(terminalText).second).toString(); if (b64 != "None") { val b = Base64.decode(b64, Base64.DEFAULT); val bmp = BitmapFactory.decodeByteArray(b, 0, b.size); val f = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Snap_${System.currentTimeMillis()}.png"); FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }; withContext(Dispatchers.Main) { capturedBitmap = bmp; Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() } } } catch (e: Exception) {} } }, { url -> val finalUrl = if (url.contains("shodan.io") || url.contains("censys.io") || url.contains("zoomeye.org")) url else buildAuthUrl(url, extractCredentials(terminalText).first, extractCredentials(terminalText).second); selectedUrl = finalUrl; selectedTab = 3 }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); py.getModule("sys").put("stdout", TerminalOutputStream { t -> scope.launch(Dispatchers.Main) { terminalText += t } }); py.getModule("CamXploit").callAttr("discover_onvif", consoleIpInput) } catch (e: Exception) {} } }, { val targetHost = if (consoleIpInput.contains(":")) consoleIpInput.substringBefore(":") else consoleIpInput; val targetPort = if (consoleIpInput.contains(":")) consoleIpInput.substringAfter(":").toIntOrNull() ?: 80 else 80; val vendorMatch = Regex("""Device:\s*([^\n\r]+)""").find(terminalText)?.groupValues?.get(1); scope.launch { terminalText += "🔍 Probing endpoints on $targetHost:$targetPort ...\n"; CameraScanner().scanEndpoints(host = targetHost, port = targetPort, vendor = vendorMatch, onResult = { result -> val brandTag = if (result.brand != null) "[${result.brand}] " else ""; terminalText += "  🎯 Found $brandTag${result.type}: ${result.url} (HTTP ${result.httpCode})\n" }, onDone = { terminalText += "✅ Endpoint scan complete.\n" }) } }, { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } }, { showExternalSearchDialog = true }, { showDorksDialog = true })
                     2 -> ArchiveTab(context, selectedTab, terminalText, consoleIpInput) { viewingFile = it }
                     3 -> StreamTab(
                         terminalText = terminalText,
@@ -683,7 +692,8 @@ fun CamGuardianApp() {
                     )
                     5 -> StormBreakerScreen(stormViewModel)
                     6 -> SavedCamerasTab({ cam -> StreamViewerActivity.launch(context, cam.toStreamSource(), cam.ip) }, { consoleIpInput = it; selectedTab = 0 })
-                    7 -> SentinelTab(savedCameras = cameras)
+                    7 -> ToolsScreen()
+                    8 -> SentinelScreen(viewModel = sentinelViewModel)
                 }
                 capturedBitmap?.let { bmp ->
                     Spacer(Modifier.height(20.dp)); Text(text = "LAST SNAPSHOT", color = Color.Yellow, fontSize = 14.sp, fontWeight = FontWeight.Black); Spacer(Modifier.height(8.dp))
@@ -958,6 +968,13 @@ fun LanHostCard(host: LanHost, onClick: () -> Unit) {
                     color = if (host.isCamera) Color(0xFF00FF88) else Color.Gray,
                     fontSize = 13.sp
                 )
+
+                Text(
+                    text = host.ip,
+                    color = if (host.isCamera) Color(0xFF00FF88).copy(alpha = 0.7f) else Color.Gray,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
                 
                 if (host.openPorts.isNotEmpty()) {
                     Row(
@@ -1022,17 +1039,6 @@ fun buildAuthUrl(u: String, user: String, pass: String): String { if (user.isBla
 fun SavedCamerasTab(onPlay: (SavedCamera) -> Unit, onIpSelected: (String) -> Unit) {
     val context = LocalContext.current; val cameras by CameraDatabase.getDatabase(context).cameraDao().getAllCameras().collectAsState(initial = emptyList())
     LazyColumn(Modifier.fillMaxSize()) { items(cameras) { cam -> Card(Modifier.fillMaxWidth().padding(6.dp).clickable { onIpSelected(cam.ip) }) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(cam.nickname, fontWeight = FontWeight.Bold); Text(cam.ip, fontSize = 12.sp) }; IconButton(onClick = { onPlay(cam) }) { Icon(Icons.Default.PlayArrow, null) } } } } }
-}
-
-@Composable
-fun SentinelTab(savedCameras: List<SavedCamera>) {
-    val context = LocalContext.current; val scope = rememberCoroutineScope(); val dao = CameraDatabase.getDatabase(context).sentinelDao(); val detections by dao.getAll().collectAsState(initial = emptyList()); var isRunning by remember { mutableStateOf(false) }; var selectedCamera by remember { mutableStateOf<SavedCamera?>(null) }; val processor = remember { SentinelProcessor(context) }
-    Column(Modifier.fillMaxSize()) {
-        Text("🛡️ SENTINEL", color = Color.Cyan, fontSize = 20.sp, fontWeight = FontWeight.Black)
-        if (savedCameras.isNotEmpty()) { LazyColumn(Modifier.heightIn(max = 140.dp)) { items(savedCameras) { cam -> Card(Modifier.fillMaxWidth().padding(3.dp).clickable { selectedCamera = cam }) { Text(cam.nickname, modifier = Modifier.padding(10.dp)) } } } }
-        Button(onClick = { isRunning = !isRunning }, enabled = selectedCamera != null) { Text(if (isRunning) "STOP" else "START") }
-        LazyColumn(Modifier.fillMaxSize()) { items(detections) { d -> Text("⚠️ ${d.label} at ${d.cameraIp}", color = Color.Red, modifier = Modifier.padding(8.dp)) } }
-    }
 }
 
 @Composable

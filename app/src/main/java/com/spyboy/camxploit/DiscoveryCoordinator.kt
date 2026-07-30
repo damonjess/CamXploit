@@ -13,6 +13,17 @@ import java.util.concurrent.ConcurrentHashMap
 
 class DiscoveryCoordinator(private val context: Context) {
 
+    companion object {
+        @Volatile
+        private var INSTANCE: DiscoveryCoordinator? = null
+
+        fun getInstance(context: Context): DiscoveryCoordinator {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: DiscoveryCoordinator(context.applicationContext).also { INSTANCE = it }
+            }
+        }
+    }
+
     private val tag = "DiscoveryCoordinator"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 

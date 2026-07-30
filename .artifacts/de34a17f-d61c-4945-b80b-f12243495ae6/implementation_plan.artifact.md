@@ -1,31 +1,37 @@
-# Fix Console Error in Storm Tab
+# Implement SSL/TLS Security Audit in SENTINEL
 
-The Storm console is showing a `TypeError` because the Python bridge (Chaquopy) cannot find a `write(String)` method on the output stream used to capture logs in `StormViewModel`.
+The user wants to integrate a new `TlsAuditor` component into the `SENTINEL` tab. This tool will perform a security scan on the SSL/TLS configuration of network devices (like IP cameras) to identify weak protocols, ciphers, and certificate issues.
 
 ## User Review Required
 
 > [!IMPORTANT]
-> This fix involves refactoring the `TerminalOutputStream` class to be a standalone file so it can be shared between `MainActivity` and `StormViewModel`. This ensures consistent behavior for capturing Python output across the app.
+> The `SENTINEL` tab currently focuses on AI-based camera monitoring. I will be adding a new section for "Encryption Audit" to keep the UI clean. This allows users to select a saved camera and perform a deep security scan on its encrypted connections.
 
 ## Proposed Changes
 
-### [Core Utilities]
+### [Network Security]
 
-#### [NEW] [TerminalOutputStream.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/TerminalOutputStream.kt)
-- Create a standalone `TerminalOutputStream` class that implements `OutputStream` and includes the required `write(String)` method for Python compatibility.
+#### [NEW] [TlsAuditor.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/pentest/TlsAuditor.kt)
+- Create the SSL/TLS auditing logic (already provided by the user).
+
+### [UI Components]
 
 #### [MODIFY] [MainActivity.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/MainActivity.kt)
-- Remove the local definition of `TerminalOutputStream`.
-
-#### [MODIFY] [StormViewModel.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/StormViewModel.kt)
-- Replace the anonymous `OutputStream` with an instance of `TerminalOutputStream` to fix the `TypeError`.
+- Import `com.spyboy.camxploit.pentest.TlsAuditor`.
+- Update `SentinelTab` to include:
+    - A camera selection list (using `LazyRow`).
+    - A "TLS AUDIT" button.
+    - A `TlsReportCard` to display the scan results (Grade, Protocol, Vulnerabilities).
+- Add scrolling to the `SentinelTab` to accommodate the new content.
 
 ## Verification Plan
 
 ### Automated Tests
-- Run `gradle build` to ensure the refactoring didn't break anything and the new class is correctly linked.
+- Run `gradle build` to ensure the new package and imports are correctly resolved.
 
 ### Manual Verification
-- Deploy the app to the device.
-- Open the **STORM** tab and initiate a scan.
-- Verify that the console no longer shows a `TypeError` and correctly displays the output from the Python scripts.
+- Deploy the app to a device.
+- Navigate to the **SENTINEL** tab.
+- Select a saved camera from the top list.
+- Click the **TLS AUDIT** button.
+- Verify that a report card appears showing the encryption grade and any detected vulnerabilities.

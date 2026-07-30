@@ -8,6 +8,7 @@ import com.chaquo.python.Python
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.text.SimpleDateFormat
@@ -31,6 +32,8 @@ class StormViewModel(private val context: Context) : ViewModel() {
     val report = _report.asStateFlow()
 
     private var stormJob: Job? = null
+    private var validationJob: Job? = null
+    private var lastValidationTime = 0L
 
     fun updateConfig(newConfig: StormConfig) {
         if (_config.value.vector != newConfig.vector) {
@@ -41,40 +44,54 @@ class StormViewModel(private val context: Context) : ViewModel() {
 
     private fun log(message: String, level: LogLevel = LogLevel.INFO) {
         val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        _logs.value = _logs.value + StormLog(timestamp, message, level)
+        _logs.update { currentLogs ->
+            (currentLogs + StormLog(timestamp, message, level)).takeLast(200)
+        }
     }
 
     fun validateTarget() {
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastValidationTime < 800) return
+        lastValidationTime = currentTime
+
         val ip = _config.value.targetIp
         if (ip.isBlank()) {
             _validationState.value = ValidationState.Invalid("IP cannot be empty")
             return
         }
 
-        viewModelScope.launch(Dispatchers.IO) {
-            _validationState.value = ValidationState.Validating
-            log("Probing target $ip for common ports...")
-            
-            val openPorts = mutableListOf<Int>()
-            val portsToScan = listOf(80, 443, 554, 8000, 8080, 8554)
-            
-            portsToScan.forEach { port ->
-                try {
-                    Socket().use { socket ->
-                        socket.connect(InetSocketAddress(ip, port), 1000)
-                        openPorts.add(port)
-                    }
-                } catch (e: Exception) {}
-            }
+        validationJob?.cancel()
+        validationJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                _validationState.value = ValidationState.Validating
+                log("Probing target $ip for common ports...")
+                
+                val openPorts = mutableListOf<Int>()
+                val portsToScan = listOf(80, 443, 554, 8000, 8080, 8554)
+                
+                portsToScan.forEach { port ->
+                    ensureActive()
+                    try {
+                        Socket().use { socket ->
+                            socket.connect(InetSocketAddress(ip, port), 1000)
+                            openPorts.add(port)
+                        }
+                    } catch (e: Exception) {}
+                }
 
-            withContext(Dispatchers.Main) {
+                ensureActive()
                 if (openPorts.isNotEmpty()) {
                     _validationState.value = ValidationState.Valid(openPorts)
                     log("Target responsive. Open ports: ${openPorts.joinToString()}", LogLevel.INFO)
-                    _config.value = _config.value.copy(targetPort = openPorts.first())
+                    _config.update { it.copy(targetPort = openPorts.first()) }
                 } else {
                     _validationState.value = ValidationState.Invalid("No common ports responsive")
                     log("Target probe failed: Host unreachable or all ports closed", LogLevel.WARN)
+                }
+            } catch (e: Exception) {
+                if (e !is CancellationException) {
+                    _validationState.value = ValidationState.Invalid("Validation error: ${e.message}")
+                    log("Validation error: ${e.message}", LogLevel.ERROR)
                 }
             }
         }

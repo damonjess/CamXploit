@@ -1,0 +1,3 @@
+- [x] Optimize logging and add validation debounce in `StormViewModel.kt`
+- [x] Refine Sentinel UI labels and error messages in `SentinelScreen.kt`
+- [x] Verify build and fix any issues
