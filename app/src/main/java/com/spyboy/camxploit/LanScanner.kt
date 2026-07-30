@@ -9,7 +9,7 @@ data class NetworkDevice(
     val ip: String,
     val hostname: String,
     val mac: String,
-    val vendor: String,
+    val vendor: String?,
     val openPorts: List<Int>
 )
 
@@ -94,10 +94,15 @@ class LanScanner(private val context: Context) {
         }
     }
 
-    fun getVendor(mac: String): String {
-        val normalized = normalizeMac(mac) ?: return "Unknown Device"
+    fun getVendor(mac: String): String? {
+        val normalized = normalizeMac(mac) ?: return null
+        
+        // 1) Try the new OuiVendorLookup
+        OuiVendorLookup.lookup(normalized)?.let { return it }
+
+        // 2) Fallback to nmap-mac-prefixes
         val cleanMac = normalized.replace(":", "").replace("-", "").replace(".", "").uppercase()
-        if (cleanMac.length < 6) return "Unknown Device"
+        if (cleanMac.length < 6) return null
 
         // nmap-mac-prefixes uses 6-, 7-, and 9-char prefixes; longest match wins
         for (len in intArrayOf(9, 7, 6)) {
@@ -105,7 +110,7 @@ class LanScanner(private val context: Context) {
                 vendorMap[cleanMac.substring(0, len)]?.let { return it }
             }
         }
-        return "Unknown Device"
+        return null
     }
 
     fun readArpTable(): Map<String, String> {
@@ -124,22 +129,26 @@ class LanScanner(private val context: Context) {
         return arpMap
     }
 
-    fun guessDeviceType(vendor: String, hostname: String, openPorts: List<Int>): String {
-        val v = vendor.lowercase()
+    fun guessDeviceType(vendor: String?, hostname: String, openPorts: List<Int>): String {
+        val v = vendor?.lowercase() ?: ""
         val h = hostname.lowercase()
         
         return when {
             v.contains("apple") || v.contains("samsung") || v.contains("huawei") || v.contains("google") -> "Phone"
             v.contains("microsoft") || v.contains("dell") || v.contains("hp") || v.contains("lenovo") || v.contains("asus") -> "Computer"
-            v.contains("hikvision") || v.contains("dahua") || v.contains("axis") || v.contains("reolink") || openPorts.contains(554) -> "Camera"
-            v.contains("tp-link") || v.contains("d-link") || v.contains("netgear") || v.contains("cisco") || v.contains("ubiquiti") -> "Router"
-            v.contains("amazon") || v.contains("echo") || v.contains("google home") || v.contains("sonos") -> "Smart Speaker"
-            v.contains("sony") || v.contains("lg") || v.contains("panasonic") || v.contains("vizio") || h.contains("tv") -> "TV"
-            v.contains("synology") || v.contains("qnap") || openPorts.contains(445) -> "Storage"
-            v.contains("raspberry pi") -> "Single Board Computer"
+            v.contains("hikvision") || v.contains("dahua") || v.contains("axis") || v.contains("reolink") || 
+                    v.contains("amcrest") || v.contains("foscam") || v.contains("vstarcam") || 
+                    openPorts.contains(554) || openPorts.contains(8000) || openPorts.contains(37777) -> "Camera"
+            v.contains("tp-link") || v.contains("d-link") || v.contains("netgear") || v.contains("cisco") || 
+                    v.contains("ubiquiti") || v.contains("linksys") || v.contains("asus") || v.contains("belkin") -> "Router"
+            v.contains("amazon") || v.contains("echo") || h.contains("google home") || v.contains("sonos") || h.contains("nest") -> "Smart Speaker"
+            v.contains("sony") || v.contains("lg") || v.contains("panasonic") || v.contains("vizio") || h.contains("tv") || h.contains("roku") -> "TV"
+            v.contains("synology") || v.contains("qnap") || v.contains("western digital") || openPorts.contains(445) -> "Storage"
+            v.contains("raspberry pi") || v.contains("arduino") || v.contains("espressif") -> "IoT Controller"
+            v.contains("atheros") || h.contains("int6400") -> "Powerline"
             h.contains("iphone") || h.contains("android") || h.contains("pixel") -> "Phone"
             h.contains("macbook") || h.contains("laptop") || h.contains("desktop") -> "Computer"
-            h.contains("printer") || v.contains("canon") || v.contains("epson") || v.contains("brother") -> "Printer"
+            h.contains("printer") || v.contains("canon") || v.contains("epson") || v.contains("brother") || v.contains("hp") -> "Printer"
             else -> "Unknown"
         }
     }

@@ -23,7 +23,11 @@ android {
         }
 
         python {
-            buildPython "py", "-3.12"
+            if (System.getenv("GITHUB_ACTIONS") == "true") {
+                buildPython "python3.12"
+            } else {
+                buildPython "py", "-3.12"
+            }
             version "3.12"
             pip {
                 install "requests"

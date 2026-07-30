@@ -22,7 +22,7 @@ class LanViewModel(application: Application) : AndroidViewModel(application) {
             val localIp = lanScanner.getLocalIpAndSubnet()?.first
             devices.map { dev ->
                 val mac = lanScanner.normalizeMac(dev.mac) ?: "Unknown"
-                val vendor = lanScanner.getVendor(mac)
+                val vendor = dev.vendor ?: lanScanner.getVendor(mac)
                 val deviceType = lanScanner.guessDeviceType(vendor, dev.hostname ?: "Unknown", dev.openPorts)
                 
                 val isCam = dev.source.contains("ssdp") || 
@@ -32,6 +32,7 @@ class LanViewModel(application: Application) : AndroidViewModel(application) {
                     ip = dev.ip,
                     mac = mac,
                     vendor = vendor,
+                    hostname = dev.hostname,
                     isCamera = isCam,
                     deviceType = deviceType,
                     isYourDevice = dev.ip == localIp,

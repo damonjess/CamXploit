@@ -91,8 +91,6 @@ import java.util.*
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        extractNmap(this)
-        if (!Python.isStarted()) Python.start(AndroidPlatform(this))
         setContent { CamGuardianApp() }
     }
 
@@ -930,7 +928,13 @@ fun LanHostCard(host: LanHost, onClick: () -> Unit) {
             Spacer(modifier = Modifier.width(12.dp))
             Column(Modifier.weight(1f)) { 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = host.ip, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    val primaryName = when {
+                        host.isYourDevice -> "This Device"
+                        host.vendor != null -> host.vendor
+                        host.hostname != null && host.hostname != host.ip -> host.hostname
+                        else -> "Network Device"
+                    }
+                    Text(text = primaryName, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     if (host.isYourDevice) {
                         Spacer(Modifier.width(8.dp))
                         Surface(
@@ -948,17 +952,15 @@ fun LanHostCard(host: LanHost, onClick: () -> Unit) {
                     }
                 }
                 
-                val brandText = when {
+                val subtitle = when {
                     host.isYourDevice -> android.os.Build.MODEL
-                    host.brand?.lowercase()?.contains("hikvision") == true -> "Hikvision NVR"
-                    host.brand?.lowercase()?.contains("dahua") == true -> "Dahua Camera"
-                    host.brand?.lowercase()?.contains("axis") == true -> "Axis Camera"
-                    host.isCamera -> "IP Camera"
-                    else -> host.vendor ?: "Unknown Device"
+                    host.vendor != null && host.hostname != null && host.hostname != host.ip -> host.hostname
+                    host.mac != null && host.mac != "Unknown" -> "MAC: ${host.mac}"
+                    else -> host.ip
                 }
                 
                 Text(
-                    text = brandText,
+                    text = subtitle,
                     color = if (host.isCamera) Color(0xFF00FF88) else Color.Gray,
                     fontSize = 13.sp
                 )
@@ -1128,14 +1130,25 @@ fun CameraDetailBottomSheet(
 
             Spacer(Modifier.height(16.dp))
 
+            val primaryName = when {
+                host.isYourDevice -> "This Device"
+                host.vendor != null -> host.vendor
+                host.hostname != null && host.hostname != host.ip -> host.hostname
+                else -> "Network Device"
+            }
             Text(
-                text = host.ip,
+                text = primaryName,
                 color = Color.White,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold
             )
+            val subtitle = when {
+                host.vendor != null && host.hostname != null && host.hostname != host.ip -> host.hostname
+                host.mac != null && host.mac != "Unknown" -> "MAC: ${host.mac}"
+                else -> host.ip
+            }
             Text(
-                text = "${host.vendor ?: "Unknown Vendor"} | ${host.deviceType}",
+                text = subtitle,
                 color = Color.Gray,
                 fontSize = 14.sp
             )

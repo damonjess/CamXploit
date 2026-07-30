@@ -1,0 +1,8 @@
+- [x] Optimize LAN Scan Performance
+    - [x] Modify `RobustLanScanner.kt`
+    - [x] Update `DiscoveryCoordinator.kt`
+    - [x] Verify build and functionality
+- [ ] Fix Bottom Navigation Overlap
+    - [ ] Enable `enableEdgeToEdge()` in `MainActivity.kt`
+    - [ ] Add `navigationBarsPadding()` to the bottom navigation bar
+    - [ ] Verify UI on device
