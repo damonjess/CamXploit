@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -18,10 +20,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,11 +53,15 @@ fun StormBreakerScreen(
     val validation  by viewModel.validationState.collectAsState()
     val report      by viewModel.report.collectAsState()
     val isRunning   = metrics.isRunning
+    
+    val scrollState = rememberScrollState()
+    val haptic = LocalHapticFeedback.current
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Background)
+            .verticalScroll(scrollState)
             .padding(horizontal = 16.dp)
             .padding(bottom = 16.dp)
     ) {
@@ -97,8 +106,10 @@ fun StormBreakerScreen(
                 SelectableChip(
                     text = vector.displayName,
                     selected = selected,
-                    onClick = { viewModel.updateConfig(config.copy(vector = vector)) },
-                    modifier = Modifier.weight(1f) // Equal width in row
+                    onClick = { 
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        viewModel.updateConfig(config.copy(vector = vector)) 
+                    }
                 )
             }
         }
@@ -143,7 +154,10 @@ fun StormBreakerScreen(
                         .weight(1f)
                         .clip(RoundedCornerShape(10.dp))
                         .background(if (selected) AccentRed else SurfaceLight)
-                        .clickable { viewModel.updateConfig(config.copy(loadPattern = pattern)) }
+                        .clickable { 
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            viewModel.updateConfig(config.copy(loadPattern = pattern)) 
+                        }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -169,7 +183,7 @@ fun StormBreakerScreen(
         }
 
         // ── Console ──────────────────────────────────────────
-        ConsoleBox(logs = logs, modifier = Modifier.weight(1f))
+        ConsoleBox(logs = logs, modifier = Modifier.height(200.dp))
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -295,22 +309,24 @@ private fun SelectableChip(
 ) {
     Box(
         modifier = modifier
+            .defaultMinSize(minHeight = 48.dp) // Standard touch target height
             .clip(RoundedCornerShape(10.dp))
             .background(if (selected) AccentRed.copy(alpha = 0.15f) else Surface)
             .border(
-                width = if (selected) 1.dp else 0.dp,
-                color = if (selected) AccentRed else Color.Transparent,
+                width = 1.dp,
+                color = if (selected) AccentRed else Color(0xFF222222),
                 shape = RoundedCornerShape(10.dp)
             )
             .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
             color = if (selected) AccentRed else TextMuted,
             fontSize = 12.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            textAlign = TextAlign.Center
         )
     }
 }

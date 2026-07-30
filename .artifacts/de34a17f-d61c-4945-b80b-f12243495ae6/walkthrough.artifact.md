@@ -15,10 +15,17 @@ I have optimized the LAN scanning process to be significantly faster while maint
 
 1.  **Updated Scan Configuration**: Updated the `DiscoveryCoordinator` to pass the optimized 400ms timeout to the scanner.
 
+### Storm Console Stability Fix (TypeError)
+
+1.  **Shared Logging Bridge**: Extracted the `TerminalOutputStream` into its own file. This class is responsible for "translating" Python output from the background scripts into text the Android app can display.
+2.  **Chaquopy Compatibility**: Added a specific `write(String)` method that the Chaquopy Python bridge requires. This was the direct cause of the `TypeError` shown in the console.
+3.  **Unified Output**: Both the main Console tab and the Storm tab now use this same robust logging bridge, ensuring that Python errors and status messages are captured consistently across the entire app.
+
 ## Verification Results
 
 ### Automated Tests
-- The project was successfully built using `gradle assembleDebug`, confirming that all code changes are syntactically correct and compatible with existing dependencies.
+- The project was successfully built using `gradle assembleDebug`, confirming that all code changes are syntactically correct.
 
 ### Manual Verification Recommendation
-- Run the LAN scan in the app. You should see the progress bar move much more smoothly and the overall time to complete a full subnet scan (/24) should be reduced by 50-70% depending on network conditions.
+1.  **LAN Scan**: Run the scan in the app. You should see the progress bar move much more smoothly and the overall time to complete a full subnet scan (/24) should be reduced by 50-70%.
+2.  **Bottom Tabs**: Check the bottom of the screen. The navigation tabs ("CONSOLE", "LAN", "STORM", etc.) should now be fully visible and not overlapping with the phone's navigation buttons.

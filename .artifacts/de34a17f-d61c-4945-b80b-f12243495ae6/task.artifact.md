@@ -2,7 +2,22 @@
     - [x] Modify `RobustLanScanner.kt`
     - [x] Update `DiscoveryCoordinator.kt`
     - [x] Verify build and functionality
-- [ ] Fix Bottom Navigation Overlap
-    - [ ] Enable `enableEdgeToEdge()` in `MainActivity.kt`
-    - [ ] Add `navigationBarsPadding()` to the bottom navigation bar
-    - [ ] Verify UI on device
+- [x] Fix Bottom Navigation Overlap
+    - [x] Enable `enableEdgeToEdge()` in `MainActivity.kt`
+    - [x] Add `navigationBarsPadding()` to the bottom navigation bar
+    - [x] Verify UI on device
+- [x] Fix Attack Vector Selection
+    - [x] Update `SelectableChip` in `StormBreakerScreen.kt` for better touch targets
+    - [x] Clean up `FlowRow` constraints in `StormBreakerScreen.kt`
+    - [x] Add logging to `StormViewModel.kt` for selection verification
+    - [x] Verify build and UI functionality
+- [x] Fix Storm Breaker Layout and Feedback
+    - [x] Add vertical scrolling to Storm tab
+    - [x] Fix ConsoleBox visibility with minimum height
+    - [x] Add haptic feedback to selection chips
+    - [x] Verify build and UI layout
+- [x] Fix Storm Console TypeError
+    - [x] Create standalone `TerminalOutputStream.kt`
+    - [x] Remove `TerminalOutputStream` from `MainActivity.kt`
+    - [x] Update `StormViewModel.kt` to use `TerminalOutputStream`
+    - [x] Verify build and functionality

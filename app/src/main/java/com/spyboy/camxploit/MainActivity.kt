@@ -21,6 +21,7 @@ import android.widget.ImageButton
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -91,6 +92,7 @@ import java.util.*
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent { CamGuardianApp() }
     }
 
@@ -335,41 +337,6 @@ fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Boolean {
     return false
 }
 
-class TerminalOutputStream(val onText: (String) -> Unit) : OutputStream() {
-    private val buffer = StringBuilder()
-
-    fun write(text: String) {
-        buffer.append(text)
-        if (text.contains("\n")) {
-            flush()
-        }
-    }
-
-    override fun write(b: Int) {
-        val c = b.toChar()
-        buffer.append(c)
-        if (c == '\n') {
-            flush()
-        }
-    }
-
-    override fun write(b: ByteArray) {
-        write(b, 0, b.size)
-    }
-
-    override fun write(b: ByteArray, off: Int, len: Int) {
-        val text = String(b, off, len, Charsets.UTF_8)
-        write(text)
-    }
-    
-    override fun flush() {
-        if (buffer.isNotEmpty()) {
-            onText(buffer.toString())
-            buffer.clear()
-        }
-    }
-}
-
 @Composable
 fun CamGuardianApp() {
     val context = LocalContext.current
@@ -602,15 +569,42 @@ fun CamGuardianApp() {
     Scaffold(
         containerColor = Color.Black,
         bottomBar = {
-            ScrollableTabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = Color(0xFF0A0A0A),
-                contentColor = Color.Green,
-                edgePadding = 0.dp,
-                indicator = { tabPositions -> TabRowDefaults.SecondaryIndicator(Modifier.tabIndicatorOffset(tabPositions[selectedTab]), color = Color.Green, height = 3.dp) }
+            Surface(
+                color = Color(0xFF0A0A0A),
+                modifier = Modifier.navigationBarsPadding()
             ) {
-                val tabs = listOf(Icons.Default.Terminal to "CONSOLE", Icons.Default.Psychology to "INTEL", Icons.Default.FolderOpen to "ARCHIVE", Icons.Default.Videocam to "STREAM", Icons.Default.Wifi to "LAN", Icons.Default.Bolt to "STORM", Icons.Default.Bookmarks to "SAVED", Icons.Default.Shield to "SENTINEL")
-                tabs.forEachIndexed { index, (icon, label) -> Tab(selected = selectedTab == index, onClick = { selectedTab = index }, text = { Text(label, fontSize = 11.sp) }, icon = { Icon(icon, null, modifier = Modifier.size(22.dp)) }) }
+                ScrollableTabRow(
+                    selectedTabIndex = selectedTab,
+                    containerColor = Color.Transparent,
+                    contentColor = Color.Green,
+                    edgePadding = 0.dp,
+                    indicator = { tabPositions ->
+                        TabRowDefaults.SecondaryIndicator(
+                            Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                            color = Color.Green,
+                            height = 3.dp
+                        )
+                    }
+                ) {
+                    val tabs = listOf(
+                        Icons.Default.Terminal to "CONSOLE",
+                        Icons.Default.Psychology to "INTEL",
+                        Icons.Default.FolderOpen to "ARCHIVE",
+                        Icons.Default.Videocam to "STREAM",
+                        Icons.Default.Wifi to "LAN",
+                        Icons.Default.Bolt to "STORM",
+                        Icons.Default.Bookmarks to "SAVED",
+                        Icons.Default.Shield to "SENTINEL"
+                    )
+                    tabs.forEachIndexed { index, (icon, label) ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = { Text(label, fontSize = 11.sp) },
+                            icon = { Icon(icon, null, modifier = Modifier.size(22.dp)) }
+                        )
+                    }
+                }
             }
         }
     ) { padding ->

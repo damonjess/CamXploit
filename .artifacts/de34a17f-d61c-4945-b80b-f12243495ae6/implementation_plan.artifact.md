@@ -1,27 +1,31 @@
-# Fix Bottom Navigation Obscured by System Bars
+# Fix Console Error in Storm Tab
 
-The app's bottom navigation tabs are being obscured by the system navigation bar (back/home/recent buttons). This is because the app targets Android 15 (API 35), where edge-to-edge display is enforced by default, but the bottom navigation bar doesn't account for the system insets.
+The Storm console is showing a `TypeError` because the Python bridge (Chaquopy) cannot find a `write(String)` method on the output stream used to capture logs in `StormViewModel`.
 
 ## User Review Required
 
-> [!NOTE]
-> I will be enabling explicit edge-to-edge support in the `MainActivity` to ensure the system bars are correctly handled across different Android versions and device types.
+> [!IMPORTANT]
+> This fix involves refactoring the `TerminalOutputStream` class to be a standalone file so it can be shared between `MainActivity` and `StormViewModel`. This ensures consistent behavior for capturing Python output across the app.
 
 ## Proposed Changes
 
-### [UI Layout]
+### [Core Utilities]
+
+#### [NEW] [TerminalOutputStream.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/TerminalOutputStream.kt)
+- Create a standalone `TerminalOutputStream` class that implements `OutputStream` and includes the required `write(String)` method for Python compatibility.
 
 #### [MODIFY] [MainActivity.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/MainActivity.kt)
-- **Enable Edge-to-Edge**: Call `enableEdgeToEdge()` in `MainActivity.onCreate`.
-- **Apply Insets to Bottom Bar**: Wrap the `ScrollableTabRow` in the `Scaffold`'s `bottomBar` with a container that applies `navigationBarsPadding()`. This will push the tabs up so they are above the system buttons while maintaining the background color.
-- **Ensure Top Bar Insets**: The current `Scaffold` usage with the `padding` parameter should already handle the status bar, but I will verify if any further adjustments are needed for the header.
+- Remove the local definition of `TerminalOutputStream`.
+
+#### [MODIFY] [StormViewModel.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/StormViewModel.kt)
+- Replace the anonymous `OutputStream` with an instance of `TerminalOutputStream` to fix the `TypeError`.
 
 ## Verification Plan
 
 ### Automated Tests
-- Run `gradle build` to ensure no compilation errors.
+- Run `gradle build` to ensure the refactoring didn't break anything and the new class is correctly linked.
 
 ### Manual Verification
-- Deploy to a device with a gesture or button-based navigation bar.
-- Confirm that the "LAN", "STORM", and other tab labels are fully visible and not overlapping with system buttons.
-- Confirm the status bar area (top) still looks correct.
+- Deploy the app to the device.
+- Open the **STORM** tab and initiate a scan.
+- Verify that the console no longer shows a `TypeError` and correctly displays the output from the Python scripts.

@@ -8,7 +8,6 @@ import com.chaquo.python.Python
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.text.SimpleDateFormat
@@ -34,6 +33,9 @@ class StormViewModel(private val context: Context) : ViewModel() {
     private var stormJob: Job? = null
 
     fun updateConfig(newConfig: StormConfig) {
+        if (_config.value.vector != newConfig.vector) {
+            log("Attack Vector changed to: ${newConfig.vector.displayName}")
+        }
         _config.value = newConfig
     }
 
@@ -131,24 +133,15 @@ class StormViewModel(private val context: Context) : ViewModel() {
             try {
                 val py = Python.getInstance()
                 val sys = py.getModule("sys")
-                val pyOutputStream = object : OutputStream() {
-                    private val buffer = StringBuilder()
-                    override fun write(b: Int) {
-                        val char = b.toChar()
-                        if (char == '\n') {
-                            log(buffer.toString(), LogLevel.DEBUG)
-                            buffer.setLength(0)
-                        } else {
-                            buffer.append(char)
-                        }
-                    }
-                }
+                val pyOutputStream = TerminalOutputStream { log(it, LogLevel.DEBUG) }
                 
                 sys.put("stdout", pyOutputStream)
                 sys.put("stderr", pyOutputStream)
                 
                 py.getModule("CamXploit").callAttr("test_dos_resilience", ip, port)
                 
+                pyOutputStream.flush()
+
                 while (_metrics.value.elapsedSeconds < duration && isActive) {
                     delay(500)
                 }
