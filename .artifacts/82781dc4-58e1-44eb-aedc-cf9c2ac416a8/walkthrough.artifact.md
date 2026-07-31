@@ -1,30 +1,28 @@
-# Walkthrough - Insecam WebView Browser & Direct Stream Integration
+# Walkthrough - Integrated Feature Merge
 
-I have replaced the broken Insecam scraper with a robust WebView-based browser and added a Direct Stream panel for manual RTSP/HTTP playback. This solves the Cloudflare blocking issue and provides a unified workflow for OSINT discoveries.
+I have successfully merged the LAN vendor resolution fixes into the main branch alongside the new screenshot, PDF, and streaming features. All conflicts have been resolved to preserve the latest UI improvements while incorporating the enhanced network discovery logic.
 
-## Changes Made
+## Changes Merged
 
-### 1. **Insecam Native Browser**
-- **[NEW] [InsecamBrowserScreen.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/ui/InsecamBrowserScreen.kt):** A dedicated WebView wrapper that:
-    - Loads `insecam.org` natively, bypassing Cloudflare scraping issues.
-    - Intercepts camera page links (`/en/view/ID/`) and automatically launches them in our high-performance `StreamActivity` viewer.
-    - Provides a "Reload" function and a clean dark-themed header.
+### 1. **LAN Discovery & Vendor Resolution**
+- **Enhanced OUI Lookup:** Integrated improved MAC-to-vendor resolution logic.
+- **Discovery Coordination:** Merged updates to `DiscoveryCoordinator.kt` and `DiscoveryModels.kt` for more accurate device classification.
+- **Robust Scanning:** Incorporates the `RobustLanScanner` and improved `SsdpDiscoveryHelper` for better IoT/Camera detection.
 
-### 2. **Manual Stream Control**
-- **[NEW] [DirectStreamPanel.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/ui/DirectStreamPanel.kt):** A new utility panel in the INTEL section that:
-    - Allows users to paste any RTSP or HTTP stream URL directly.
-    - Supports custom labeling for streams.
-    - **Common Paths:** Includes one-tap presets for default Hikvision, Dahua, Axis, and XMEye RTSP paths, making it easy to test exposed targets found via ZoomEye or LAN scans.
+### 2. **Screenshot & Reporting (Preserved)**
+- **Screenshot Update:** The fix for the "LAST SNAPSHOT" preview is active.
+- **Enhanced PDF Generation:** Supports multi-line reports and pagination.
+- **Improved HTML Report:** Dark-mode friendly audit logs.
 
-### 3. **OSINT Logic Cleanup**
-- **[MODIFY] [OsintScreen.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/ui/OsintScreen.kt):** Replaced the country/camera list with the new browser and direct stream UI.
-- **[MODIFY] [OsintViewModel.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/osint/OsintViewModel.kt):** Removed legacy scraper state (`_countries`, `_cameras`, etc.) and associated methods, reducing memory overhead and technical debt.
-- **[DELETE] `InsecamClient.kt`:** Removed the obsolete regex-based scraper.
+### 3. **Full-Screen Stream Viewer (Preserved)**
+- **Insecam Native Browser:** Bypasses Cloudflare blocks via an in-app WebView browser.
+- **Direct Stream Control:** Allows manual RTSP/HTTP entry with vendor presets (Hikvision/Dahua/Axis).
+- **Dual-Mode Player:** Smart switching between WebView and ExoPlayer.
+
+### 4. **API Optimization (Preserved)**
+- **ZoomEye Fixes:** Explicit host search parameters and refined error handling for credit status.
 
 ## Verification Results
-- **Build:** The project compiles successfully.
-- **Compatibility:** Added `@androidx.media3.common.util.UnstableApi` to ensure compliance with the Media3 library used by `StreamActivity`.
-- **Workflow:** Verified that `GlobalOsintSheet` correctly uses the new public `PublicCamsPanel`.
-
-> [!TIP]
-> When you find a camera IP on ZoomEye that has port 554 open, you can now quickly test it by copying the IP into the **Direct Stream** panel and selecting one of the **COMMON PATHS** presets.
+- **Build:** The project builds successfully on the `main` branch.
+- **Integrity:** Verified that `OsintScreen.kt` maintains the new browser-based OSINT workflow.
+- **VCS:** The `main` branch is now up-to-date with all feature work.

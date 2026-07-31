@@ -7,7 +7,6 @@ import android.content.*
 import android.content.pm.PackageManager
 import android.graphics.*
 import android.net.Uri
-import android.net.wifi.WifiManager
 import android.os.*
 import android.provider.MediaStore
 import android.media.projection.MediaProjectionManager
@@ -21,6 +20,7 @@ import android.widget.ImageButton
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -78,6 +78,13 @@ import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import com.spyboy.camxploit.pentest.TlsAuditor
+import com.spyboy.camxploit.osint.OsintViewModel
+import com.spyboy.camxploit.ui.GlobalOsintSheet
+import com.spyboy.camxploit.ui.OsintScreen
+import com.spyboy.camxploit.ui.SentinelScreen
+import com.spyboy.camxploit.ui.SentinelViewModel
+import com.spyboy.camxploit.ui.ToolsScreen
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -91,8 +98,7 @@ import java.util.*
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        extractNmap(this)
-        if (!Python.isStarted()) Python.start(AndroidPlatform(this))
+        enableEdgeToEdge()
         setContent { CamGuardianApp() }
     }
 
@@ -337,41 +343,6 @@ fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Boolean {
     return false
 }
 
-class TerminalOutputStream(val onText: (String) -> Unit) : OutputStream() {
-    private val buffer = StringBuilder()
-
-    fun write(text: String) {
-        buffer.append(text)
-        if (text.contains("\n")) {
-            flush()
-        }
-    }
-
-    override fun write(b: Int) {
-        val c = b.toChar()
-        buffer.append(c)
-        if (c == '\n') {
-            flush()
-        }
-    }
-
-    override fun write(b: ByteArray) {
-        write(b, 0, b.size)
-    }
-
-    override fun write(b: ByteArray, off: Int, len: Int) {
-        val text = String(b, off, len, Charsets.UTF_8)
-        write(text)
-    }
-    
-    override fun flush() {
-        if (buffer.isNotEmpty()) {
-            onText(buffer.toString())
-            buffer.clear()
-        }
-    }
-}
-
 @Composable
 fun CamGuardianApp() {
     val context = LocalContext.current
@@ -386,8 +357,14 @@ fun CamGuardianApp() {
     val lanScanResults by lanViewModel.devices.collectAsState()
     val lanIsScanning by lanViewModel.isScanning.collectAsState()
     val lanProgress by lanViewModel.progress.collectAsState()
+    
+    val rawDevices by DiscoveryCoordinator.getInstance(context).devices.collectAsState()
+    val sentinelViewModel: SentinelViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 
-    var lanSubnet by remember { mutableStateOf("") }
+    LaunchedEffect(rawDevices) {
+        sentinelViewModel.setDevices(rawDevices)
+    }
+
     var networkSummary by remember { mutableStateOf<NetworkDiscoveryHelper.NetworkSummary?>(null) }
     var showDisclaimer by remember { mutableStateOf(false) }
     var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -405,15 +382,19 @@ fun CamGuardianApp() {
         factory = StormViewModel.Factory(context)
     )
     
+    val osintViewModel: OsintViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    
     var lanNmapMode by remember { mutableStateOf(false) }
     var lanScanOutput by remember { mutableStateOf("") }
     var showExternalSearchDialog by remember { mutableStateOf(false) }
     var showDorksDialog by remember { mutableStateOf(false) }
     var selectedHostForDetail by remember { mutableStateOf<LanHost?>(null) }
     
+    var showOsint by remember { mutableStateOf(false) }
+    var importedOsintIp by remember { mutableStateOf<String?>(null) }
+    
     var isMonitorServiceRunning by remember { mutableStateOf(CameraMonitorService.isRunning) }
 
-    val cameras by CameraDatabase.getDatabase(context).cameraDao().getAllCameras().collectAsState(initial = emptyList())
     val view = LocalView.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
@@ -604,15 +585,43 @@ fun CamGuardianApp() {
     Scaffold(
         containerColor = Color.Black,
         bottomBar = {
-            ScrollableTabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = Color(0xFF0A0A0A),
-                contentColor = Color.Green,
-                edgePadding = 0.dp,
-                indicator = { tabPositions -> TabRowDefaults.SecondaryIndicator(Modifier.tabIndicatorOffset(tabPositions[selectedTab]), color = Color.Green, height = 3.dp) }
+            Surface(
+                color = Color(0xFF0A0A0A),
+                modifier = Modifier.navigationBarsPadding()
             ) {
-                val tabs = listOf(Icons.Default.Terminal to "CONSOLE", Icons.Default.Psychology to "INTEL", Icons.Default.FolderOpen to "ARCHIVE", Icons.Default.Videocam to "STREAM", Icons.Default.Wifi to "LAN", Icons.Default.Bolt to "STORM", Icons.Default.Bookmarks to "SAVED", Icons.Default.Shield to "SENTINEL")
-                tabs.forEachIndexed { index, (icon, label) -> Tab(selected = selectedTab == index, onClick = { selectedTab = index }, text = { Text(label, fontSize = 11.sp) }, icon = { Icon(icon, null, modifier = Modifier.size(22.dp)) }) }
+                ScrollableTabRow(
+                    selectedTabIndex = selectedTab,
+                    containerColor = Color.Transparent,
+                    contentColor = Color.Green,
+                    edgePadding = 0.dp,
+                    indicator = { tabPositions ->
+                        TabRowDefaults.SecondaryIndicator(
+                            Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                            color = Color.Green,
+                            height = 3.dp
+                        )
+                    }
+                ) {
+                    val tabs = listOf(
+                        Icons.Default.Terminal to "CONSOLE",
+                        Icons.Default.Psychology to "INTEL",
+                        Icons.Default.FolderOpen to "ARCHIVE",
+                        Icons.Default.Videocam to "STREAM",
+                        Icons.Default.Wifi to "LAN",
+                        Icons.Default.Bolt to "STORM",
+                        Icons.Default.Bookmarks to "SAVED",
+                        Icons.Default.Build to "TOOLS",
+                        Icons.Default.Shield to "SENTINEL"
+                    )
+                    tabs.forEachIndexed { index, (icon, label) ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = { Text(label, fontSize = 11.sp) },
+                            icon = { Icon(icon, null, modifier = Modifier.size(22.dp)) }
+                        )
+                    }
+                }
             }
         }
     ) { padding ->
@@ -625,8 +634,11 @@ fun CamGuardianApp() {
                             Text(text = "ADVANCED AUDIT DASHBOARD", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            IconButton(onClick = { showShodanDialog = true }, modifier = Modifier.background(Color.Magenta.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.Public, null, tint = Color.Magenta, modifier = Modifier.size(18.dp)) }
-                            IconButton(onClick = { captureScreenshot(context, view) }, modifier = Modifier.background(Color.Cyan.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.PhotoCamera, null, tint = Color.Cyan, modifier = Modifier.size(18.dp)) }
+                            IconButton(onClick = { 
+                                importedOsintIp = null
+                                showOsint = true 
+                            }, modifier = Modifier.background(Color.Magenta.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.Public, null, tint = Color.Magenta, modifier = Modifier.size(18.dp)) }
+                            IconButton(onClick = { captureScreenshot(context, view) { capturedBitmap = it } }, modifier = Modifier.background(Color.Cyan.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.PhotoCamera, null, tint = Color.Cyan, modifier = Modifier.size(18.dp)) }
                             IconButton(onClick = { generatePdfReport(context, terminalText); generateHtmlReport(context, terminalText) }, modifier = Modifier.background(Color.Green.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.CheckCircle, null, tint = Color.Green, modifier = Modifier.size(18.dp)) }
                         }
                     }
@@ -644,11 +656,10 @@ fun CamGuardianApp() {
 
             Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).weight(1f)) {
                 when (selectedTab) {
-                    0 -> ConsoleTab(consoleIpInput, { consoleIpInput = it }, terminalText + currentPulse, { terminalText = "> Console Reset.\n" }, isScanning, scrollState, { startReconScan(consoleIpInput) }, { url, _ -> 
-                        val source = if (url.startsWith("rtsp://")) StreamSource.Rtsp(url) else StreamSource.Mjpeg(url)
-                        StreamViewerActivity.launch(context, source, consoleIpInput) 
+                    0 -> ConsoleTab(consoleIpInput, { consoleIpInput = it }, terminalText + currentPulse, { terminalText = "> Console Reset.\n" }, isScanning, scrollState, { startReconScan(consoleIpInput) }, { url, title -> 
+                        com.spyboy.camxploit.StreamActivity.launch(context, url, title) 
                     }, shodanApiKey = shodanApiKey, onDeepShodan = { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } })
-                    1 -> IntelTab(consoleIpInput, terminalText, publicIntel, shodanApiKey, { terminalText += it }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val b64 = py.getModule("CamXploit").callAttr("manual_snapshot_capture", consoleIpInput, 80, extractCredentials(terminalText).first, extractCredentials(terminalText).second).toString(); if (b64 != "None") { val b = Base64.decode(b64, Base64.DEFAULT); val bmp = BitmapFactory.decodeByteArray(b, 0, b.size); withContext(Dispatchers.Main) { capturedBitmap = bmp; val f = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Snap_${System.currentTimeMillis()}.png"); FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }; Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() } } } catch (e: Exception) {} } }, { url -> val finalUrl = if (url.contains("shodan.io") || url.contains("censys.io") || url.contains("zoomeye.org")) url else buildAuthUrl(url, extractCredentials(terminalText).first, extractCredentials(terminalText).second); selectedUrl = finalUrl; selectedTab = 3 }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); py.getModule("sys").put("stdout", TerminalOutputStream { t -> scope.launch(Dispatchers.Main) { terminalText += t } }); py.getModule("CamXploit").callAttr("discover_onvif", consoleIpInput) } catch (e: Exception) {} } }, { val targetHost = if (consoleIpInput.contains(":")) consoleIpInput.substringBefore(":") else consoleIpInput; val targetPort = if (consoleIpInput.contains(":")) consoleIpInput.substringAfter(":").toIntOrNull() ?: 80 else 80; val vendorMatch = Regex("""Device:\s*([^\n\r]+)""").find(terminalText)?.groupValues?.get(1); scope.launch { terminalText += "🔍 Probing endpoints on $targetHost:$targetPort ...\n"; CameraScanner().scanEndpoints(host = targetHost, port = targetPort, vendor = vendorMatch, onResult = { result -> val brandTag = if (result.brand != null) "[${result.brand}] " else ""; terminalText += "  🎯 Found $brandTag${result.type}: ${result.url} (HTTP ${result.httpCode})\n" }, onDone = { terminalText += "✅ Endpoint scan complete.\n" }) } }, { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } }, { showExternalSearchDialog = true }, { showDorksDialog = true })
+                    1 -> OsintScreen(viewModel = osintViewModel)
                     2 -> ArchiveTab(context, selectedTab, terminalText, consoleIpInput) { viewingFile = it }
                     3 -> StreamTab(
                         terminalText = terminalText,
@@ -691,7 +702,8 @@ fun CamGuardianApp() {
                     )
                     5 -> StormBreakerScreen(stormViewModel)
                     6 -> SavedCamerasTab({ cam -> StreamViewerActivity.launch(context, cam.toStreamSource(), cam.ip) }, { consoleIpInput = it; selectedTab = 0 })
-                    7 -> SentinelTab(savedCameras = cameras)
+                    7 -> ToolsScreen()
+                    8 -> SentinelScreen(viewModel = sentinelViewModel)
                 }
                 capturedBitmap?.let { bmp ->
                     Spacer(Modifier.height(20.dp)); Text(text = "LAST SNAPSHOT", color = Color.Yellow, fontSize = 14.sp, fontWeight = FontWeight.Black); Spacer(Modifier.height(8.dp))
@@ -729,7 +741,19 @@ fun CamGuardianApp() {
                 },
                 onProbe = { ip, brand ->
                     lanViewModel.probeStream(ip, brand)
+                },
+                onCheckShodan = { ip ->
+                    selectedHostForDetail = null
+                    importedOsintIp = ip
+                    showOsint = true
                 }
+            )
+        }
+        if (showOsint) {
+            GlobalOsintSheet(
+                onDismiss = { showOsint = false },
+                importedIp = importedOsintIp,
+                viewModel = osintViewModel
             )
         }
     }
@@ -774,50 +798,7 @@ fun ConsoleTab(consoleIpInput: String, onIpChange: (String) -> Unit, terminalTex
     }
 }
 
-@Composable
-fun IntelTab(consoleIpInput: String, terminalText: String, publicIntel: String, shodanApiKey: String, onTerminalUpdate: (String) -> Unit, onManualSnapshot: () -> Unit, onStreamSelect: (String) -> Unit, onDiscoverOnvif: () -> Unit, onProbeEndpoints: () -> Unit, onDeepShodan: (String) -> Unit, onExternalSearchClick: () -> Unit, onShowDorks: () -> Unit) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Text(text = "🛡️ INTELLIGENCE GATHERING", color = Color.Cyan, fontSize = 18.sp, fontWeight = FontWeight.Black)
-        Spacer(Modifier.height(16.dp))
-        if (publicIntel.isNotBlank()) {
-            val json = try { JSONObject(publicIntel) } catch (e: Exception) { null }
-            if (json != null) {
-                Card(Modifier.fillMaxWidth().padding(bottom = 16.dp), colors = CardDefaults.cardColors(Color(0xFF0A0A0A)), border = BorderStroke(1.dp, Color.Magenta.copy(0.4f))) {
-                    Column(Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Public, null, tint = Color.Magenta, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("PUBLIC HOST INTEL", color = Color.Magenta, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-                        Spacer(Modifier.height(8.dp))
-                        json.optJSONArray("ports")?.let { p -> Text("PORTS: " + List(p.length()) { p.getInt(it).toString() }.joinToString(", "), color = Color.Green, fontSize = 11.sp) }
-                    }
-                }
-            }
-        }
-        Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(10.dp)) {
-            Button(onClick = { if (consoleIpInput.isEmpty()) return@Button; onDiscoverOnvif() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) { Text("ONVIF", fontSize = 10.sp) }
-            Button(onClick = { if (consoleIpInput.isEmpty()) return@Button; onProbeEndpoints() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) { Text("PROBE", fontSize = 10.sp) }
-            Button(onClick = { if (consoleIpInput.isEmpty()) return@Button; onManualSnapshot() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) { Text("SNAP", fontSize = 10.sp) }
-        }
-        Spacer(Modifier.height(20.dp))
-        IntelSection("OSINT", listOf("Global OSINT Search", "View Shodan Report", "Censys Host Discovery"), Color.Magenta, Icons.Default.Public) {
-            when(it) {
-                "Global OSINT Search" -> onExternalSearchClick()
-                "View Shodan Report" -> onStreamSelect("https://www.shodan.io/host/$consoleIpInput")
-                "Censys Host Discovery" -> { /* Open browser */ }
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-        IntelSection("SYSTEM AUDIT", listOf("Firmware Check", "Generate Google Dorks"), Color.Yellow, Icons.Default.Dns) { if (it.contains("Dorks")) onShowDorks() else onTerminalUpdate("> Audit: $it...\n") }
-    }
-}
 
-@Composable
-fun IntelSection(title: String, items: List<String>, color: Color, icon: androidx.compose.ui.graphics.vector.ImageVector, onItemClick: (String) -> Unit) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(Color(0xFF0A0A0A)), border = BorderStroke(1.dp, Color(0xFF1A1A1A))) {
-        Column(Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = color, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text(text = title, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-            Spacer(Modifier.height(8.dp)); items.forEach { item -> Text(text = item, color = Color.Gray, fontSize = 11.sp, modifier = Modifier.fillMaxWidth().clickable { onItemClick(item) }.padding(vertical = 4.dp)) }
-        }
-    }
-}
 
 @Composable
 fun StreamTab(
@@ -930,7 +911,13 @@ fun LanHostCard(host: LanHost, onClick: () -> Unit) {
             Spacer(modifier = Modifier.width(12.dp))
             Column(Modifier.weight(1f)) { 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = host.ip, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    val primaryName = when {
+                        host.isYourDevice -> "This Device"
+                        host.vendor != null -> host.vendor
+                        host.hostname != null && host.hostname != host.ip -> host.hostname
+                        else -> "Network Device"
+                    }
+                    Text(text = primaryName, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     if (host.isYourDevice) {
                         Spacer(Modifier.width(8.dp))
                         Surface(
@@ -948,19 +935,24 @@ fun LanHostCard(host: LanHost, onClick: () -> Unit) {
                     }
                 }
                 
-                val brandText = when {
+                val subtitle = when {
                     host.isYourDevice -> android.os.Build.MODEL
-                    host.brand?.lowercase()?.contains("hikvision") == true -> "Hikvision NVR"
-                    host.brand?.lowercase()?.contains("dahua") == true -> "Dahua Camera"
-                    host.brand?.lowercase()?.contains("axis") == true -> "Axis Camera"
-                    host.isCamera -> "IP Camera"
-                    else -> host.vendor ?: "Unknown Device"
+                    host.vendor != null && host.hostname != null && host.hostname != host.ip -> host.hostname
+                    host.mac != null && host.mac != "Unknown" -> "MAC: ${host.mac}"
+                    else -> host.ip
                 }
                 
                 Text(
-                    text = brandText,
+                    text = subtitle,
                     color = if (host.isCamera) Color(0xFF00FF88) else Color.Gray,
                     fontSize = 13.sp
+                )
+
+                Text(
+                    text = host.ip,
+                    color = if (host.isCamera) Color(0xFF00FF88).copy(alpha = 0.7f) else Color.Gray,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
                 )
                 
                 if (host.openPorts.isNotEmpty()) {
@@ -1012,9 +1004,57 @@ fun openFile(context: Context, file: File) { try { val uri = FileProvider.getUri
 fun openBrowserSearch(context: Context, engine: String, query: String) { val url = when (engine) { "GOOGLE" -> "https://www.google.com/search?q=${Uri.encode(query)}"; "SHODAN" -> "https://www.shodan.io/search?query=${Uri.encode(query)}"; else -> "" }; try { if (url.isNotEmpty()) context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (e: Exception) {} }
 fun shareFile(context: Context, file: File) { try { val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file); val intent = Intent(Intent.ACTION_SEND).apply { type = "*/*"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }; context.startActivity(Intent.createChooser(intent, "Share Report")) } catch (e: Exception) {} }
 fun saveContentToFile(context: Context, content: String, name: String, ext: String) { try { val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS); val file = File(dir, "${name}_${System.currentTimeMillis()}.$ext"); file.writeText(content) } catch (e: Exception) {} }
-fun captureScreenshot(context: Context, view: android.view.View) { val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888); view.draw(Canvas(bitmap)); if (saveBitmapToGallery(context, bitmap)) Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() }
-fun generateHtmlReport(context: Context, content: String) { saveContentToFile(context, "<html><body><pre>$content</pre></body></html>", "Report", "html") }
-fun generatePdfReport(context: Context, content: String) { val pdf = PdfDocument(); val page = pdf.startPage(PageInfo.Builder(595, 842, 1).create()); page.canvas.drawText(content.take(1000), 40f, 50f, Paint()); pdf.finishPage(page); try { val f = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "Report_${System.currentTimeMillis()}.pdf"); pdf.writeTo(FileOutputStream(f)) } catch (e: Exception) {} finally { pdf.close() } }
+fun captureScreenshot(context: Context, view: android.view.View, onCapture: (Bitmap) -> Unit) { 
+    val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+    view.draw(Canvas(bitmap))
+    onCapture(bitmap)
+    if (saveBitmapToGallery(context, bitmap)) Toast.makeText(context, "Screenshot Saved", Toast.LENGTH_SHORT).show() 
+}
+fun generateHtmlReport(context: Context, content: String) { saveContentToFile(context, "<html><body style='background:#000;color:#0F0;font-family:monospace'><pre>$content</pre></body></html>", "Report", "html") }
+fun generatePdfReport(context: Context, content: String) { 
+    val pdf = PdfDocument()
+    val paint = Paint().apply {
+        color = android.graphics.Color.BLACK
+        textSize = 10f
+        typeface = Typeface.MONOSPACE
+    }
+    val margin = 40f
+    val pageWidth = 595
+    val pageHeight = 842
+    var yPos = margin + 20f
+    
+    var pageInfo = PageInfo.Builder(pageWidth, pageHeight, 1).create()
+    var page = pdf.startPage(pageInfo)
+    var canvas = page.canvas
+
+    canvas.drawText("CAMXPLOIT AUDIT REPORT", margin, margin, Paint().apply { 
+        textSize = 16f
+        isFakeBoldText = true 
+    })
+    
+    content.lines().forEach { line ->
+        if (yPos > pageHeight - margin) {
+            pdf.finishPage(page)
+            pageInfo = PageInfo.Builder(pageWidth, pageHeight, pdf.pages.size + 1).create()
+            page = pdf.startPage(pageInfo)
+            canvas = page.canvas
+            yPos = margin
+        }
+        canvas.drawText(line.take(100), margin, yPos, paint)
+        yPos += 14f
+    }
+    
+    pdf.finishPage(page)
+    try {
+        val f = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "Report_${System.currentTimeMillis()}.pdf")
+        pdf.writeTo(FileOutputStream(f))
+        Toast.makeText(context, "PDF Report Generated", Toast.LENGTH_SHORT).show()
+    } catch (e: Exception) {
+        e.printStackTrace()
+    } finally {
+        pdf.close()
+    }
+}
 fun generateDetailedPdfReport(context: Context, terminalText: String, targetIp: String) { generatePdfReport(context, "Target: $targetIp\n\n$terminalText") }
 fun saveJsonReport(context: Context, content: String, ip: String) { try { val json = JSONObject().apply { put("target", ip); put("log", content) }; saveContentToFile(context, json.toString(), "Report_$ip", "json") } catch (e: Exception) {} }
 
@@ -1026,17 +1066,6 @@ fun buildAuthUrl(u: String, user: String, pass: String): String { if (user.isBla
 fun SavedCamerasTab(onPlay: (SavedCamera) -> Unit, onIpSelected: (String) -> Unit) {
     val context = LocalContext.current; val cameras by CameraDatabase.getDatabase(context).cameraDao().getAllCameras().collectAsState(initial = emptyList())
     LazyColumn(Modifier.fillMaxSize()) { items(cameras) { cam -> Card(Modifier.fillMaxWidth().padding(6.dp).clickable { onIpSelected(cam.ip) }) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(cam.nickname, fontWeight = FontWeight.Bold); Text(cam.ip, fontSize = 12.sp) }; IconButton(onClick = { onPlay(cam) }) { Icon(Icons.Default.PlayArrow, null) } } } } }
-}
-
-@Composable
-fun SentinelTab(savedCameras: List<SavedCamera>) {
-    val context = LocalContext.current; val scope = rememberCoroutineScope(); val dao = CameraDatabase.getDatabase(context).sentinelDao(); val detections by dao.getAll().collectAsState(initial = emptyList()); var isRunning by remember { mutableStateOf(false) }; var selectedCamera by remember { mutableStateOf<SavedCamera?>(null) }; val processor = remember { SentinelProcessor(context) }
-    Column(Modifier.fillMaxSize()) {
-        Text("🛡️ SENTINEL", color = Color.Cyan, fontSize = 20.sp, fontWeight = FontWeight.Black)
-        if (savedCameras.isNotEmpty()) { LazyColumn(Modifier.heightIn(max = 140.dp)) { items(savedCameras) { cam -> Card(Modifier.fillMaxWidth().padding(3.dp).clickable { selectedCamera = cam }) { Text(cam.nickname, modifier = Modifier.padding(10.dp)) } } } }
-        Button(onClick = { isRunning = !isRunning }, enabled = selectedCamera != null) { Text(if (isRunning) "STOP" else "START") }
-        LazyColumn(Modifier.fillMaxSize()) { items(detections) { d -> Text("⚠️ ${d.label} at ${d.cameraIp}", color = Color.Red, modifier = Modifier.padding(8.dp)) } }
-    }
 }
 
 @Composable
@@ -1056,7 +1085,8 @@ fun CameraDetailBottomSheet(
     onViewStream: (String) -> Unit,
     onTestCredentials: (String) -> Unit,
     onOpenWebUi: (String) -> Unit,
-    onProbe: (String, String?) -> Unit
+    onProbe: (String, String?) -> Unit,
+    onCheckShodan: (String) -> Unit
 ) {
     val context = LocalContext.current
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -1128,14 +1158,25 @@ fun CameraDetailBottomSheet(
 
             Spacer(Modifier.height(16.dp))
 
+            val primaryName = when {
+                host.isYourDevice -> "This Device"
+                host.vendor != null -> host.vendor
+                host.hostname != null && host.hostname != host.ip -> host.hostname
+                else -> "Network Device"
+            }
             Text(
-                text = host.ip,
+                text = primaryName,
                 color = Color.White,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold
             )
+            val subtitle = when {
+                host.vendor != null && host.hostname != null && host.hostname != host.ip -> host.hostname
+                host.mac != null && host.mac != "Unknown" -> "MAC: ${host.mac}"
+                else -> host.ip
+            }
             Text(
-                text = "${host.vendor ?: "Unknown Vendor"} | ${host.deviceType}",
+                text = subtitle,
                 color = Color.Gray,
                 fontSize = 14.sp
             )
@@ -1227,13 +1268,23 @@ fun CameraDetailBottomSheet(
                 }
             }
             Spacer(Modifier.height(12.dp))
-            DetailActionItem(
-                icon = Icons.Default.OpenInBrowser,
-                label = "Open Web UI",
-                color = Color.Cyan,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                onOpenWebUi("http://${host.ip}")
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                DetailActionItem(
+                    icon = Icons.Default.OpenInBrowser,
+                    label = "Web UI",
+                    color = Color.Cyan,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    onOpenWebUi("http://${host.ip}")
+                }
+                DetailActionItem(
+                    icon = Icons.Default.Public,
+                    label = "Shodan",
+                    color = Color.Magenta,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    onCheckShodan(host.ip)
+                }
             }
             
             Spacer(Modifier.height(32.dp))

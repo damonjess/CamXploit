@@ -62,8 +62,14 @@ class SsdpDiscoveryHelper {
         val location = Regex("LOCATION:\\s*(.+)", RegexOption.IGNORE_CASE)
             .find(data)?.groupValues?.get(1)?.trim() ?: return null
         val ip = Regex("http://([0-9.]+)").find(location)?.groupValues?.get(1) ?: return null
+        
+        // Extract server or description
         val server = Regex("SERVER:\\s*(.+)", RegexOption.IGNORE_CASE)
-            .find(data)?.groupValues?.get(1)?.trim() ?: "SSDP Device"
-        return ip to server
+            .find(data)?.groupValues?.get(1)?.trim()
+        val usn = Regex("USN:\\s*(.+)", RegexOption.IGNORE_CASE)
+            .find(data)?.groupValues?.get(1)?.trim()
+            
+        val info = server ?: usn ?: "SSDP Device"
+        return ip to info
     }
 }

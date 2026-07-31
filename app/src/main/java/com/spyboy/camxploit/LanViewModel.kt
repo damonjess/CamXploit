@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
 
 class LanViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val coordinator = DiscoveryCoordinator(application.applicationContext)
+    private val coordinator = DiscoveryCoordinator.getInstance(application)
     private val lanScanner = LanScanner(application.applicationContext)
 
     /** Observe this in your Compose UI with `val devices by viewModel.devices.collectAsState()` */
@@ -21,8 +21,8 @@ class LanViewModel(application: Application) : AndroidViewModel(application) {
         .map { devices ->
             val localIp = lanScanner.getLocalIpAndSubnet()?.first
             devices.map { dev ->
-                val mac = dev.mac ?: "Unknown"
-                val vendor = lanScanner.getVendor(mac)
+                val mac = lanScanner.normalizeMac(dev.mac) ?: "Unknown"
+                val vendor = dev.vendor ?: lanScanner.getVendor(mac)
                 val deviceType = lanScanner.guessDeviceType(vendor, dev.hostname ?: "Unknown", dev.openPorts)
                 
                 val isCam = dev.source.contains("ssdp") || 
@@ -32,6 +32,7 @@ class LanViewModel(application: Application) : AndroidViewModel(application) {
                     ip = dev.ip,
                     mac = mac,
                     vendor = vendor,
+                    hostname = dev.hostname,
                     isCamera = isCam,
                     deviceType = deviceType,
                     isYourDevice = dev.ip == localIp,
