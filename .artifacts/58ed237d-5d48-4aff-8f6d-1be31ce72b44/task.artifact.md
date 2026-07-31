@@ -1,4 +1,4 @@
-- [ ] Create `CryptoUtils.kt` with offline logic
-- [ ] Create `ToolsScreen.kt` UI
-- [ ] Integrate "TOOLS" tab into `MainActivity.kt`
-- [ ] Verify Build and functionality
+- [x] Create `CryptoUtils.kt` with offline logic
+- [x] Create `ToolsScreen.kt` UI
+- [x] Integrate "TOOLS" tab into `MainActivity.kt`
+- [x] Verify Build and functionality

@@ -79,6 +79,9 @@ import androidx.media3.ui.PlayerView
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.spyboy.camxploit.pentest.TlsAuditor
+import com.spyboy.camxploit.osint.OsintViewModel
+import com.spyboy.camxploit.ui.GlobalOsintSheet
+import com.spyboy.camxploit.ui.OsintScreen
 import com.spyboy.camxploit.ui.SentinelScreen
 import com.spyboy.camxploit.ui.SentinelViewModel
 import com.spyboy.camxploit.ui.ToolsScreen
@@ -379,11 +382,16 @@ fun CamGuardianApp() {
         factory = StormViewModel.Factory(context)
     )
     
+    val osintViewModel: OsintViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    
     var lanNmapMode by remember { mutableStateOf(false) }
     var lanScanOutput by remember { mutableStateOf("") }
     var showExternalSearchDialog by remember { mutableStateOf(false) }
     var showDorksDialog by remember { mutableStateOf(false) }
     var selectedHostForDetail by remember { mutableStateOf<LanHost?>(null) }
+    
+    var showOsint by remember { mutableStateOf(false) }
+    var importedOsintIp by remember { mutableStateOf<String?>(null) }
     
     var isMonitorServiceRunning by remember { mutableStateOf(CameraMonitorService.isRunning) }
 
@@ -626,7 +634,10 @@ fun CamGuardianApp() {
                             Text(text = "ADVANCED AUDIT DASHBOARD", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            IconButton(onClick = { showShodanDialog = true }, modifier = Modifier.background(Color.Magenta.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.Public, null, tint = Color.Magenta, modifier = Modifier.size(18.dp)) }
+                            IconButton(onClick = { 
+                                importedOsintIp = null
+                                showOsint = true 
+                            }, modifier = Modifier.background(Color.Magenta.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.Public, null, tint = Color.Magenta, modifier = Modifier.size(18.dp)) }
                             IconButton(onClick = { captureScreenshot(context, view) }, modifier = Modifier.background(Color.Cyan.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.PhotoCamera, null, tint = Color.Cyan, modifier = Modifier.size(18.dp)) }
                             IconButton(onClick = { generatePdfReport(context, terminalText); generateHtmlReport(context, terminalText) }, modifier = Modifier.background(Color.Green.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.CheckCircle, null, tint = Color.Green, modifier = Modifier.size(18.dp)) }
                         }
@@ -649,7 +660,7 @@ fun CamGuardianApp() {
                         val source = if (url.startsWith("rtsp://")) StreamSource.Rtsp(url) else StreamSource.Mjpeg(url)
                         StreamViewerActivity.launch(context, source, consoleIpInput) 
                     }, shodanApiKey = shodanApiKey, onDeepShodan = { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } })
-                    1 -> IntelTab(consoleIpInput, terminalText, publicIntel, shodanApiKey, { terminalText += it }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val b64 = py.getModule("CamXploit").callAttr("manual_snapshot_capture", consoleIpInput, 80, extractCredentials(terminalText).first, extractCredentials(terminalText).second).toString(); if (b64 != "None") { val b = Base64.decode(b64, Base64.DEFAULT); val bmp = BitmapFactory.decodeByteArray(b, 0, b.size); val f = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Snap_${System.currentTimeMillis()}.png"); FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }; withContext(Dispatchers.Main) { capturedBitmap = bmp; Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() } } } catch (e: Exception) {} } }, { url -> val finalUrl = if (url.contains("shodan.io") || url.contains("censys.io") || url.contains("zoomeye.org")) url else buildAuthUrl(url, extractCredentials(terminalText).first, extractCredentials(terminalText).second); selectedUrl = finalUrl; selectedTab = 3 }, { scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); py.getModule("sys").put("stdout", TerminalOutputStream { t -> scope.launch(Dispatchers.Main) { terminalText += t } }); py.getModule("CamXploit").callAttr("discover_onvif", consoleIpInput) } catch (e: Exception) {} } }, { val targetHost = if (consoleIpInput.contains(":")) consoleIpInput.substringBefore(":") else consoleIpInput; val targetPort = if (consoleIpInput.contains(":")) consoleIpInput.substringAfter(":").toIntOrNull() ?: 80 else 80; val vendorMatch = Regex("""Device:\s*([^\n\r]+)""").find(terminalText)?.groupValues?.get(1); scope.launch { terminalText += "🔍 Probing endpoints on $targetHost:$targetPort ...\n"; CameraScanner().scanEndpoints(host = targetHost, port = targetPort, vendor = vendorMatch, onResult = { result -> val brandTag = if (result.brand != null) "[${result.brand}] " else ""; terminalText += "  🎯 Found $brandTag${result.type}: ${result.url} (HTTP ${result.httpCode})\n" }, onDone = { terminalText += "✅ Endpoint scan complete.\n" }) } }, { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } }, { showExternalSearchDialog = true }, { showDorksDialog = true })
+                    1 -> OsintScreen(viewModel = osintViewModel)
                     2 -> ArchiveTab(context, selectedTab, terminalText, consoleIpInput) { viewingFile = it }
                     3 -> StreamTab(
                         terminalText = terminalText,
@@ -731,7 +742,19 @@ fun CamGuardianApp() {
                 },
                 onProbe = { ip, brand ->
                     lanViewModel.probeStream(ip, brand)
+                },
+                onCheckShodan = { ip ->
+                    selectedHostForDetail = null
+                    importedOsintIp = ip
+                    showOsint = true
                 }
+            )
+        }
+        if (showOsint) {
+            GlobalOsintSheet(
+                onDismiss = { showOsint = false },
+                importedIp = importedOsintIp,
+                viewModel = osintViewModel
             )
         }
     }
@@ -776,50 +799,7 @@ fun ConsoleTab(consoleIpInput: String, onIpChange: (String) -> Unit, terminalTex
     }
 }
 
-@Composable
-fun IntelTab(consoleIpInput: String, terminalText: String, publicIntel: String, shodanApiKey: String, onTerminalUpdate: (String) -> Unit, onManualSnapshot: () -> Unit, onStreamSelect: (String) -> Unit, onDiscoverOnvif: () -> Unit, onProbeEndpoints: () -> Unit, onDeepShodan: (String) -> Unit, onExternalSearchClick: () -> Unit, onShowDorks: () -> Unit) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Text(text = "🛡️ INTELLIGENCE GATHERING", color = Color.Cyan, fontSize = 18.sp, fontWeight = FontWeight.Black)
-        Spacer(Modifier.height(16.dp))
-        if (publicIntel.isNotBlank()) {
-            val json = try { JSONObject(publicIntel) } catch (e: Exception) { null }
-            if (json != null) {
-                Card(Modifier.fillMaxWidth().padding(bottom = 16.dp), colors = CardDefaults.cardColors(Color(0xFF0A0A0A)), border = BorderStroke(1.dp, Color.Magenta.copy(0.4f))) {
-                    Column(Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Public, null, tint = Color.Magenta, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("PUBLIC HOST INTEL", color = Color.Magenta, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-                        Spacer(Modifier.height(8.dp))
-                        json.optJSONArray("ports")?.let { p -> Text("PORTS: " + List(p.length()) { p.getInt(it).toString() }.joinToString(", "), color = Color.Green, fontSize = 11.sp) }
-                    }
-                }
-            }
-        }
-        Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(10.dp)) {
-            Button(onClick = { if (consoleIpInput.isEmpty()) return@Button; onDiscoverOnvif() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) { Text("ONVIF", fontSize = 10.sp) }
-            Button(onClick = { if (consoleIpInput.isEmpty()) return@Button; onProbeEndpoints() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) { Text("PROBE", fontSize = 10.sp) }
-            Button(onClick = { if (consoleIpInput.isEmpty()) return@Button; onManualSnapshot() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) { Text("SNAP", fontSize = 10.sp) }
-        }
-        Spacer(Modifier.height(20.dp))
-        IntelSection("OSINT", listOf("Global OSINT Search", "View Shodan Report", "Censys Host Discovery"), Color.Magenta, Icons.Default.Public) {
-            when(it) {
-                "Global OSINT Search" -> onExternalSearchClick()
-                "View Shodan Report" -> onStreamSelect("https://www.shodan.io/host/$consoleIpInput")
-                "Censys Host Discovery" -> { /* Open browser */ }
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-        IntelSection("SYSTEM AUDIT", listOf("Firmware Check", "Generate Google Dorks"), Color.Yellow, Icons.Default.Dns) { if (it.contains("Dorks")) onShowDorks() else onTerminalUpdate("> Audit: $it...\n") }
-    }
-}
 
-@Composable
-fun IntelSection(title: String, items: List<String>, color: Color, icon: androidx.compose.ui.graphics.vector.ImageVector, onItemClick: (String) -> Unit) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(Color(0xFF0A0A0A)), border = BorderStroke(1.dp, Color(0xFF1A1A1A))) {
-        Column(Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = color, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text(text = title, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-            Spacer(Modifier.height(8.dp)); items.forEach { item -> Text(text = item, color = Color.Gray, fontSize = 11.sp, modifier = Modifier.fillMaxWidth().clickable { onItemClick(item) }.padding(vertical = 4.dp)) }
-        }
-    }
-}
 
 @Composable
 fun StreamTab(
@@ -1058,7 +1038,8 @@ fun CameraDetailBottomSheet(
     onViewStream: (String) -> Unit,
     onTestCredentials: (String) -> Unit,
     onOpenWebUi: (String) -> Unit,
-    onProbe: (String, String?) -> Unit
+    onProbe: (String, String?) -> Unit,
+    onCheckShodan: (String) -> Unit
 ) {
     val context = LocalContext.current
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -1240,13 +1221,23 @@ fun CameraDetailBottomSheet(
                 }
             }
             Spacer(Modifier.height(12.dp))
-            DetailActionItem(
-                icon = Icons.Default.OpenInBrowser,
-                label = "Open Web UI",
-                color = Color.Cyan,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                onOpenWebUi("http://${host.ip}")
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                DetailActionItem(
+                    icon = Icons.Default.OpenInBrowser,
+                    label = "Web UI",
+                    color = Color.Cyan,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    onOpenWebUi("http://${host.ip}")
+                }
+                DetailActionItem(
+                    icon = Icons.Default.Public,
+                    label = "Shodan",
+                    color = Color.Magenta,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    onCheckShodan(host.ip)
+                }
             }
             
             Spacer(Modifier.height(32.dp))

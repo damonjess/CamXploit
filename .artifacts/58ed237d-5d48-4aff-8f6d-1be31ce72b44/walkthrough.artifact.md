@@ -1,32 +1,38 @@
-# Walkthrough - Sentinel Logic Fixes and Performance Optimization
+# Walkthrough - Offline Tools Tab Implementation
 
-I have completed the fixes for the Sentinel tab and general project maintenance.
+I have successfully integrated the new **TOOLS** tab into the CamXploit app. This tab provides essential offline utilities for security auditing and data analysis.
 
 ## Changes Made
 
-### Sentinel & Auditing Logic
-- **Misleading Grades Fixed**: Updated [TlsAuditor.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/pentest/TlsAuditor.kt) to return a grade of `"N/A"` instead of `"F"` when a connection fails (e.g., port closed). This prevents penalizing devices that don't host TLS services.
-- **Dynamic Grading UI**: Modified [SentinelScreen.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/ui/SentinelScreen.kt) to display `"N/A"` in a neutral gray color, distinguishing it from actual security failures.
-- **Improved Header Analysis**: Cleaned up the "Missing Security Headers" display logic to handle connection errors gracefully.
+### Core Logic
+- **[NEW] [CryptoUtils.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/tools/CryptoUtils.kt)**: Implemented a robust offline engine for:
+    - **Hash Identification**: Recognizes MD5, SHA-1, SHA-256, bcrypt, and more.
+    - **Data Decoding**: Supports Base64, Hex, and JWT (header/payload extraction).
+    - **Password Generation**: Customizable length and character sets with entropy estimation.
+    - **String Analysis**: Provides metrics like length, byte size, and pattern matching hints.
 
-### Performance & Clean Code
-- **Main Thread I/O Fix**: In [MainActivity.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/MainActivity.kt), moved blocking file operations (`FileOutputStream` and `Bitmap.compress`) out of the UI thread in the Intel Tab's snapshot logic.
-- **Lint & Warning Cleanup**:
-    - Removed unused imports and variables in `MainActivity.kt` and `SentinelScreen.kt`.
-    - Added missing trailing commas and clarifying parentheses in `TlsAuditor.kt`, `WebSurfaceScanner.kt`, and `SentinelViewModel.kt`.
-    - Fixed boolean literal parameter names for better readability (e.g., `ignoreCase = true`).
+### User Interface
+- **[NEW] [ToolsScreen.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/ui/ToolsScreen.kt)**: Created a modern, dark-themed UI that slots perfectly into the existing dashboard.
+    - Uses the project's signature **Neon Green** and **Cyan** accents.
+    - Features interactive chips for decoder selection and toggles for the password generator.
+    - Includes a **String Analyzer** section for quick diagnostics of mystery data.
+
+### Integration
+- **[MODIFY] [MainActivity.kt](file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/MainActivity.kt)**:
+    - Added the **TOOLS** tab (using `Icons.Default.Build`) to the bottom navigation.
+    - Updated navigation routing to include the new screen, ensuring the **SENTINEL** tab remains accessible.
 
 ## Verification Results
 
-### Automated Tests
-- Ran unit tests: `:app:testDebugUnitTest` passed (9/9).
-- Full build: `assembleDebug` finished successfully.
+### Build & Tests
+- **Build Status**: `assembleDebug` completed successfully.
+- **Unit Tests**: All existing tests passed (9/9).
 
-### Manual Verification
-- Verified that connection failures on port 443 now show `"N/A"` in gray instead of `"F"` in red, as shown in the updated logic.
-- UI responsiveness is improved during snapshot saving in the Intel tab.
+### Manual Verification Path
+1.  Open the app and select the **TOOLS** tab from the bottom nav.
+2.  **Hash ID**: Paste `5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8` to see it identified as SHA-256.
+3.  **Decoder**: Select **BASE64** and paste `SGVsbG8gV29ybGQ=` to see "Hello World".
+4.  **Generator**: Click **GENERATE** to create a secure password and see its entropy bits.
+5.  **Sentinel**: Verify that the **SENTINEL** tab still functions correctly at the end of the navigation bar.
 
-render_diffs(file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/pentest/TlsAuditor.kt)
-render_diffs(file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/ui/SentinelScreen.kt)
 render_diffs(file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/MainActivity.kt)
-render_diffs(file:///C:/Users/Damon/StudioProjects/CamXploit/app/src/main/java/com/spyboy/camxploit/pentest/WebSurfaceScanner.kt)
