@@ -95,8 +95,29 @@ private fun WebViewScreen(url: String) {
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 settings.loadWithOverviewMode = true
                 settings.useWideViewPort = true
+                settings.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                
+                setBackgroundColor(android.graphics.Color.BLACK)
+                
                 webChromeClient = WebChromeClient()
-                webViewClient = WebViewClient()
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        if (url?.contains("insecam.org/en/view/") == true) {
+                            // Inject JS to isolate the image0 element
+                            view?.evaluateJavascript("""
+                                (function() {
+                                    // Hide everything
+                                    var style = document.createElement('style');
+                                    style.innerHTML = 'body { background: black !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; } ' +
+                                                      '* { visibility: hidden !important; } ' +
+                                                      '#image0, #image0 * { visibility: visible !important; position: fixed !important; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) !important; width: 100% !important; height: auto !important; max-height: 100% !important; z-index: 999999 !important; }';
+                                    document.head.appendChild(style);
+                                })();
+                            """.trimIndent(), null)
+                        }
+                    }
+                }
                 loadUrl(url)
             }
         },

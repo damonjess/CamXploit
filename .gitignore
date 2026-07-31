@@ -32,3 +32,10 @@ gradle-app.setting
 .navigation/
 captures/
 gradle/gradle-daemon-jvm.properties
+
+# AI Agent Artifacts
+.artifacts/
+
+# Temporary / Debug Files
+log.txt
+view.xml

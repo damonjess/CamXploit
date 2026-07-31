@@ -36,6 +36,8 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     val insecamCameras: StateFlow<List<InsecamScraper.Camera>> = _insecamCameras.asStateFlow()
     private val _insecamLoading = MutableStateFlow(false)
     val insecamLoading: StateFlow<Boolean> = _insecamLoading.asStateFlow()
+    private val _insecamError = MutableStateFlow<String?>(null)
+    val insecamError: StateFlow<String?> = _insecamError.asStateFlow()
 
     // Dorks
     private val _dorkQuery = MutableStateFlow("inurl:view.shtml intitle:live view")
@@ -135,6 +137,9 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun setInsecamLoading(loading: Boolean) {
         _insecamLoading.value = loading
+    }
+    fun setInsecamError(error: String?) {
+        _insecamError.value = error
     }
 
     fun clearError() { _error.value = null }
