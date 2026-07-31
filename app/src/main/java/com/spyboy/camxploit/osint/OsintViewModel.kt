@@ -36,13 +36,19 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     val cameras: StateFlow<List<InsecamClient.PublicCamera>> = _insecamCameras.asStateFlow()
     val insecamCameras: StateFlow<List<InsecamClient.PublicCamera>> = cameras // Alias for backward compatibility if needed
 
+    private val _publicCameras = MutableStateFlow<List<com.spyboy.camxploit.StreamSource>>(emptyList())
+    val publicCameras: StateFlow<List<com.spyboy.camxploit.StreamSource>> = _publicCameras.asStateFlow()
+
     private val _insecamLoading = MutableStateFlow(false)
     val insecamLoading: StateFlow<Boolean> = _insecamLoading.asStateFlow()
     private val _insecamError = MutableStateFlow<String?>(null)
     val insecamError: StateFlow<String?> = _insecamError.asStateFlow()
+    private val _hasMorePages = MutableStateFlow(true)
+    val hasMorePages: StateFlow<Boolean> = _hasMorePages.asStateFlow()
 
     private val _selectedCountry = MutableStateFlow<String?>(null)
     val selectedCountry: StateFlow<String?> = _selectedCountry.asStateFlow()
+    private var currentPage = 1
 
     // Dorks
     private val _dorkQuery = MutableStateFlow("inurl:view.shtml intitle:live view")
@@ -138,7 +144,32 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
 
     // Called by UI layer when scraper finds cameras
     fun setInsecamCameras(cameras: List<InsecamClient.PublicCamera>) {
-        _insecamCameras.value = cameras
+        val uniqueCameras = cameras.distinctBy { it.id }
+        _insecamCameras.value = uniqueCameras
+        // Convert to publicCameras for components that use StreamSource
+        _publicCameras.value = uniqueCameras.map { cam ->
+            com.spyboy.camxploit.StreamSource(
+                id = cam.id,
+                url = "http://www.insecam.org/en/view/${cam.id}/",
+                title = cam.location ?: cam.ip ?: "Public Camera",
+                location = cam.location ?: "Unknown",
+                protocol = "mjpeg" // Insecam is usually mjpeg-wrapped in html
+            )
+        }
+    }
+
+    fun saveCamera(source: com.spyboy.camxploit.StreamSource) {
+        viewModelScope.launch {
+            val cameraDao = com.spyboy.camxploit.CameraDatabase.getDatabase(getApplication()).cameraDao()
+            val savedCam = com.spyboy.camxploit.SavedCamera(
+                nickname = source.title,
+                ip = source.location,
+                streamUrl = source.url,
+                streamType = source.protocol.uppercase(),
+                brand = source.brand ?: "Public"
+            )
+            cameraDao.insertCamera(savedCam)
+        }
     }
 
     fun removeDeadCamera(id: String) {
@@ -147,17 +178,85 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectCountry(code: String) {
         _selectedCountry.value = code
+        currentPage = 1
+        _insecamCameras.value = emptyList()
+        _hasMorePages.value = true
+        loadInsecamCountry(code)
     }
 
     fun clearCountrySelection() {
         _selectedCountry.value = null
         _insecamCameras.value = emptyList()
+        _publicCameras.value = emptyList()
+        _hasMorePages.value = true
+        currentPage = 1
     }
 
-    // Intent for UI to load a specific country (Scraper handles actual work)
-    fun loadInsecamCountry(code: String) {
-        // This can be used as a signal if the scraper is in the ViewModel
-        // For now, we'll keep the logic in the UI and let the UI call the scraper
+    fun loadInsecamCountry(code: String, append: Boolean = false) {
+        if (_insecamLoading.value) return
+        
+        viewModelScope.launch {
+            _insecamLoading.value = true
+            _insecamError.value = null
+            
+            try {
+                val results = InsecamScraper.scrapeListing(code, if (append) currentPage + 1 else 1)
+                if (append) {
+                    _insecamCameras.value = _insecamCameras.value + results
+                    currentPage++
+                } else {
+                    _insecamCameras.value = results
+                    currentPage = 1
+                }
+                _hasMorePages.value = results.size >= 6 // Insecam usually has 6 per page
+            } catch (e: Exception) {
+                _insecamError.value = "Failed to load cameras: ${e.message}"
+            } finally {
+                _insecamLoading.value = false
+            }
+        }
+    }
+
+    fun loadPublicCameras(rawPageUrls: List<String>) {
+        viewModelScope.launch {
+            _insecamLoading.value = true
+            try {
+                val scraped = InsecamScraper.scrapeBatch(rawPageUrls)
+                val sources = scraped.map { result ->
+                    com.spyboy.camxploit.StreamSource(
+                        id = result.pageUrl.substringAfterLast("/").substringBefore("/"),
+                        url = result.streamUrl.ifBlank { result.pageUrl },
+                        title = result.title.ifBlank { "Public Camera" },
+                        location = result.location.ifBlank { "Unknown" },
+                        thumbnailUrl = result.thumbnailUrl,
+                        protocol = "mjpeg"
+                    )
+                }
+                _publicCameras.value = sources
+            } finally {
+                _insecamLoading.value = false
+            }
+        }
+    }
+
+    fun scrapeAndAdd(pageUrl: String) {
+        viewModelScope.launch {
+            val result = InsecamScraper.scrapePage(pageUrl)
+            addCamera(
+                com.spyboy.camxploit.StreamSource(
+                    id = pageUrl.substringAfterLast("/").substringBefore("/"),
+                    url = result.streamUrl.ifBlank { pageUrl },
+                    title = result.title.ifBlank { "Public Camera" },
+                    location = result.location.ifBlank { "Unknown" },
+                    thumbnailUrl = result.thumbnailUrl,
+                    protocol = "mjpeg"
+                )
+            )
+        }
+    }
+
+    fun loadNextInsecamPage() {
+        _selectedCountry.value?.let { loadInsecamCountry(it, append = true) }
     }
 
     fun setInsecamLoading(loading: Boolean) {
@@ -165,6 +264,14 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun setInsecamError(error: String?) {
         _insecamError.value = error
+    }
+
+    fun addCamera(camera: com.spyboy.camxploit.StreamSource) {
+        _publicCameras.value = _publicCameras.value + camera
+    }
+
+    fun clearCameras() {
+        _publicCameras.value = emptyList()
     }
 
     fun clearError() { _error.value = null }

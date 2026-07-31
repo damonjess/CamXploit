@@ -1,9 +1,7 @@
 package com.spyboy.camxploit.ui
 
 import android.annotation.SuppressLint
-import android.content.Intent
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -15,8 +13,10 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.pullrefresh.PullRefreshIndicator
 import androidx.compose.material.pullrefresh.pullRefresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
@@ -27,15 +27,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.util.UnstableApi
+import coil.compose.AsyncImage
 import com.spyboy.camxploit.StreamActivity
+import com.spyboy.camxploit.StreamSource
+import com.spyboy.camxploit.StreamViewerActivity
 import com.spyboy.camxploit.osint.InsecamClient
 import com.spyboy.camxploit.osint.InsecamScraper
 import com.spyboy.camxploit.osint.OsintViewModel
+import kotlinx.coroutines.launch
 
+@UnstableApi
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun PublicCamsPanel(
@@ -44,43 +51,17 @@ fun PublicCamsPanel(
     darkCard: Color = Color(0xFF1A1A1A)
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val countries by vm.countries.collectAsStateWithLifecycle()
     val cameras by vm.cameras.collectAsStateWithLifecycle()
     val selectedCountry by vm.selectedCountry.collectAsStateWithLifecycle()
     
-    // Scraper state
-    val scraper = remember { InsecamScraper() }
-    val scraperError by scraper.error.collectAsStateWithLifecycle()
-    val scraperLoading by scraper.isLoading.collectAsStateWithLifecycle()
-    val hasMore by scraper.hasMorePages.collectAsStateWithLifecycle()
+    // Scraper state from ViewModel
+    val scraperError by vm.insecamError.collectAsStateWithLifecycle()
+    val scraperLoading by vm.insecamLoading.collectAsStateWithLifecycle()
+    val hasMore by vm.hasMorePages.collectAsStateWithLifecycle()
 
     var showManualBrowser by remember { mutableStateOf(false) }
-
-    // Sync scraper state to ViewModel so outer UI can see it if needed
-    LaunchedEffect(scraper) {
-        scraper.cameras.collect { vm.setInsecamCameras(it) }
-    }
-    LaunchedEffect(scraper) {
-        scraper.isLoading.collect { vm.setInsecamLoading(it) }
-    }
-
-    // Hidden scraper WebView
-    var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    Box(modifier = Modifier.size(1.dp)) {
-        AndroidView(factory = { ctx ->
-            WebView(ctx).also { wv ->
-                scraper.attachWebView(wv)
-                webViewRef = wv
-            }
-        })
-    }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            scraper.detach()
-            webViewRef?.destroy()
-        }
-    }
 
     LaunchedEffect(Unit) {
         if (countries.isEmpty()) vm.loadCountries()
@@ -92,11 +73,29 @@ fun PublicCamsPanel(
             loading = scraperLoading,
             hasMore = hasMore,
             error = scraperError,
-            scraper = scraper,
             darkCard = darkCard,
             neonGreen = neonGreen,
             onBack = { vm.clearCountrySelection() },
-            onManualBrowse = { showManualBrowser = true }
+            onRetry = { vm.loadInsecamCountry(selectedCountry!!) },
+            onLoadMore = { vm.loadNextInsecamPage() },
+            onManualBrowse = { showManualBrowser = true },
+            onViewClick = { cam ->
+                val viewUrl = "http://www.insecam.org/en/view/${cam.id}/"
+                scope.launch {
+                    val result = InsecamScraper.scrapePage(viewUrl)
+                    val streamUrl = result.streamUrl.ifBlank { viewUrl }
+                    val source = StreamSource(
+                        id = cam.id,
+                        url = streamUrl,
+                        title = cam.location ?: cam.ip ?: "Camera",
+                        location = cam.location ?: "Unknown",
+                        thumbnailUrl = cam.imageUrl,
+                        protocol = "mjpeg"
+                    )
+                    StreamViewerActivity.launch(context, source, cam.location ?: cam.ip ?: "Public")
+                }
+            },
+            onSaveCamera = { vm.saveCamera(it) }
         )
     } else {
         CountryGridView(
@@ -105,7 +104,6 @@ fun PublicCamsPanel(
             neonGreen = neonGreen,
             onSelect = { code ->
                 vm.selectCountry(code)
-                scraper.loadCountry(code)
             }
         )
     }
@@ -117,7 +115,8 @@ fun PublicCamsPanel(
             title = "Insecam",
             onClose = { showManualBrowser = false },
             onCameraTap = { url, title ->
-                StreamActivity.launch(context, url, title)
+                val source = StreamSource(url = url, title = title, protocol = "mjpeg")
+                StreamViewerActivity.launch(context, source, "Public")
             }
         )
     }
@@ -172,6 +171,7 @@ private fun CountryGridView(
     }
 }
 
+@UnstableApi
 @OptIn(ExperimentalMaterialApi::class)
 @Composable
 private fun CountryCameraView(
@@ -179,16 +179,18 @@ private fun CountryCameraView(
     loading: Boolean,
     hasMore: Boolean,
     error: String?,
-    scraper: InsecamScraper,
     darkCard: Color,
     neonGreen: Color,
     onBack: () -> Unit,
-    onManualBrowse: () -> Unit
+    onRetry: () -> Unit,
+    onLoadMore: () -> Unit,
+    onManualBrowse: () -> Unit,
+    onViewClick: (InsecamClient.PublicCamera) -> Unit,
+    onSaveCamera: (StreamSource) -> Unit
 ) {
-    val context = LocalContext.current
     val pullRefreshState = rememberPullRefreshState(
         refreshing = loading,
-        onRefresh = { scraper.retry() }
+        onRefresh = onRetry
     )
 
     Column {
@@ -196,10 +198,10 @@ private fun CountryCameraView(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.clickable { onBack() }
         ) {
-            Icon(Icons.Default.KeyboardArrowLeft, "Back", tint = Color.White)
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Back", tint = Color.White)
             Text("BACK", color = Color.White, fontSize = 12.sp)
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = { scraper.retry() }) {
+            IconButton(onClick = onRetry) {
                 Icon(Icons.Default.Refresh, "Retry", tint = neonGreen)
             }
         }
@@ -228,7 +230,7 @@ private fun CountryCameraView(
                         Text("OPEN IN BROWSER", color = Color.White, fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.height(6.dp))
-                    TextButton(onClick = { scraper.retry() }, modifier = Modifier.fillMaxWidth()) {
+                    TextButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
                         Text("RETRY SCRAPE", color = neonGreen)
                     }
                 }
@@ -250,7 +252,7 @@ private fun CountryCameraView(
 
         LaunchedEffect(shouldLoadMore.value, hasMore) {
             if (shouldLoadMore.value && !loading && hasMore) {
-                scraper.loadNextPage()
+                onLoadMore()
             }
         }
 
@@ -264,13 +266,25 @@ private fun CountryCameraView(
                 contentPadding = PaddingValues(bottom = 100.dp)
             ) {
                 items(cameras, key = { it.id }) { cam ->
-                    CameraCard(
-                        cam = cam,
-                        darkCard = darkCard,
-                        onViewStream = {
-                            val viewerUrl = "http://www.insecam.org/en/view/${cam.id}/"
-                            // Using StreamActivity.launch to maintain consistency
-                            StreamActivity.launch(context, viewerUrl, cam.location ?: cam.ip ?: "Camera")
+                    PublicCameraCard(
+                        camera = StreamSource(
+                            id = cam.id,
+                            url = "http://www.insecam.org/en/view/${cam.id}/",
+                            title = cam.location ?: cam.ip ?: "Camera",
+                            location = cam.location ?: "Unknown",
+                            thumbnailUrl = cam.imageUrl,
+                            protocol = "mjpeg"
+                        ),
+                        onViewClick = { onViewClick(cam) },
+                        onSaveClick = {
+                            onSaveCamera(StreamSource(
+                                id = cam.id,
+                                url = "http://www.insecam.org/en/view/${cam.id}/",
+                                title = cam.location ?: cam.ip ?: "Camera",
+                                location = cam.location ?: "Unknown",
+                                thumbnailUrl = cam.imageUrl,
+                                protocol = "mjpeg"
+                            ))
                         }
                     )
                 }
@@ -290,6 +304,86 @@ private fun CountryCameraView(
                 contentColor = neonGreen,
                 backgroundColor = Color(0xFF1A1A1A)
             )
+        }
+    }
+}
+
+@Composable
+fun PublicCameraCard(
+    camera: StreamSource,
+    onViewClick: () -> Unit,
+    onSaveClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+    ) {
+        Column {
+            Box(modifier = Modifier.fillMaxWidth().height(100.dp).background(Color.DarkGray)) {
+                if (!camera.thumbnailUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = camera.thumbnailUrl,
+                        contentDescription = "Thumbnail",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = Color(0xFF00FFFF).copy(alpha = 0.3f),
+                        modifier = Modifier.align(Alignment.Center).size(32.dp)
+                    )
+                }
+                
+                // Overlay protocol tag
+                Surface(
+                    color = Color.Black.copy(alpha = 0.6f),
+                    shape = RoundedCornerShape(bottomEnd = 4.dp),
+                    modifier = Modifier.align(Alignment.TopStart)
+                ) {
+                    Text(
+                        "LIVE",
+                        color = Color(0xFF39FF14),
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.padding(8.dp)) {
+                Text(
+                    text = camera.title.ifBlank { "Unnamed Camera" },
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = camera.location,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Row(
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    TextButton(onClick = onSaveClick, contentPadding = PaddingValues(0.dp)) {
+                        Text("SAVE", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                    IconButton(onClick = onViewClick, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "View", tint = Color(0xFF39FF14))
+                    }
+                }
+            }
         }
     }
 }
@@ -329,14 +423,14 @@ private fun ManualBrowserOverlay(
     onClose: () -> Unit,
     onCameraTap: (String, String) -> Unit
 ) {
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black).navigationBarsPadding()) {
         AndroidView(
             factory = { ctx ->
                 WebView(ctx).apply {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0"
-                    webViewClient = object : WebViewClient() {
+                    webViewClient = object : android.webkit.WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
                             val u = request?.url?.toString() ?: return false
                             if (u.contains("/en/view/")) {
@@ -353,7 +447,7 @@ private fun ManualBrowserOverlay(
             modifier = Modifier.fillMaxSize().padding(top = 48.dp)
         )
         Row(
-            modifier = Modifier.fillMaxWidth().background(Color(0xCC000000)).padding(12.dp),
+            modifier = Modifier.fillMaxWidth().background(Color(0xCC000000)).statusBarsPadding().padding(12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {

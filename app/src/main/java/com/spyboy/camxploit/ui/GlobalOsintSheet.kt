@@ -18,8 +18,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.media3.common.util.UnstableApi
 import com.spyboy.camxploit.osint.OsintViewModel
 
+@UnstableApi
 @Composable
 fun GlobalOsintSheet(
     onDismiss: () -> Unit,
@@ -90,7 +92,7 @@ fun GlobalOsintSheet(
                     }
                 }
                 is OsintViewModel.Source.PublicCams -> {
-                    PublicCamsPanel(viewModel, neonGreen, darkCard)
+                    PublicCamsPanel(viewModel)
                 }
                 is OsintViewModel.Source.Dorks -> {
                     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {

@@ -84,21 +84,29 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
         stopStream()
         _status.value = StreamStatus.Connecting
 
-        when (source) {
-            is StreamSource.Rtsp -> startRtspStream(source)
-            is StreamSource.Mjpeg -> startMjpegStream(source.getAuthenticatedUrl())
-            is StreamSource.Onvif -> {
+        when (source.protocol.lowercase()) {
+            "rtsp", "rtmp" -> startRtspStream(source)
+            "mjpeg" -> startMjpegStream(source.getAuthenticatedUrl())
+            "onvif" -> {
                 val url = source.getAuthenticatedUrl()
                 if (url.startsWith("rtsp://")) {
-                    startRtspStream(StreamSource.Rtsp(url, source.username, source.password))
+                    startRtspStream(source)
                 } else {
                     startMjpegStream(url)
+                }
+            }
+            else -> {
+                // Default to RTSP-capable handler if it's a common stream URL
+                if (source.url.startsWith("rtsp://") || source.url.startsWith("http://")) {
+                    startRtspStream(source)
+                } else {
+                    _status.value = StreamStatus.Error("Unsupported protocol: ${source.protocol}")
                 }
             }
         }
     }
 
-    private fun startRtspStream(source: StreamSource.Rtsp) {
+    private fun startRtspStream(source: StreamSource) {
         val player = getPlayer()
         val mediaItem = MediaItem.fromUri(source.getAuthenticatedUrl())
         
@@ -144,8 +152,8 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
         val source = currentSource ?: return
         val ip = source.url.substringAfter("//").substringBefore("/")
         
-        when (source) {
-            is StreamSource.Mjpeg -> {
+        when (source.protocol.lowercase()) {
+            "mjpeg" -> {
                 val bitmap = _mjpegBitmap.value ?: return
                 val path = recorder.startMjpegRecording(ip, bitmap.width, bitmap.height)
                 if (path != null) {
@@ -153,7 +161,7 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
                     startRecordingTimer()
                 }
             }
-            is StreamSource.Rtsp -> {
+            "rtsp", "rtmp", "onvif" -> {
                 val path = recorder.startRtspRecording(source.getAuthenticatedUrl(), ip)
                 if (path != null) {
                     _isRecording.value = true
@@ -171,7 +179,7 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
         recordingJob?.cancel()
         
         val source = currentSource
-        if (source is StreamSource.Mjpeg) {
+        if (source?.protocol?.lowercase() == "mjpeg") {
             val path = recorder.stopMjpegRecording()
             if (path != null) {
                 // Signal completion to UI or save to database
@@ -210,7 +218,7 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
             }
             
             if (foundUrl != null) {
-                startStream(StreamSource.Rtsp(foundUrl!!, user, pass))
+                startStream(StreamSource(url = foundUrl!!, protocol = "rtsp", username = user, password = pass))
             } else {
                 _status.value = StreamStatus.Error("Failed to authenticate or invalid path")
             }

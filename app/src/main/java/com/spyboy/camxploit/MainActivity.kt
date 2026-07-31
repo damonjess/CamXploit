@@ -626,7 +626,7 @@ fun CamGuardianApp() {
         }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            Surface(modifier = Modifier.fillMaxWidth(), color = Color(0xFF0A0A0A)) {
+            Surface(modifier = Modifier.fillMaxWidth().statusBarsPadding(), color = Color(0xFF0A0A0A)) {
                 Column(Modifier.padding(16.dp)) {
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                         Column {
@@ -666,7 +666,8 @@ fun CamGuardianApp() {
                         selectedUrl = selectedUrl,
                         onUrlSelected = { url -> 
                             selectedUrl = url
-                            val source = if (url.startsWith("rtsp://")) StreamSource.Rtsp(url) else StreamSource.Mjpeg(url)
+                            val protocol = if (url.startsWith("rtsp://")) "rtsp" else "mjpeg"
+                            val source = StreamSource(url = url, protocol = protocol)
                             streamViewModel.startStream(source)
                         },
                         isRecording = isRecording,
@@ -695,7 +696,8 @@ fun CamGuardianApp() {
                         { selectedTab = it }, 
                         { consoleIpInput = it; selectedTab = 0 }, 
                         { url -> 
-                            val source = if (url.startsWith("rtsp://")) StreamSource.Rtsp(url) else StreamSource.Mjpeg(url)
+                            val protocol = if (url.startsWith("rtsp://")) "rtsp" else "mjpeg"
+                            val source = StreamSource(url = url, protocol = protocol)
                             StreamViewerActivity.launch(context, source, consoleIpInput.ifBlank { "Unknown" })
                         },
                         onHostClick = { selectedHostForDetail = it }
@@ -722,7 +724,8 @@ fun CamGuardianApp() {
                     selectedHostForDetail = null
                     selectedUrl = url
                     selectedTab = 3
-                    val source = if (url.startsWith("rtsp://")) StreamSource.Rtsp(url) else StreamSource.Mjpeg(url)
+                    val protocol = if (url.startsWith("rtsp://")) "rtsp" else "mjpeg"
+                    val source = StreamSource(url = url, protocol = protocol)
                     StreamViewerActivity.launch(context, source, host.ip)
                 },
                 onTestCredentials = { ip ->

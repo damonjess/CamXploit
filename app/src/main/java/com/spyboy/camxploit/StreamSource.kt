@@ -3,21 +3,27 @@ package com.spyboy.camxploit
 import android.os.Parcelable
 import kotlinx.parcelize.Parcelize
 
-sealed interface StreamSource : Parcelable {
-    val url: String
+/**
+ * Data model representing a stream source.
+ * Used by PublicCamsPanel and StreamViewerActivity.
+ */
+@Parcelize
+data class StreamSource(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val url: String,
+    val title: String = "Unknown Camera",
+    val location: String = "Unknown",
+    val thumbnailUrl: String? = null,
+    val protocol: String = "http",   // http, rtsp, rtmp, mms, mjpeg
+    val username: String? = null,
+    val password: String? = null,
+    val brand: String? = null
+) : Parcelable {
 
     fun getAuthenticatedUrl(): String {
         val u = url
-        val user = when (this) {
-            is Rtsp -> username
-            is Onvif -> username
-            else -> null
-        }
-        val pass = when (this) {
-            is Rtsp -> password
-            is Onvif -> password
-            else -> null
-        }
+        val user = username
+        val pass = password
         
         if (user.isNullOrBlank() || pass.isNullOrBlank() || u.contains("@")) return u
         return try {
@@ -28,22 +34,4 @@ sealed interface StreamSource : Parcelable {
             u
         }
     }
-
-    @Parcelize
-    data class Mjpeg(override val url: String) : StreamSource
-
-    @Parcelize
-    data class Rtsp(
-        override val url: String,
-        val username: String? = null,
-        val password: String? = null
-    ) : StreamSource
-
-    @Parcelize
-    data class Onvif(
-        override val url: String,
-        val profileToken: String,
-        val username: String? = null,
-        val password: String? = null
-    ) : StreamSource
 }

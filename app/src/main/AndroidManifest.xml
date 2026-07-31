@@ -53,6 +53,7 @@
             android:screenOrientation="fullSensor"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
             android:supportsPictureInPicture="true"
+            android:hardwareAccelerated="true"
             android:exported="false"/>
 
         <activity android:name=".StreamActivity" android:exported="false" />

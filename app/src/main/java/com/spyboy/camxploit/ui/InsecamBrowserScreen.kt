@@ -24,7 +24,7 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (String, String) -> U
     var isLoading by remember { mutableStateOf(true) }
     var webView by remember { mutableStateOf<WebView?>(null) }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black).navigationBarsPadding()) {
         AndroidView(
             factory = { ctx ->
                 WebView(ctx).apply {
@@ -41,17 +41,24 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (String, String) -> U
                         override fun onPageFinished(view: WebView?, url: String?) {
                             isLoading = false
                             url?.let { currentUrl = it }
+                            
+                            // If we are on a view page, try to extract direct stream and prompt user
+                            if (url?.contains("/en/view/") == true) {
+                                view?.evaluateJavascript(
+                                    "(function() { return document.querySelector('#image0')?.src || ''; })();"
+                                ) { directUrl ->
+                                    val cleanUrl = directUrl.trim('"')
+                                    if (cleanUrl.isNotEmpty() && !cleanUrl.contains("null")) {
+                                        val id = url.substringAfter("/en/view/").takeWhile { it.isDigit() }
+                                        onStreamUrl(cleanUrl, "Camera $id")
+                                    }
+                                }
+                            }
                         }
 
                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                             val url = request?.url?.toString() ?: return false
-                            // If user taps a specific camera view page, intercept it
-                            if (url.contains("/en/view/")) {
-                                // Extract camera ID and build direct viewer URL
-                                val id = url.substringAfter("/en/view/").takeWhile { it.isDigit() }
-                                onStreamUrl("http://www.insecam.org/en/view/$id/", "Camera $id")
-                                return true // Don't navigate in browser, open our player
-                            }
+                            // Allow navigation so we can scrape the direct URL on onPageFinished
                             return false
                         }
                     }
@@ -69,6 +76,7 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (String, String) -> U
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color(0xCC000000))
+                .statusBarsPadding()
                 .padding(12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
