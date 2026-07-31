@@ -49,56 +49,68 @@ fun GlobalOsintSheet(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF0A0A0A))
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp)
-            .padding(bottom = 80.dp)
     ) {
-        // Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("INTEL RECON", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = magenta)
-            IconButton(onClick = onDismiss) {
-                Icon(Icons.Default.Close, "Close", tint = Color.Gray)
+        // 1. STATIC HEADER & TABS
+        Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("INTEL RECON", fontSize = 20.sp, fontWeight = FontWeight.Black, color = magenta)
+                IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Close, "Close", tint = Color.Gray, modifier = Modifier.size(20.dp))
+                }
+            }
+            Text("EXTERNAL THREAT INTELLIGENCE", fontSize = 10.sp, color = Color.Gray, letterSpacing = 1.sp)
+            Spacer(Modifier.height(14.dp))
+
+            // Source selector
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SourceChip("CENSYS", source is OsintViewModel.Source.Censys, purple) {
+                    viewModel.selectSource(OsintViewModel.Source.Censys)
+                }
+                SourceChip("PUBLIC CAMS", source is OsintViewModel.Source.PublicCams, Color(0xFF00CED1)) {
+                    viewModel.selectSource(OsintViewModel.Source.PublicCams)
+                }
+                SourceChip("DORKS", source is OsintViewModel.Source.Dorks, Color(0xFFFFA500)) {
+                    viewModel.selectSource(OsintViewModel.Source.Dorks)
+                }
             }
         }
-        Text("EXTERNAL THREAT INTELLIGENCE", fontSize = 11.sp, color = Color.Gray)
-        Spacer(Modifier.height(16.dp))
 
-        // Source selector
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            SourceChip("ZOOMEYE", source is OsintViewModel.Source.ZoomEye, purple) {
-                viewModel.selectSource(OsintViewModel.Source.ZoomEye)
+        Spacer(Modifier.height(8.dp))
+
+        // 2. SCROLLABLE CONTENT AREA
+        Box(modifier = Modifier.weight(1f).padding(horizontal = 16.dp)) {
+            when (source) {
+                is OsintViewModel.Source.Censys -> {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        CensysPanel(viewModel, neonGreen, purple, darkCard, red)
+                        Spacer(Modifier.height(100.dp))
+                    }
+                }
+                is OsintViewModel.Source.PublicCams -> {
+                    PublicCamsPanel(viewModel, neonGreen, darkCard)
+                }
+                is OsintViewModel.Source.Dorks -> {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        DorksPanel(viewModel, neonGreen, darkCard)
+                        Spacer(Modifier.height(100.dp))
+                    }
+                }
             }
-            SourceChip("PUBLIC CAMS", source is OsintViewModel.Source.PublicCams, Color(0xFF00CED1)) {
-                viewModel.selectSource(OsintViewModel.Source.PublicCams)
+
+            if (isLoading && source !is OsintViewModel.Source.PublicCams) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = purple)
+                }
             }
-            SourceChip("DORKS", source is OsintViewModel.Source.Dorks, Color(0xFFFFA500)) {
-                viewModel.selectSource(OsintViewModel.Source.Dorks)
+
+            error?.let {
+                Text("⚠ $it", color = red, fontSize = 12.sp, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp))
             }
         }
-
-        Spacer(Modifier.height(16.dp))
-
-        when (source) {
-            is OsintViewModel.Source.ZoomEye -> ZoomEyePanel(viewModel, neonGreen, purple, darkCard, red)
-            is OsintViewModel.Source.PublicCams -> PublicCamsPanel(viewModel, neonGreen, darkCard)
-            is OsintViewModel.Source.Dorks -> DorksPanel(viewModel, neonGreen, darkCard)
-        }
-
-        if (isLoading) {
-            Spacer(Modifier.height(20.dp))
-            CircularProgressIndicator(color = purple, modifier = Modifier.align(Alignment.CenterHorizontally))
-        }
-
-        error?.let {
-            Spacer(Modifier.height(10.dp))
-            Text("⚠ $it", color = red, fontSize = 12.sp)
-        }
-
-        Spacer(Modifier.height(24.dp))
     }
 }
 

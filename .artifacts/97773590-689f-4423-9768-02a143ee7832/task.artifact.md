@@ -1,0 +1,5 @@
+- [x] Refine `InsecamScraper.kt` for UI safety and application context
+- [x] Update `OsintViewModel.kt` with hardcoded countries and lifecycle fixes
+- [x] Re-implement `PublicCamsPanel.kt` with `SubcomposeAsyncImage`
+- [x] Delete standalone `CountryRow.kt`
+- [x] Verify build and functionality

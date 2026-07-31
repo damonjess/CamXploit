@@ -1,0 +1,6 @@
+- `[x]` Update `InsecamScraper.kt` with UI-safe WebView handling
+- `[x]` Update `OsintViewModel.kt` to include Censys and new Insecam logic
+- `[x]` Create `CensysClient.kt` for backend API calls
+- `[x]` Update `PublicCamsPanel.kt` with grid and country UI
+- `[x]` Update `OsintScreen.kt` to wire the new panels and switch ZoomEye to Censys
+- `[x]` Verify build and functionality

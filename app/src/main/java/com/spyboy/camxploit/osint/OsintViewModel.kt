@@ -1,7 +1,6 @@
 package com.spyboy.camxploit.osint
 
 import android.app.Application
-import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -10,49 +9,51 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
-private val Context.dataStore by preferencesDataStore("osint_prefs")
+private val Application.dataStore by preferencesDataStore("osint_prefs")
 
 class OsintViewModel(app: Application) : AndroidViewModel(app) {
 
-    sealed class Source {
-        object ZoomEye : Source()
-        object PublicCams : Source()
-        object Dorks : Source()
-    }
+    sealed class Source { object Censys : Source(); object PublicCams : Source(); object Dorks : Source() }
 
-    private val ZOOMEYE_KEY = stringPreferencesKey("zoomeye_api_key")
+    private val CENSYS_ID = stringPreferencesKey("censys_id")
+    private val CENSYS_SECRET = stringPreferencesKey("censys_secret")
 
-    private val _source = MutableStateFlow<Source>(Source.ZoomEye)
+    private val _source = MutableStateFlow<Source>(Source.PublicCams)
     val source: StateFlow<Source> = _source.asStateFlow()
 
-    private val _apiKey = MutableStateFlow("")
-    val apiKey: StateFlow<String> = _apiKey.asStateFlow()
+    // Censys
+    private val _censysId = MutableStateFlow("")
+    val censysId: StateFlow<String> = _censysId.asStateFlow()
+    private val _censysSecret = MutableStateFlow("")
+    val censysSecret: StateFlow<String> = _censysSecret.asStateFlow()
+    private val _censysResults = MutableStateFlow<List<CensysClient.Host>>(emptyList())
+    val censysResults: StateFlow<List<CensysClient.Host>> = _censysResults.asStateFlow()
 
+    // Insecam
+    private val _countries = MutableStateFlow<List<InsecamCountry>>(emptyList())
+    val countries: StateFlow<List<InsecamCountry>> = _countries.asStateFlow()
+    private val _insecamCameras = MutableStateFlow<List<InsecamScraper.Camera>>(emptyList())
+    val insecamCameras: StateFlow<List<InsecamScraper.Camera>> = _insecamCameras.asStateFlow()
+    private val _insecamLoading = MutableStateFlow(false)
+    val insecamLoading: StateFlow<Boolean> = _insecamLoading.asStateFlow()
+
+    // Dorks
+    private val _dorkQuery = MutableStateFlow("inurl:view.shtml intitle:live view")
+    val dorkQuery: StateFlow<String> = _dorkQuery.asStateFlow()
+
+    // Shared
     private val _query = MutableStateFlow("webcam")
     val query: StateFlow<String> = _query.asStateFlow()
-
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    // ZoomEye results
-    private val _zoomEyeResults = MutableStateFlow<List<ZoomEyeClient.Host>>(emptyList())
-    val zoomEyeResults: StateFlow<List<ZoomEyeClient.Host>> = _zoomEyeResults.asStateFlow()
-
-    // Dorks
-    private val _dork = MutableStateFlow("")
-    val dork: StateFlow<String> = _dork.asStateFlow()
-
-    private val _credits = MutableStateFlow<ZoomEyeClient.UserInfo?>(null)
-    val credits: StateFlow<ZoomEyeClient.UserInfo?> = _credits.asStateFlow()
-
     init {
         viewModelScope.launch {
-            val saved = app.dataStore.data.map { it[ZOOMEYE_KEY] ?: "" }.first()
-            _apiKey.value = saved
-            if (saved.isNotBlank()) fetchCredits(saved)
+            val data = getApplication<Application>().dataStore.data.first()
+            _censysId.value = data[CENSYS_ID] ?: ""
+            _censysSecret.value = data[CENSYS_SECRET] ?: ""
         }
     }
 
@@ -61,81 +62,79 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
         _error.value = null
     }
 
-    fun setApiKey(k: String) {
-        _apiKey.value = k
-        viewModelScope.launch {
-            getApplication<Application>().dataStore.edit { it[ZOOMEYE_KEY] = k }
-            if (k.length > 20) fetchCredits(k)
-        }
+    fun setCensysId(v: String) {
+        _censysId.value = v
+        viewModelScope.launch { getApplication<Application>().dataStore.edit { it[CENSYS_ID] = v } }
     }
-
-    private fun fetchCredits(key: String) {
-        viewModelScope.launch {
-            try {
-                _credits.value = ZoomEyeClient.getUserInfo(key)
-            } catch (_: Exception) {}
-        }
+    fun setCensysSecret(v: String) {
+        _censysSecret.value = v
+        viewModelScope.launch { getApplication<Application>().dataStore.edit { it[CENSYS_SECRET] = v } }
     }
-
     fun setQuery(q: String) { _query.value = q }
+    fun setDorkQuery(q: String) { _dorkQuery.value = q }
     fun applyPreset(preset: String) { _query.value = preset }
 
-    // ─── ZOOMEYE ───
-    fun runZoomEye() {
-        val key = _apiKey.value.trim()
+    fun runCensys() {
+        val id = _censysId.value.trim()
+        val secret = _censysSecret.value.trim()
         val q = _query.value.trim()
-        if (key.isBlank()) { _error.value = "Enter ZoomEye API Key (zoomeye.org)"; return }
-        if (q.isBlank()) { _error.value = "Enter search query"; return }
-
-        _error.value = null
-        _zoomEyeResults.value = emptyList()
-        _isLoading.value = true
-
-        viewModelScope.launch {
-            try {
-                val hosts = ZoomEyeClient.search(key, q)
-                _zoomEyeResults.value = hosts
-                if (hosts.isEmpty()) {
-                    _error.value = "No results found for '$q'"
-                }
-                fetchCredits(key)
-            } catch (e: Exception) {
-                val msg = e.message ?: "Connection error"
-                _error.value = when {
-                    msg.contains("402") -> "Insufficient credits for host search. Check your ZoomEye plan."
-                    msg.contains("401") -> "Invalid API Key. Please update it."
-                    msg.contains("403") -> "Access Denied. Check your permissions."
-                    else -> msg
-                }
-                fetchCredits(key)
-            } finally {
-                _isLoading.value = false
-            }
-        }
-    }
-
-    // ─── DORKS ───
-    fun generateDork() {
-        _dork.value = ShodanClient.generateDork(_query.value)
+        if (id.isBlank() || secret.isBlank()) { _error.value = "Enter Censys API ID and Secret"; return }
+        if (q.isBlank()) { _error.value = "Enter query"; return }
+        executeCensys(id, secret, q)
     }
 
     fun lookupIp(ip: String) {
-        val key = _apiKey.value.trim()
-        if (key.isBlank()) { _error.value = "Enter API key"; return }
-        _error.value = null
-        _zoomEyeResults.value = emptyList()
-        _isLoading.value = true
+        val id = _censysId.value.trim()
+        val secret = _censysSecret.value.trim()
+        if (id.isBlank() || secret.isBlank()) { _error.value = "Enter Censys API ID and Secret for IP lookup"; return }
+        executeCensys(id, secret, ip)
+    }
+
+    private fun executeCensys(id: String, secret: String, q: String) {
+        _error.value = null; _censysResults.value = emptyList(); _isLoading.value = true
         viewModelScope.launch {
             try {
-                val hosts = ZoomEyeClient.search(key, ip)
-                _zoomEyeResults.value = hosts
-                if (hosts.isEmpty()) _error.value = "No results for IP: $ip"
-            } catch (e: Exception) {
-                _error.value = e.message
-            } finally {
-                _isLoading.value = false
-            }
+                val hosts = CensysClient.search(id, secret, q)
+                _censysResults.value = hosts
+                if (hosts.isEmpty()) _error.value = "No results"
+            } catch (e: Exception) { _error.value = e.message ?: "Request failed" }
+            finally { _isLoading.value = false }
         }
+    }
+
+    data class InsecamCountry(val code: String, val name: String, val count: Int)
+
+    fun loadCountries() {
+        _countries.value = listOf(
+            InsecamCountry("US", "United States", 4320),
+            InsecamCountry("JP", "Japan", 2840),
+            InsecamCountry("IT", "Italy", 1950),
+            InsecamCountry("GB", "United Kingdom", 1670),
+            InsecamCountry("BR", "Brazil", 1540),
+            InsecamCountry("RU", "Russia", 1420),
+            InsecamCountry("DE", "Germany", 1280),
+            InsecamCountry("FR", "France", 1150),
+            InsecamCountry("CA", "Canada", 980),
+            InsecamCountry("ES", "Spain", 870),
+            InsecamCountry("NL", "Netherlands", 760),
+            InsecamCountry("PL", "Poland", 650),
+            InsecamCountry("AU", "Australia", 540),
+            InsecamCountry("KR", "South Korea", 480),
+            InsecamCountry("TW", "Taiwan", 420),
+            InsecamCountry("IN", "India", 390),
+            InsecamCountry("TR", "Turkey", 350),
+            InsecamCountry("SE", "Sweden", 310),
+            InsecamCountry("CH", "Switzerland", 280),
+            InsecamCountry("BE", "Belgium", 250)
+        )
+    }
+
+    // Called by UI layer when scraper finds cameras
+    fun setInsecamCameras(cameras: List<InsecamScraper.Camera>) {
+        _insecamCameras.value = cameras
+    }
+    fun setInsecamLoading(loading: Boolean) {
+        _insecamLoading.value = loading
     }
 
     fun clearError() { _error.value = null }
