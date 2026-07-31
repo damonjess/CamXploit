@@ -135,6 +135,17 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     fun setInsecamCameras(cameras: List<InsecamScraper.Camera>) {
         _insecamCameras.value = cameras
     }
+
+    fun removeDeadCamera(id: String) {
+        _insecamCameras.value = _insecamCameras.value.filter { it.id != id }
+    }
+
+    // Intent for UI to load a specific country (Scraper handles actual work)
+    fun loadInsecamCountry(code: String) {
+        // This can be used as a signal if the scraper is in the ViewModel
+        // For now, we'll keep the logic in the UI and let the UI call the scraper
+    }
+
     fun setInsecamLoading(loading: Boolean) {
         _insecamLoading.value = loading
     }

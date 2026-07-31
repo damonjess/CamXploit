@@ -7,10 +7,12 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,27 +22,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.MediaItem
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
-@androidx.media3.common.util.UnstableApi
 class StreamActivity : ComponentActivity() {
+
     companion object {
-        const val EXTRA_MODE = "mode"       // "webview" or "exo"
-        const val EXTRA_URL = "url"         // direct stream URL
-        const val EXTRA_TITLE = "title"     // IP or location
+        const val EXTRA_URL = "url"
+        const val EXTRA_TITLE = "title"
 
         fun launch(context: android.content.Context, url: String, title: String) {
-            val mode = when {
-                url.contains("insecam.org") -> "webview"
-                url.startsWith("rtsp://") -> "exo"
-                url.endsWith(".mjpg") || url.endsWith(".mjpeg") -> "exo"
-                else -> "webview"
-            }
             context.startActivity(android.content.Intent(context, StreamActivity::class.java).apply {
-                putExtra(EXTRA_MODE, mode)
                 putExtra(EXTRA_URL, url)
                 putExtra(EXTRA_TITLE, title)
             })
@@ -49,111 +42,123 @@ class StreamActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val mode = intent.getStringExtra(EXTRA_MODE) ?: "webview"
+        enableEdgeToEdge()
+        
         val url = intent.getStringExtra(EXTRA_URL) ?: ""
         val title = intent.getStringExtra(EXTRA_TITLE) ?: "Live Feed"
 
+        // Fullscreen immersive
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).let { controller ->
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+
         setContent {
             val neonGreen = Color(0xFF39FF14)
+            var isLoading by remember { mutableStateOf(true) }
+            var hasError by remember { mutableStateOf(false) }
+            var webView by remember { mutableStateOf<WebView?>(null) }
 
             Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-                when (mode) {
-                    "exo" -> ExoPlayerScreen(url)
-                    else -> WebViewScreen(url)
-                }
+                // WebView player - handles MJPEG, RTSP plugins, JS players automatically
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                            settings.loadWithOverviewMode = true
+                            settings.useWideViewPort = true
+                            settings.builtInZoomControls = true
+                            settings.displayZoomControls = false
+                            // Using a desktop-like UA often helps with loading embedded players
+                            settings.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                            
+                            webChromeClient = WebChromeClient()
+                            webViewClient = object : WebViewClient() {
+                                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                    isLoading = true
+                                    hasError = false
+                                }
+                                override fun onPageFinished(view: WebView?, url: String?) {
+                                    isLoading = false
+                                    // Inject JS to isolate the stream if it's an Insecam view
+                                    if (url?.contains("insecam.org/en/view/") == true) {
+                                        view?.evaluateJavascript("""
+                                            (function() {
+                                                var style = document.createElement('style');
+                                                style.innerHTML = 'body { background: black !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; } ' +
+                                                                  '* { visibility: hidden !important; } ' +
+                                                                  '#image0, #image0 * { visibility: visible !important; position: fixed !important; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) !important; width: 100% !important; height: auto !important; max-height: 100% !important; z-index: 999999 !important; }';
+                                                document.head.appendChild(style);
+                                            })();
+                                        """.trimIndent(), null)
+                                    }
+                                }
+                                override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
+                                    if (request?.isForMainFrame == true) {
+                                        hasError = true
+                                        isLoading = false
+                                    }
+                                }
+                            }
+                            loadUrl(url)
+                            webView = this
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
 
                 // Overlay header
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(Color(0xCC000000))
-                        .padding(12.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .statusBarsPadding(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
-                        Text("LIVE FEED", fontSize = 12.sp, color = neonGreen, fontWeight = FontWeight.Bold)
-                        Text(title, fontSize = 14.sp, color = Color.White, maxLines = 1)
+                    Text(
+                        text = title.uppercase(),
+                        color = neonGreen,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = { webView?.reload() }) {
+                        Icon(Icons.Default.Refresh, "Reload", tint = Color.White)
                     }
                     IconButton(onClick = { finish() }) {
                         Icon(Icons.Default.Close, "Close", tint = Color.White)
                     }
                 }
-            }
-        }
-    }
-}
 
-@Composable
-private fun WebViewScreen(url: String) {
-    AndroidView(
-        factory = { context ->
-            WebView(context).apply {
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                settings.loadWithOverviewMode = true
-                settings.useWideViewPort = true
-                settings.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                
-                setBackgroundColor(android.graphics.Color.BLACK)
-                
-                webChromeClient = WebChromeClient()
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        super.onPageFinished(view, url)
-                        if (url?.contains("insecam.org/en/view/") == true) {
-                            // Inject JS to isolate the image0 element
-                            view?.evaluateJavascript("""
-                                (function() {
-                                    // Hide everything
-                                    var style = document.createElement('style');
-                                    style.innerHTML = 'body { background: black !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; } ' +
-                                                      '* { visibility: hidden !important; } ' +
-                                                      '#image0, #image0 * { visibility: visible !important; position: fixed !important; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) !important; width: 100% !important; height: auto !important; max-height: 100% !important; z-index: 999999 !important; }';
-                                    document.head.appendChild(style);
-                                })();
-                            """.trimIndent(), null)
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        color = neonGreen,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+
+                if (hasError) {
+                    Column(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("STREAM UNAVAILABLE", color = Color.Red, fontWeight = FontWeight.Bold)
+                        Text("Camera may be offline", color = Color.Gray, fontSize = 12.sp)
+                        Button(
+                            onClick = { webView?.reload() },
+                            colors = ButtonDefaults.buttonColors(containerColor = neonGreen)
+                        ) {
+                            Text("RETRY", color = Color.Black)
                         }
                     }
                 }
-                loadUrl(url)
             }
-        },
-        modifier = Modifier.fillMaxSize()
-    )
-}
-
-@androidx.media3.common.util.UnstableApi
-@Composable
-private fun ExoPlayerScreen(url: String) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val player = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(url))
-            prepare()
-            playWhenReady = true
-            repeatMode = Player.REPEAT_MODE_ALL
         }
     }
-
-    DisposableEffect(Unit) {
-        onDispose { player.release() }
-    }
-
-    AndroidView(
-        factory = { ctx ->
-            @androidx.media3.common.util.UnstableApi
-            fun setupPlayerView(view: PlayerView) {
-                view.player = player
-                view.useController = true
-                view.controllerHideOnTouch = true
-                view.controllerShowTimeoutMs = 3000
-                view.setBackgroundColor(android.graphics.Color.BLACK)
-            }
-            PlayerView(ctx).apply { setupPlayerView(this) }
-        },
-        modifier = Modifier.fillMaxSize()
-    )
 }

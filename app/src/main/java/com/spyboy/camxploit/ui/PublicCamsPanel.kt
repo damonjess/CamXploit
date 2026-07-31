@@ -13,9 +13,13 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,7 +37,6 @@ import com.spyboy.camxploit.StreamActivity
 import com.spyboy.camxploit.osint.InsecamScraper
 import com.spyboy.camxploit.osint.OsintViewModel
 
-@androidx.media3.common.util.UnstableApi
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun PublicCamsPanel(vm: OsintViewModel, neonGreen: Color, darkCard: Color) {
@@ -87,7 +90,8 @@ fun PublicCamsPanel(vm: OsintViewModel, neonGreen: Color, darkCard: Color) {
             darkCard = darkCard,
             neonGreen = neonGreen,
             onBack = { selectedCountry = null },
-            onManualBrowse = { showManualBrowser = true }
+            onManualBrowse = { showManualBrowser = true },
+            onCameraError = { vm.removeDeadCamera(it) }
         )
     } else {
         CountryListView(
@@ -150,7 +154,7 @@ private fun CountryListView(
     }
 }
 
-@androidx.media3.common.util.UnstableApi
+@OptIn(ExperimentalMaterialApi::class)
 @Composable
 private fun CountryCameraView(
     cameras: List<InsecamScraper.Camera>,
@@ -160,8 +164,14 @@ private fun CountryCameraView(
     darkCard: Color,
     neonGreen: Color,
     onBack: () -> Unit,
-    onManualBrowse: () -> Unit
+    onManualBrowse: () -> Unit,
+    onCameraError: (String) -> Unit
 ) {
+    val pullRefreshState = rememberPullRefreshState(
+        refreshing = loading,
+        onRefresh = { scraper.retry() }
+    )
+
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
@@ -207,7 +217,10 @@ private fun CountryCameraView(
 
         Spacer(Modifier.height(10.dp))
 
+        val context = LocalContext.current
         val gridState = rememberLazyGridState()
+
+        val hasMore by scraper.hasMorePages.collectAsStateWithLifecycle()
 
         // Detect scroll to end for pagination
         val shouldLoadMore = remember {
@@ -218,70 +231,122 @@ private fun CountryCameraView(
             }
         }
 
-        LaunchedEffect(shouldLoadMore.value) {
-            if (shouldLoadMore.value && !loading) {
-                scraper.loadMore()
+        LaunchedEffect(shouldLoadMore.value, hasMore) {
+            if (shouldLoadMore.value && !loading && hasMore) {
+                scraper.loadNextPage()
             }
         }
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            state = gridState,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(cameras, key = { it.id }) { cam ->
-                CameraThumbnailCard(cam, darkCard)
-            }
-            if (loading) {
-                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
-                    Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = neonGreen, modifier = Modifier.size(24.dp))
+        Box(modifier = Modifier.fillMaxSize().pullRefresh(pullRefreshState)) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                state = gridState,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(cameras, key = { it.id }) { cam ->
+                    CameraThumbnailCard(
+                        cam = cam,
+                        darkCard = darkCard,
+                        onClick = {
+                            val viewerUrl = "http://www.insecam.org/en/view/${cam.id}/"
+                            StreamActivity.launch(context, viewerUrl, cam.location)
+                        },
+                        onImageError = { onCameraError(cam.id) }
+                    )
+                }
+                if (loading) {
+                    item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+                        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = neonGreen, modifier = Modifier.size(24.dp))
+                        }
                     }
                 }
             }
+
+            PullRefreshIndicator(
+                refreshing = loading,
+                state = pullRefreshState,
+                modifier = Modifier.align(Alignment.TopCenter),
+                contentColor = neonGreen,
+                backgroundColor = Color(0xFF1A1A1A)
+            )
         }
     }
 }
 
-@androidx.media3.common.util.UnstableApi
 @Composable
-private fun CameraThumbnailCard(cam: InsecamScraper.Camera, darkCard: Color) {
-    val context = LocalContext.current
+private fun CameraThumbnailCard(
+    cam: InsecamScraper.Camera,
+    darkCard: Color,
+    onClick: () -> Unit,
+    onImageError: () -> Unit
+) {
     Card(
         colors = CardDefaults.cardColors(containerColor = darkCard),
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(1.3f)
-            .clickable {
-                val viewerUrl = "http://www.insecam.org/en/view/${cam.id}/"
-                StreamActivity.launch(context, viewerUrl, cam.location)
-            }
+            .aspectRatio(1.2f) // slightly taller so text fits
+            .clickable { onClick() }
     ) {
-        Column {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Image area
             SubcomposeAsyncImage(
                 model = cam.imageUrl,
                 contentDescription = cam.location,
                 contentScale = ContentScale.Crop,
                 loading = {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Color(0xFF39FF14), modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color = Color(0xFF39FF14),
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp
+                        )
                     }
                 },
                 error = {
-                    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF111111)), contentAlignment = Alignment.Center) {
-                        Text("NO SIGNAL", color = Color.Gray, fontSize = 10.sp)
+                    LaunchedEffect(Unit) {
+                        onImageError()
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF111111)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                "NO SIGNAL",
+                                color = Color(0xFF555555),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "CLEANING...",
+                                color = Color(0xFF333333),
+                                fontSize = 10.sp
+                            )
+                        }
                     }
                 },
-                modifier = Modifier.fillMaxWidth().weight(1f)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
             )
+
+            // Text area with proper wrapping
             Text(
-                cam.location,
+                text = cam.location.ifBlank { "Unknown Location" },
                 color = Color.White,
                 fontSize = 11.sp,
-                maxLines = 1,
+                maxLines = 2, // allow 2 lines instead of 1
+                minLines = 2, // keeps cards uniform height
+                lineHeight = 14.sp,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
             )
         }
@@ -315,7 +380,6 @@ private fun CountryRow(
     }
 }
 
-@androidx.media3.common.util.UnstableApi
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun ManualBrowserOverlay(

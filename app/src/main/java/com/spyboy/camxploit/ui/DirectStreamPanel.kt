@@ -1,6 +1,5 @@
 package com.spyboy.camxploit.ui
 
-import android.content.Intent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -12,7 +11,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.spyboy.camxploit.StreamActivity
 
-@androidx.media3.common.util.UnstableApi
 @Composable
 fun DirectStreamPanel() {
     val context = LocalContext.current
@@ -65,14 +63,7 @@ fun DirectStreamPanel() {
         Button(
             onClick = {
                 if (url.isBlank()) return@Button
-                val mode = if (url.startsWith("rtsp://")) "exo" else "webview"
-                context.startActivity(
-                    Intent(context, StreamActivity::class.java).apply {
-                        putExtra(StreamActivity.EXTRA_MODE, mode)
-                        putExtra(StreamActivity.EXTRA_URL, url)
-                        putExtra(StreamActivity.EXTRA_TITLE, label.ifBlank { url })
-                    }
-                )
+                StreamActivity.launch(context, url, label.ifBlank { url })
             },
             colors = ButtonDefaults.buttonColors(containerColor = cyan),
             modifier = Modifier.fillMaxWidth(),

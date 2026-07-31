@@ -25,12 +25,16 @@ class InsecamScraper {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private val _hasMorePages = MutableStateFlow(true)
+    val hasMorePages: StateFlow<Boolean> = _hasMorePages.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
     private var webView: WebView? = null
     private var lastCountryCode = ""
     private var currentPage = 1
+    private var isAccumulating = false 
     private var retryCount = 0
     private val handler = Handler(Looper.getMainLooper())
     private var timeoutRunnable: Runnable? = null
@@ -48,29 +52,29 @@ class InsecamScraper {
             settings.loadWithOverviewMode = true
             settings.useWideViewPort = true
             settings.cacheMode = WebSettings.LOAD_NO_CACHE 
-
-            // Handle cross-origin resources inside index pages safely
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
             addJavascriptInterface(JsBridge { extracted ->
-                // FIX: Force all StateFlow emissions back to the Main UI Thread to prevent race conditions
                 handler.post {
                     cancelTimeout()
                     if (extracted.isNotEmpty()) {
-                        val currentList = _cameras.value.toMutableList()
+                        val currentList = if (isAccumulating) _cameras.value.toMutableList() else mutableListOf()
                         // Filter out duplicates
                         val newItems = extracted.filter { newItem -> currentList.none { it.id == newItem.id } }
                         _cameras.value = currentList + newItems
+                        
+                        // Insecam shows 6 per page; if we get less, likely last page
+                        _hasMorePages.value = extracted.size >= 4 
                         _isLoading.value = false
                         _error.value = null
                         retryCount = 0
                     } else if (retryCount < 2) {
                         retryCount++
-                        handler.postDelayed({ injectExtraction() }, 2500)
+                        handler.postDelayed({ injectExtraction() }, 2000)
                     } else {
                         _isLoading.value = false
-                        // Don't show error if we already have some results (just reached end of pagination)
+                        _hasMorePages.value = false
                         if (_cameras.value.isEmpty()) {
                             _error.value = "No cameras found. Cloudflare block or design layout updated."
                         }
@@ -87,7 +91,6 @@ class InsecamScraper {
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {
-                    // Give extra time for images and thumbnails to populate the DOM frame
                     handler.postDelayed({ injectExtraction() }, 2000)
                     startTimeout()
                 }
@@ -97,6 +100,7 @@ class InsecamScraper {
                         handler.post {
                             cancelTimeout()
                             _isLoading.value = false
+                            _hasMorePages.value = false
                             _error.value = "Connection Error: ${error?.description}"
                         }
                     }
@@ -105,23 +109,31 @@ class InsecamScraper {
         }
     }
 
-    fun loadCountry(countryCode: String) {
+    fun loadCountry(countryCode: String, page: Int = 1, append: Boolean = false) {
         lastCountryCode = countryCode.uppercase()
-        currentPage = 1
+        currentPage = page
+        isAccumulating = append
         retryCount = 0
-        _cameras.value = emptyList()
+        
+        if (!append) {
+            _cameras.value = emptyList()
+            _hasMorePages.value = true
+        }
+        
         _isLoading.value = true
         _error.value = null
         
-        // Ensure we load the country-specific path
-        webView?.loadUrl("http://www.insecam.org/en/bycountry/$lastCountryCode/")
+        val url = if (page == 1) {
+            "http://www.insecam.org/en/bycountry/$lastCountryCode/"
+        } else {
+            "http://www.insecam.org/en/bycountry/$lastCountryCode/?page=$page"
+        }
+        webView?.loadUrl(url)
     }
 
-    fun loadMore() {
-        if (_isLoading.value) return
-        currentPage++
-        _isLoading.value = true
-        webView?.loadUrl("http://www.insecam.org/en/bycountry/$lastCountryCode/?page=$currentPage")
+    fun loadNextPage() {
+        if (_isLoading.value || !_hasMorePages.value) return
+        loadCountry(lastCountryCode, currentPage + 1, append = true)
     }
 
     private fun injectExtraction() {
@@ -133,9 +145,10 @@ class InsecamScraper {
         timeoutRunnable = Runnable {
             if (_isLoading.value) {
                 _isLoading.value = false
+                _hasMorePages.value = false
                 _error.value = "Server timed out. Check connection or browser verification wall."
             }
-        }.also { handler.postDelayed(it, 20000) } // Increased to 20s for Cloudflare
+        }.also { handler.postDelayed(it, 20000) } 
     }
 
     private fun cancelTimeout() {
@@ -144,7 +157,7 @@ class InsecamScraper {
     }
 
     fun retry() {
-        if (lastCountryCode.isNotEmpty()) loadCountry(lastCountryCode)
+        if (lastCountryCode.isNotEmpty()) loadCountry(lastCountryCode, currentPage, isAccumulating)
     }
 
     fun detach() {
@@ -177,38 +190,33 @@ class InsecamScraper {
                 }
                 onResult(list)
             } catch (e: Exception) {
-                Log.e("CamXploitParser", "JSON Conversion error", e)
+                Log.e("CamXploitParser", "JSON error", e)
                 onResult(emptyList())
             }
         }
     }
 
     companion object {
-        // Broadened JS query matching to scan robustly across multiple CSS target permutations
         private val EXTRACT_JS = """
             (function() {
                 var results = [];
-                // Target generic card columns or traditional thumbnail wrappers simultaneously
                 var items = document.querySelectorAll('.thumbnail, .thumbnail-container, [class*="col-"]');
                 
                 items.forEach(function(item) {
                     var img = item.querySelector('img');
                     var link = item.querySelector('a[href*="/view/"]');
-                    
-                    // Locate locations via semantic text lookups if layout elements are ambiguous
-                    var caption = item.querySelector('.caption, p, h4, h3');
+                    var caption = item.querySelector('.caption h4, .caption h3, .caption, p');
+                    var ipMatch = item.innerHTML.match(/([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/);
                     
                     if (img && link) {
-                        // Extract numeric sequences directly out of URL patterns cleanly
                         var idMatch = link.href.match(/\/view\/(\d+)/);
                         var cleanId = idMatch ? idMatch[1] : '';
                         
-                        // Prevent pushing duplication entries triggered by nested grid columns
                         if (cleanId && !results.some(r => r.id === cleanId)) {
                             results.push({
                                 id: cleanId,
                                 imageUrl: img.src,
-                                location: caption ? caption.innerText.replace(/\s+/g, ' ').trim() : 'Unknown Direct Endpoint',
+                                location: caption ? caption.innerText.replace(/\s+/g, ' ').trim() : (ipMatch ? ipMatch[1] : 'Unknown Endpoint'),
                                 countryCode: '{{CODE}}'
                             });
                         }

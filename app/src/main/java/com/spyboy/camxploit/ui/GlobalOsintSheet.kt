@@ -20,7 +20,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.spyboy.camxploit.osint.OsintViewModel
 
-@androidx.media3.common.util.UnstableApi
 @Composable
 fun GlobalOsintSheet(
     onDismiss: () -> Unit,
