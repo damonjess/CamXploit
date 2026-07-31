@@ -34,4 +34,7 @@ data class StreamSource(
             u
         }
     }
+
+    fun bestPlaybackUrl(): String = getAuthenticatedUrl()
+    fun bestThumbnailUrl(): String = thumbnailUrl ?: ""
 }

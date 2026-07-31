@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.pullrefresh.PullRefreshIndicator
 import androidx.compose.material.pullrefresh.pullRefresh
@@ -34,7 +35,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
 import coil.compose.AsyncImage
-import com.spyboy.camxploit.StreamActivity
 import com.spyboy.camxploit.StreamSource
 import com.spyboy.camxploit.StreamViewerActivity
 import com.spyboy.camxploit.osint.InsecamClient
@@ -46,69 +46,90 @@ import kotlinx.coroutines.launch
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun PublicCamsPanel(
-    vm: OsintViewModel,
+    viewModel: OsintViewModel,
     neonGreen: Color = Color(0xFF39FF14),
     darkCard: Color = Color(0xFF1A1A1A)
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val countries by vm.countries.collectAsStateWithLifecycle()
-    val cameras by vm.cameras.collectAsStateWithLifecycle()
-    val selectedCountry by vm.selectedCountry.collectAsStateWithLifecycle()
     
-    // Scraper state from ViewModel
-    val scraperError by vm.insecamError.collectAsStateWithLifecycle()
-    val scraperLoading by vm.insecamLoading.collectAsStateWithLifecycle()
-    val hasMore by vm.hasMorePages.collectAsStateWithLifecycle()
+    val countries by viewModel.countries.collectAsStateWithLifecycle()
+    val cameras by viewModel.cameras.collectAsStateWithLifecycle()
+    val selectedCountry by viewModel.selectedCountry.collectAsStateWithLifecycle()
+    val publicCameras by viewModel.publicCameras.collectAsStateWithLifecycle()
+    
+    val scraperError by viewModel.insecamError.collectAsStateWithLifecycle()
+    val scraperLoading by viewModel.insecamLoading.collectAsStateWithLifecycle()
+    val hasMore by viewModel.hasMorePages.collectAsStateWithLifecycle()
+    
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
 
     var showManualBrowser by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        if (countries.isEmpty()) vm.loadCountries()
+        if (countries.isEmpty()) viewModel.loadCountries()
     }
 
-    if (selectedCountry != null) {
-        CountryCameraView(
-            cameras = cameras,
-            loading = scraperLoading,
-            hasMore = hasMore,
-            error = scraperError,
-            darkCard = darkCard,
-            neonGreen = neonGreen,
-            onBack = { vm.clearCountrySelection() },
-            onRetry = { vm.loadInsecamCountry(selectedCountry!!) },
-            onLoadMore = { vm.loadNextInsecamPage() },
-            onManualBrowse = { showManualBrowser = true },
-            onViewClick = { cam ->
-                val viewUrl = "http://www.insecam.org/en/view/${cam.id}/"
-                scope.launch {
-                    val result = InsecamScraper.scrapePage(viewUrl)
-                    val streamUrl = result.streamUrl.ifBlank { viewUrl }
-                    val source = StreamSource(
-                        id = cam.id,
-                        url = streamUrl,
-                        title = cam.location ?: cam.ip ?: "Camera",
-                        location = cam.location ?: "Unknown",
-                        thumbnailUrl = cam.imageUrl,
-                        protocol = "mjpeg"
-                    )
-                    StreamViewerActivity.launch(context, source, cam.location ?: cam.ip ?: "Public")
+    Column(modifier = Modifier.fillMaxSize()) {
+        // ── CENSYS QUICK-SEARCH CHIPS (Header) ──
+        if (selectedCountry == null && publicCameras.isEmpty()) {
+            CensysQuickSearchHeader(viewModel)
+            Spacer(Modifier.height(8.dp))
+        }
+
+        if (publicCameras.isNotEmpty() && selectedCountry == null) {
+            // Censys results view
+            CensysResultsView(
+                cameras = publicCameras,
+                isLoading = isLoading,
+                errorMessage = errorMessage,
+                neonGreen = neonGreen,
+                onBack = { viewModel.clearCameras() },
+                onSaveClick = { viewModel.saveCamera(it) }
+            )
+        } else if (selectedCountry != null) {
+            CountryCameraView(
+                cameras = cameras,
+                loading = scraperLoading,
+                hasMore = hasMore,
+                error = scraperError,
+                darkCard = darkCard,
+                neonGreen = neonGreen,
+                onBack = { viewModel.clearCountrySelection() },
+                onRetry = { viewModel.loadInsecamCountry(selectedCountry!!) },
+                onLoadMore = { viewModel.loadNextInsecamPage() },
+                onManualBrowse = { showManualBrowser = true },
+                onViewClick = { cam ->
+                    val viewUrl = "http://www.insecam.org/en/view/${cam.id}/"
+                    scope.launch {
+                        val result = InsecamScraper.scrapePage(viewUrl)
+                        val streamUrl = result.streamUrl.ifBlank { viewUrl }
+                        val source = StreamSource(
+                            id = cam.id,
+                            url = streamUrl,
+                            title = cam.location ?: cam.ip ?: "Camera",
+                            location = cam.location ?: "Unknown",
+                            thumbnailUrl = cam.imageUrl,
+                            protocol = "mjpeg"
+                        )
+                        StreamViewerActivity.launch(context, source, cam.location ?: cam.ip ?: "Public")
+                    }
+                },
+                onSaveCamera = { viewModel.saveCamera(it) }
+            )
+        } else {
+            CountryGridView(
+                countries = countries,
+                darkCard = darkCard,
+                neonGreen = neonGreen,
+                onSelect = { code ->
+                    viewModel.selectCountry(code)
                 }
-            },
-            onSaveCamera = { vm.saveCamera(it) }
-        )
-    } else {
-        CountryGridView(
-            countries = countries,
-            darkCard = darkCard,
-            neonGreen = neonGreen,
-            onSelect = { code ->
-                vm.selectCountry(code)
-            }
-        )
+            )
+        }
     }
 
-    // Manual fallback browser overlay
     if (showManualBrowser && selectedCountry != null) {
         ManualBrowserOverlay(
             url = "http://www.insecam.org/en/bycountry/$selectedCountry/",
@@ -119,6 +140,95 @@ fun PublicCamsPanel(
                 StreamViewerActivity.launch(context, source, "Public")
             }
         )
+    }
+}
+
+@Composable
+fun CensysQuickSearchHeader(viewModel: OsintViewModel) {
+    Column(modifier = Modifier.padding(bottom = 8.dp)) {
+        Text(
+            text = "Censys Search",
+            style = MaterialTheme.typography.labelLarge,
+            color = Color.Gray,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            AssistChip(
+                onClick = { viewModel.searchCensysCameras(OsintViewModel.WEBCAM_QUERIES[0]) },
+                label = { Text("Webcams", fontSize = 10.sp) },
+                leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(14.dp)) },
+                colors = AssistChipDefaults.assistChipColors(labelColor = Color.White)
+            )
+            AssistChip(
+                onClick = { viewModel.searchCensysCameras(OsintViewModel.WEBCAM_QUERIES[1]) },
+                label = { Text("IP Cameras", fontSize = 10.sp) },
+                leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(14.dp)) },
+                colors = AssistChipDefaults.assistChipColors(labelColor = Color.White)
+            )
+            AssistChip(
+                onClick = { viewModel.searchCensysCameras(OsintViewModel.WEBCAM_QUERIES[2]) },
+                label = { Text("Live View", fontSize = 10.sp) },
+                leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(14.dp)) },
+                colors = AssistChipDefaults.assistChipColors(labelColor = Color.White)
+            )
+        }
+    }
+}
+
+@UnstableApi
+@Composable
+fun CensysResultsView(
+    cameras: List<StreamSource>,
+    isLoading: Boolean,
+    errorMessage: String?,
+    neonGreen: Color,
+    onBack: () -> Unit,
+    onSaveClick: (StreamSource) -> Unit
+) {
+    val context = LocalContext.current
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable { onBack() }.padding(bottom = 8.dp)
+        ) {
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Back", tint = Color.White)
+            Text("BACK TO COUNTRIES", color = Color.White, fontSize = 12.sp)
+        }
+
+        if (isLoading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = neonGreen)
+            }
+        } else if (errorMessage != null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(errorMessage, color = MaterialTheme.colorScheme.error)
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 100.dp)
+            ) {
+                items(cameras) { camera ->
+                    PublicCameraCard(
+                        camera = camera,
+                        onViewClick = {
+                            StreamViewerActivity.launch(
+                                context = context,
+                                source = camera,
+                                ip = camera.location.ifBlank { "Public" }
+                            )
+                        },
+                        onSaveClick = { onSaveClick(camera) }
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -215,7 +325,6 @@ private fun CountryCameraView(
             letterSpacing = 1.sp
         )
 
-        // Error card with fallback option
         if (error != null && !loading) {
             Spacer(Modifier.height(10.dp))
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF2A0A0A))) {
@@ -240,8 +349,6 @@ private fun CountryCameraView(
         Spacer(Modifier.height(10.dp))
 
         val gridState = rememberLazyGridState()
-
-        // Detect scroll to end for pagination
         val shouldLoadMore = remember {
             derivedStateOf {
                 val totalItemsCount = gridState.layoutInfo.totalItemsCount
@@ -321,9 +428,10 @@ fun PublicCameraCard(
     ) {
         Column {
             Box(modifier = Modifier.fillMaxWidth().height(100.dp).background(Color.DarkGray)) {
-                if (!camera.thumbnailUrl.isNullOrBlank()) {
+                val thumbUrl = camera.bestThumbnailUrl()
+                if (thumbUrl.isNotBlank()) {
                     AsyncImage(
-                        model = camera.thumbnailUrl,
+                        model = thumbUrl,
                         contentDescription = "Thumbnail",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = androidx.compose.ui.layout.ContentScale.Crop
@@ -337,7 +445,6 @@ fun PublicCameraCard(
                     )
                 }
                 
-                // Overlay protocol tag
                 Surface(
                     color = Color.Black.copy(alpha = 0.6f),
                     shape = RoundedCornerShape(bottomEnd = 4.dp),

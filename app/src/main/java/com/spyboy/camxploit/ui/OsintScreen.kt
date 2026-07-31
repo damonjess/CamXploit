@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -38,7 +39,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.util.UnstableApi
-import com.spyboy.camxploit.osint.CensysClient
+import com.spyboy.camxploit.StreamSource
+import com.spyboy.camxploit.StreamViewerActivity
 import com.spyboy.camxploit.osint.OsintViewModel
 
 @UnstableApi
@@ -89,8 +91,7 @@ fun OsintScreen(viewModel: OsintViewModel = viewModel()) {
                     }
                 }
                 is OsintViewModel.Source.PublicCams -> {
-                    // PublicCamsPanel has internal LazyColumn/LazyVerticalGrid
-                    PublicCamsPanel(viewModel)
+                    PublicCamsPanel(viewModel, neonGreen, darkCard)
                 }
                 is OsintViewModel.Source.Dorks -> {
                     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
@@ -128,6 +129,7 @@ fun OsintScreen(viewModel: OsintViewModel = viewModel()) {
 // CENSYS PANEL
 // ═══════════════════════════════════════════════════════════════════
 @OptIn(ExperimentalLayoutApi::class)
+@UnstableApi
 @Composable
 fun CensysPanel(
     vm: OsintViewModel,
@@ -136,25 +138,17 @@ fun CensysPanel(
     darkCard: Color,
     red: Color
 ) {
-    val apiId by vm.censysId.collectAsStateWithLifecycle()
-    val apiSecret by vm.censysSecret.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val apiToken by vm.censysToken.collectAsStateWithLifecycle()
     val query by vm.query.collectAsStateWithLifecycle()
-    val results by vm.censysResults.collectAsStateWithLifecycle()
+    val publicCameras by vm.publicCameras.collectAsStateWithLifecycle()
+    val errorMessage by vm.errorMessage.collectAsStateWithLifecycle()
 
     Column {
         OutlinedTextField(
-            value = apiId,
-            onValueChange = vm::setCensysId,
-            label = { Text("Censys API ID", color = Color.Gray, fontSize = 11.sp) },
-            colors = textFieldColors(darkCard, purple),
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = apiSecret,
-            onValueChange = vm::setCensysSecret,
-            label = { Text("Censys API Secret", color = Color.Gray, fontSize = 11.sp) },
+            value = apiToken,
+            onValueChange = vm::setCensysToken,
+            label = { Text("Censys API Token (Bearer)", color = Color.Gray, fontSize = 11.sp) },
             colors = textFieldColors(darkCard, purple),
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
@@ -172,15 +166,15 @@ fun CensysPanel(
 
         Spacer(Modifier.height(10.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            PresetChip("webcam") { vm.applyPreset("services.service_name: \"http\" AND \"webcam\"") }
-            PresetChip("RTSP") { vm.applyPreset("services.service_name: \"rtsp\"") }
+            PresetChip("Webcams") { vm.applyPreset(OsintViewModel.WEBCAM_QUERIES[0]) }
+            PresetChip("IP Camera") { vm.applyPreset(OsintViewModel.WEBCAM_QUERIES[1]) }
+            PresetChip("Live View") { vm.applyPreset(OsintViewModel.WEBCAM_QUERIES[2]) }
             PresetChip("Hikvision") { vm.applyPreset("services.software.vendor: \"Hikvision\"") }
-            PresetChip("Dahua") { vm.applyPreset("services.software.vendor: \"Dahua\"") }
         }
 
         Spacer(Modifier.height(12.dp))
         Button(
-            onClick = vm::runCensys,
+            onClick = { vm.searchCensysCameras(query) },
             colors = ButtonDefaults.buttonColors(containerColor = purple),
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -189,42 +183,29 @@ fun CensysPanel(
             Text("RUN SCAN", color = Color.White, fontWeight = FontWeight.Bold)
         }
 
-        if (results.isNotEmpty()) {
-            Spacer(Modifier.height(16.dp))
-            Text("${results.size} HOSTS", color = neonGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            results.forEach { host ->
-                CensysCard(host, neonGreen, darkCard)
-                Spacer(Modifier.height(8.dp))
-            }
+        if (errorMessage != null) {
+            Text(errorMessage!!, color = red, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp))
         }
-    }
-}
 
-@Composable
-fun CensysCard(host: CensysClient.Host, neonGreen: Color, darkCard: Color) {
-    val clipboard = LocalClipboardManager.current
-    val purple = Color(0xFF8B5CF6)
-    Card(colors = CardDefaults.cardColors(containerColor = darkCard), shape = RoundedCornerShape(10.dp)) {
-        Column(Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(host.ip, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
-                Surface(color = neonGreen, shape = RoundedCornerShape(4.dp)) {
-                    Text(" ${host.services.firstOrNull()?.port ?: "N/A"} ", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-            host.location?.let { Text(it, color = Color.Gray, fontSize = 11.sp) }
-            host.autonomousSystem?.let { Text(it, color = Color.LightGray, fontSize = 12.sp) }
+        if (publicCameras.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            Text("${publicCameras.size} HOSTS", color = neonGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
             
-            if (host.services.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Text("Services: " + host.services.joinToString { it.serviceName ?: "${it.port}" }, color = Color.Gray, fontSize = 10.sp)
+            publicCameras.forEach { camera ->
+                PublicCameraCard(
+                    camera = camera,
+                    onViewClick = {
+                        StreamViewerActivity.launch(
+                            context = context,
+                            source = camera,
+                            ip = camera.location.ifBlank { "Censys Host" }
+                        )
+                    },
+                    onSaveClick = { vm.saveCamera(camera) }
+                )
+                Spacer(Modifier.height(12.dp))
             }
-            
-            Spacer(Modifier.height(4.dp))
-            Text("Copy IP", color = purple, fontSize = 11.sp, modifier = Modifier.clickable {
-                clipboard.setText(AnnotatedString(host.ip))
-            })
         }
     }
 }
