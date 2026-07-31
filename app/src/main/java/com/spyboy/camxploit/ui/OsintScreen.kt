@@ -1,291 +1,212 @@
 package com.spyboy.camxploit.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
 import com.spyboy.camxploit.osint.OsintViewModel
-import com.spyboy.camxploit.osint.ShodanClient
+import com.spyboy.camxploit.osint.ZoomEyeClient
 
-@OptIn(ExperimentalLayoutApi::class)
+@androidx.media3.common.util.UnstableApi
 @Composable
-fun OsintScreen(
-    viewModel: OsintViewModel
-) {
-    val activeTab by viewModel.activeTab.collectAsStateWithLifecycle()
-    val apiKey by viewModel.apiKey.collectAsStateWithLifecycle()
-    val query by viewModel.query.collectAsStateWithLifecycle()
+fun OsintScreen(viewModel: OsintViewModel = viewModel()) {
+    val source by viewModel.source.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
-    val dork by viewModel.dorkResult.collectAsStateWithLifecycle()
-    val results = viewModel.results
 
     val neonGreen = Color(0xFF39FF14)
     val magenta = Color(0xFFFF00FF)
-    val darkCard = Color(0xFF1A1A1A)
     val purple = Color(0xFF8B5CF6)
+    val darkCard = Color(0xFF1A1A1A)
+    val red = Color(0xFFFF4444)
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .verticalScroll(rememberScrollState())
             .padding(16.dp)
+            .padding(bottom = 80.dp)
     ) {
-        Text("GLOBAL OSINT RECON", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = magenta)
-        Text("EXTERNAL THREAT INTELLIGENCE", fontSize = 11.sp, color = Color.Gray)
+        Text("INTEL", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = magenta)
+        Text("GLOBAL OSINT RECON", fontSize = 12.sp, color = Color.Gray)
         Spacer(Modifier.height(16.dp))
 
-        // Tabs
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TabChip("SHODAN API", activeTab is OsintViewModel.OsintTab.Shodan, purple) {
-                viewModel.setTab(OsintViewModel.OsintTab.Shodan)
+        // Source selector
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            SourceChip("ZOOMEYE", source is OsintViewModel.Source.ZoomEye, purple) {
+                viewModel.selectSource(OsintViewModel.Source.ZoomEye)
             }
-            TabChip("WEB DORKS", activeTab is OsintViewModel.OsintTab.WebDork, purple) {
-                viewModel.setTab(OsintViewModel.OsintTab.WebDork)
+            SourceChip("PUBLIC CAMS", source is OsintViewModel.Source.PublicCams, Color(0xFF00CED1)) {
+                viewModel.selectSource(OsintViewModel.Source.PublicCams)
+            }
+            SourceChip("DORKS", source is OsintViewModel.Source.Dorks, Color(0xFFFFA500)) {
+                viewModel.selectSource(OsintViewModel.Source.Dorks)
             }
         }
 
         Spacer(Modifier.height(16.dp))
 
-        // Content
-        Box(modifier = Modifier.weight(1f)) {
-            if (activeTab is OsintViewModel.OsintTab.Shodan) {
-                ShodanTabContent(
-                    apiKey = apiKey,
-                    onApiKeyChange = viewModel::setApiKey,
-                    query = query,
-                    onQueryChange = viewModel::setQuery,
-                    onApplyPreset = viewModel::applyPreset,
-                    onRunScan = viewModel::runShodanScan,
-                    isLoading = isLoading,
-                    error = error,
-                    results = results,
-                    neonGreen = neonGreen,
-                    magenta = magenta,
-                    darkCard = darkCard,
-                    purple = purple
-                )
-            } else {
-                WebDorkTabContent(
-                    query = query,
-                    onQueryChange = viewModel::setQuery,
-                    onGenerateDork = viewModel::generateDork,
-                    dork = dork,
-                    neonGreen = neonGreen,
-                    magenta = magenta,
-                    darkCard = darkCard
-                )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun ShodanTabContent(
-    apiKey: String,
-    onApiKeyChange: (String) -> Unit,
-    query: String,
-    onQueryChange: (String) -> Unit,
-    onApplyPreset: (String) -> Unit,
-    onRunScan: () -> Unit,
-    isLoading: Boolean,
-    error: String?,
-    results: List<ShodanClient.ShodanHost>,
-    neonGreen: Color,
-    magenta: Color,
-    darkCard: Color,
-    purple: Color
-) {
-    Column {
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = onApiKeyChange,
-            placeholder = { Text("Shodan API Key", color = Color.DarkGray) },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = darkCard,
-                unfocusedContainerColor = darkCard,
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                focusedBorderColor = purple,
-                unfocusedBorderColor = Color.DarkGray
-            ),
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            placeholder = { Text("Search Query", color = Color.DarkGray) },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = darkCard,
-                unfocusedContainerColor = darkCard,
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                focusedBorderColor = magenta,
-                unfocusedBorderColor = Color.DarkGray
-            ),
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        Spacer(Modifier.height(10.dp))
-
-        // Presets
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            PresetChip("Hikvision") { onApplyPreset("Hikvision") }
-            PresetChip("Dahua") { onApplyPreset("Dahua") }
-            PresetChip("Axis") { onApplyPreset("Axis") }
-            PresetChip("Exposed RTSP") { onApplyPreset("Exposed RTSP") }
-            PresetChip("RDP") { onApplyPreset("port:3389") }
-            PresetChip("SSH") { onApplyPreset("port:22") }
+        when (source) {
+            is OsintViewModel.Source.ZoomEye -> ZoomEyePanel(viewModel, neonGreen, purple, darkCard, red)
+            is OsintViewModel.Source.PublicCams -> PublicCamsPanel(viewModel, neonGreen, darkCard)
+            is OsintViewModel.Source.Dorks -> DorksPanel(viewModel, neonGreen, darkCard)
         }
 
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = onRunScan,
-            colors = ButtonDefaults.buttonColors(containerColor = purple),
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isLoading
-        ) {
-            if (isLoading) {
-                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-            } else {
-                Icon(Icons.Default.Search, null, tint = Color.White)
-                Spacer(Modifier.width(8.dp))
-                Text("RUN SCAN", color = Color.White, fontWeight = FontWeight.Bold)
-            }
+        if (isLoading) {
+            Spacer(Modifier.height(20.dp))
+            CircularProgressIndicator(color = purple, modifier = Modifier.align(Alignment.CenterHorizontally))
         }
 
         error?.let {
-            Spacer(Modifier.height(8.dp))
-            Text("⚠ $it", color = Color(0xFFFF6B6B), fontSize = 12.sp)
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        // Results
-        if (results.isNotEmpty()) {
-            Text("${results.size} HOSTS FOUND", color = neonGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                items(results, key = { it.ip }) { host ->
-                    ShodanResultCard(host, neonGreen, darkCard)
-                    Spacer(Modifier.height(8.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun WebDorkTabContent(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    onGenerateDork: () -> Unit,
-    dork: String,
-    neonGreen: Color,
-    magenta: Color,
-    darkCard: Color
-) {
-    Column {
-        Text("ZERO-API GOOGLE DORKS", color = Color.Gray, fontSize = 12.sp)
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            placeholder = { Text("Target keyword…", color = Color.DarkGray) },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = darkCard,
-                unfocusedContainerColor = darkCard,
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                focusedBorderColor = magenta,
-                unfocusedBorderColor = Color.DarkGray
-            ),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(10.dp))
-        Button(
-            onClick = onGenerateDork,
-            colors = ButtonDefaults.buttonColors(containerColor = magenta),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("GENERATE DORK", color = Color.Black, fontWeight = FontWeight.Bold)
-        }
-
-        if (dork.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            Card(colors = CardDefaults.cardColors(containerColor = darkCard)) {
-                Column(Modifier.padding(12.dp)) {
-                    val clipboard = LocalClipboardManager.current
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("GOOGLE DORK", color = neonGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        IconButton(onClick = { clipboard.setText(AnnotatedString(dork)) }) {
-                            Icon(Icons.Default.Share, "Copy", tint = Color.Gray)
-                        }
+            Surface(
+                color = red.copy(alpha = 0.1f),
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, red.copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth().clickable { 
+                    if (it.contains("credits", true)) {
+                        viewModel.apiKey.value.let { key -> if (key.isNotBlank()) viewModel.setApiKey(key) }
+                    } else if (source is OsintViewModel.Source.PublicCams) {
+                        viewModel.loadCountries()
                     }
-                    SelectionContainer {
-                        Text(dork, color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Text("Paste into Google Search", color = Color.Gray, fontSize = 11.sp)
+                }
+            ) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("⚠", fontSize = 16.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(it, color = red, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 }
             }
+        }
+
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ZOOMEYE PANEL
+// ═══════════════════════════════════════════════════════════════════
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun ZoomEyePanel(
+    vm: OsintViewModel,
+    neonGreen: Color,
+    purple: Color,
+    darkCard: Color,
+    red: Color
+) {
+    val apiKey by vm.apiKey.collectAsStateWithLifecycle()
+    val query by vm.query.collectAsStateWithLifecycle()
+    val results by vm.zoomEyeResults.collectAsStateWithLifecycle()
+    val credits by vm.credits.collectAsStateWithLifecycle()
+
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = apiKey,
+            onValueChange = vm::setApiKey,
+            label = { Text("ZoomEye API Key", color = Color.Gray, fontSize = 11.sp) },
+            placeholder = { Text("Free key from zoomeye.org", color = Color.DarkGray) },
+            colors = textFieldColors(darkCard, purple),
+            modifier = Modifier.weight(1f),
+            singleLine = true
+        )
+        credits?.let {
+            Spacer(Modifier.width(8.dp))
+            Column(
+                horizontalAlignment = Alignment.End,
+                modifier = Modifier.clickable { vm.apiKey.value.let { k -> if (k.isNotBlank()) vm.setApiKey(k) } }
+            ) {
+                Text("GENERAL POINTS", color = Color.Gray, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Refresh, null, tint = neonGreen.copy(0.5f), modifier = Modifier.size(12.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("${it.basicPoints + it.extraPoints}", color = neonGreen, fontSize = 14.sp, fontWeight = FontWeight.Black)
+                }
+            }
+        }
+    }
+
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = query,
+        onValueChange = vm::setQuery,
+        label = { Text("Query", color = Color.Gray, fontSize = 11.sp) },
+        colors = textFieldColors(darkCard, Color(0xFFFF00FF)),
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true
+    )
+
+    Spacer(Modifier.height(10.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        PresetChip("webcam") { vm.applyPreset("app:\"webcam\"") }
+        PresetChip("Dahua") { vm.applyPreset("app:\"Dahua-DVR\"") }
+        PresetChip("Hikvision") { vm.applyPreset("app:\"Hikvision-IP-Camera\"") }
+        PresetChip("RTSP") { vm.applyPreset("service:\"rtsp\"") }
+        PresetChip("HTTP") { vm.applyPreset("port:80") }
+        PresetChip("RDP") { vm.applyPreset("port:3389") }
+    }
+
+    Spacer(Modifier.height(12.dp))
+    Button(
+        onClick = vm::runZoomEye,
+        colors = ButtonDefaults.buttonColors(containerColor = purple),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(Icons.Default.Search, null, tint = Color.White)
+        Spacer(Modifier.width(8.dp))
+        Text("RUN SCAN", color = Color.White, fontWeight = FontWeight.Bold)
+    }
+
+    Spacer(Modifier.height(12.dp))
+    if (results.isNotEmpty()) {
+        Text("${results.size} HOSTS", color = neonGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        results.forEach { host ->
+            ZoomEyeCard(host, neonGreen, darkCard)
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
 
 @Composable
-fun ShodanResultCard(host: ShodanClient.ShodanHost, neonGreen: Color, darkCard: Color) {
+fun ZoomEyeCard(host: ZoomEyeClient.Host, neonGreen: Color, darkCard: Color) {
     val clipboard = LocalClipboardManager.current
     val purple = Color(0xFF8B5CF6)
-    Card(colors = CardDefaults.cardColors(containerColor = darkCard), modifier = Modifier.fillMaxWidth()) {
+    Card(colors = CardDefaults.cardColors(containerColor = darkCard), shape = RoundedCornerShape(10.dp)) {
         Column(Modifier.padding(12.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(host.ip, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                Row {
-                    host.vulns.take(1).forEach { _ ->
-                        Surface(color = Color(0xFFFF4444), shape = RoundedCornerShape(4.dp)) {
-                            Text(" CVE ", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(host.ip, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
+                host.port.let { if (it > 0) Surface(color = neonGreen, shape = RoundedCornerShape(4.dp)) { Text(" $it ", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold) } }
             }
-            Text("${host.city ?: "?"}, ${host.country ?: "?"}  •  ${host.org ?: host.isp ?: "Unknown org"}", color = Color.Gray, fontSize = 11.sp)
-            Spacer(Modifier.height(6.dp))
-            Text("Ports: ${host.ports.joinToString()}", color = neonGreen, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-            if (host.banners.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    host.banners.first().product ?: host.banners.first().data ?: "",
-                    color = Color.LightGray, fontSize = 11.sp, maxLines = 2
-                )
-            }
-            if (host.vulns.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Text("Vulns: ${host.vulns.take(3).joinToString()}", color = Color(0xFFFF6B6B), fontSize = 11.sp)
-            }
+            val loc = listOfNotNull(host.city, host.country).joinToString(", ")
+            if (loc.isNotBlank()) Text(loc, color = Color.Gray, fontSize = 11.sp)
+            host.title?.let { Text(it, color = Color.LightGray, fontSize = 12.sp) }
+            host.banner?.let { Text(it, color = Color.Gray, fontSize = 10.sp, maxLines = 2) }
             Spacer(Modifier.height(4.dp))
             Text("Copy IP", color = purple, fontSize = 11.sp, modifier = Modifier.clickable {
                 clipboard.setText(AnnotatedString(host.ip))
@@ -294,26 +215,125 @@ fun ShodanResultCard(host: ShodanClient.ShodanHost, neonGreen: Color, darkCard: 
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// PUBLIC CAMS PANEL
+// ═══════════════════════════════════════════════════════════════════
+@androidx.media3.common.util.UnstableApi
 @Composable
-fun TabChip(label: String, active: Boolean, activeColor: Color, onClick: () -> Unit) {
-    val bg = if (active) activeColor else Color(0xFF2A2A2A)
-    val text = if (active) Color.Black else Color.White
+fun PublicCamsPanel(vm: OsintViewModel, neonGreen: Color, darkCard: Color) {
+    val context = LocalContext.current
+    var showBrowser by remember { mutableStateOf(false) }
+
+    if (showBrowser) {
+        InsecamBrowserScreen(
+            onClose = { showBrowser = false },
+            onStreamUrl = { url, title ->
+                showBrowser = false
+                com.spyboy.camxploit.StreamActivity.launch(context, url, title)
+            }
+        )
+    } else {
+        Column {
+            Text(
+                "PUBLIC CAMERA SOURCES",
+                color = Color.Gray,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+            Spacer(Modifier.height(10.dp))
+
+            // Insecam Browser button
+            Card(
+                colors = CardDefaults.cardColors(containerColor = darkCard),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showBrowser = true }
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("Insecam Browser", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text("Browse insecam.org directly", color = Color.Gray, fontSize = 11.sp)
+                    }
+                    Text("OPEN", color = neonGreen, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            DirectStreamPanel()
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DORKS PANEL
+// ═══════════════════════════════════════════════════════════════════
+@Composable
+fun DorksPanel(vm: OsintViewModel, neonGreen: Color, darkCard: Color) {
+    val query by vm.query.collectAsStateWithLifecycle()
+    val dork by vm.dork.collectAsStateWithLifecycle()
+
+    OutlinedTextField(
+        value = query,
+        onValueChange = vm::setQuery,
+        label = { Text("Keyword", color = Color.Gray, fontSize = 11.sp) },
+        colors = textFieldColors(darkCard, Color(0xFFFFA500)),
+        modifier = Modifier.fillMaxWidth()
+    )
+    Spacer(Modifier.height(10.dp))
+    Button(onClick = vm::generateDork, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFA500)), modifier = Modifier.fillMaxWidth()) {
+        Text("GENERATE DORK", color = Color.Black, fontWeight = FontWeight.Bold)
+    }
+    if (dork.isNotEmpty()) {
+        Spacer(Modifier.height(12.dp))
+        Card(colors = CardDefaults.cardColors(containerColor = darkCard)) {
+            Column(Modifier.padding(12.dp)) {
+                val clipboard = LocalClipboardManager.current
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("GOOGLE DORK", color = neonGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    IconButton(onClick = { clipboard.setText(AnnotatedString(dork)) }) {
+                        Icon(Icons.Default.ContentCopy, "Copy", tint = Color.Gray)
+                    }
+                }
+                SelectionContainer {
+                    Text(dork, color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SHARED COMPONENTS
+// ═══════════════════════════════════════════════════════════════════
+@Composable
+private fun SourceChip(label: String, active: Boolean, activeColor: Color, onClick: () -> Unit) {
     Surface(
-        color = bg,
+        color = if (active) activeColor else Color(0xFF2A2A2A),
         shape = RoundedCornerShape(20.dp),
         modifier = Modifier.clickable { onClick() }
     ) {
-        Text(label, color = text, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        Text(label, color = if (active) Color.Black else Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
     }
 }
 
 @Composable
-fun PresetChip(label: String, onClick: () -> Unit) {
-    Surface(
-        color = Color(0xFF2A2A2A),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.clickable { onClick() }
-    ) {
-        Text(label, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+private fun PresetChip(label: String, onClick: () -> Unit) {
+    Surface(color = Color(0xFF2A2A2A), shape = RoundedCornerShape(14.dp), modifier = Modifier.clickable { onClick() }) {
+        Text(label, color = Color.White, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
     }
 }
+
+@Composable
+private fun textFieldColors(bg: Color, focus: Color) = OutlinedTextFieldDefaults.colors(
+    focusedContainerColor = bg,
+    unfocusedContainerColor = bg,
+    focusedTextColor = Color.White,
+    unfocusedTextColor = Color.White,
+    focusedBorderColor = focus,
+    unfocusedBorderColor = Color.DarkGray
+)

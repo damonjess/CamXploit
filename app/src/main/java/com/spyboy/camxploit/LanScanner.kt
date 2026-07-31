@@ -138,7 +138,8 @@ class LanScanner(private val context: Context) {
             v.contains("microsoft") || v.contains("dell") || v.contains("hp") || v.contains("lenovo") || v.contains("asus") -> "Computer"
             v.contains("hikvision") || v.contains("dahua") || v.contains("axis") || v.contains("reolink") || 
                     v.contains("amcrest") || v.contains("foscam") || v.contains("vstarcam") || 
-                    openPorts.contains(554) || openPorts.contains(8000) || openPorts.contains(37777) -> "Camera"
+                    openPorts.contains(554) || openPorts.contains(8000) || openPorts.contains(37777) ||
+                    h.contains("p2p device") -> "Camera"
             v.contains("tp-link") || v.contains("d-link") || v.contains("netgear") || v.contains("cisco") || 
                     v.contains("ubiquiti") || v.contains("linksys") || v.contains("asus") || v.contains("belkin") -> "Router"
             v.contains("amazon") || v.contains("echo") || h.contains("google home") || v.contains("sonos") || h.contains("nest") -> "Smart Speaker"

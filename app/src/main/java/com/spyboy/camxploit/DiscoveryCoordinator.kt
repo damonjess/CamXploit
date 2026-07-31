@@ -30,6 +30,7 @@ class DiscoveryCoordinator(private val context: Context) {
     private val scanner = RobustLanScanner(context)
     private val ssdpHelper = SsdpDiscoveryHelper()
     private val mdnsHelper = MdnsDiscoveryHelper(context)
+    private val p2pHelper = P2pDiscoveryHelper()
     private val lanScanner = LanScanner(context)
 
     private val _devices = MutableStateFlow<List<RobustLanScanner.Device>>(emptyList())
@@ -99,6 +100,26 @@ class DiscoveryCoordinator(private val context: Context) {
                 }
             }
 
+            // Run P2P Discovery in parallel
+            val p2pJob = launch {
+                try {
+                    p2pHelper.discover().collect { (ip, info) ->
+                        addOrMerge(
+                            RobustLanScanner.Device(
+                                ip = ip,
+                                mac = null,
+                                hostname = info,
+                                openPorts = emptyList(),
+                                source = "p2p",
+                                vendor = null
+                            )
+                        )
+                    }
+                } catch (e: Exception) {
+                    Log.e(tag, "P2P discovery error", e)
+                }
+            }
+
             // Run active TCP/ICMP scan
             val scanJob = scanner.scan(
                 timeoutMs = 400,
@@ -111,6 +132,7 @@ class DiscoveryCoordinator(private val context: Context) {
             delay(1500) // let late responses trickle in
             ssdpJob.cancelAndJoin()
             mdnsJob.cancelAndJoin()
+            p2pJob.cancelAndJoin()
 
             enrichMacsFromArp()
             _scanning.value = false

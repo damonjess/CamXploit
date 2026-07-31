@@ -42,19 +42,32 @@ object ShodanClient {
         val url = "$BASE/shodan/host/search?key=$apiKey&query=${java.net.URLEncoder.encode(query, "UTF-8")}&limit=20"
         val req = Request.Builder().url(url).build()
         client.newCall(req).execute().use { res ->
-            val body = res.body?.string() ?: return@use emptyList()
+            val body = res.body?.string() ?: throw Exception("Empty response body")
             val json = JSONObject(body)
+            
+            if (!res.isSuccessful) {
+                val error = json.optString("error", "HTTP Error ${res.code}")
+                throw Exception(error)
+            }
+            
             val matches = json.optJSONArray("matches") ?: return@use emptyList()
             parseMatches(matches)
         }
     }
 
-    suspend fun lookupIp(apiKey: String, ip: String): ShodanHost? = withContext(Dispatchers.IO) {
+    suspend fun lookupIp(apiKey: String, ip: String): ShodanHost = withContext(Dispatchers.IO) {
         val url = "$BASE/shodan/host/$ip?key=$apiKey"
         val req = Request.Builder().url(url).build()
         client.newCall(req).execute().use { res ->
-            val body = res.body?.string() ?: return@use null
-            parseHost(JSONObject(body))
+            val body = res.body?.string() ?: throw Exception("Empty response body")
+            val json = JSONObject(body)
+            
+            if (!res.isSuccessful) {
+                val error = json.optString("error", "HTTP Error ${res.code}")
+                throw Exception(error)
+            }
+            
+            parseHost(json)
         }
     }
 

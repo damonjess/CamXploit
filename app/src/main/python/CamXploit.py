@@ -159,6 +159,14 @@ TV   = "📺"
 FIRE = "🔥"
 SHLD = "🛡️"
 RADR = "📡"
+P2P  = "🤝"
+
+# P2P Protocol Constants (from lansearch.py)
+P2P_PORT = 32108
+P2P_MAGIC_NUM = 0xF1
+MSG_LAN_SEARCH = 0x30
+MSG_LAN_SEARCH_EXT = 0x32
+MSG_PUNCH_PKT = 0x41
 
 # Comprehensive Port List (728+ tactical ports)
 PORTS_LIST = (
@@ -1779,6 +1787,69 @@ def get_device_info(ip):
 
     return info
 
+def discover_p2p_lan():
+    """
+    Discovers IoT devices on the LAN using P2P protocols (CS2 / iLnkP2P).
+    Based on lansearch.py by Paul Marrapese.
+    """
+    print(f"\n{RADR} Sending P2P LAN Search (UDP 32108)...")
+
+    # Packet 1: LAN Search (F1 30 00 00)
+    # Packet 2: LAN Search Extended (F1 32 00 00)
+    packets = [
+        bytes([P2P_MAGIC_NUM, MSG_LAN_SEARCH, 0, 0]),
+        bytes([P2P_MAGIC_NUM, MSG_LAN_SEARCH_EXT, 0, 0])
+    ]
+
+    discovered = {}
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(2.5)
+
+        for pkt in packets:
+            sock.sendto(pkt, ('<broadcast>', P2P_PORT))
+
+        while True:
+            try:
+                data, addr = sock.recvfrom(1024)
+                if len(data) < 4: continue
+
+                # Validate Header
+                if data[0] != P2P_MAGIC_NUM or data[1] != MSG_PUNCH_PKT:
+                    continue
+
+                ip = addr[0]
+                if ip not in discovered:
+                    # Parse Payload (from index 4)
+                    # Prefix (4-11), Serial (12-15), Check Code (16-21)
+                    prefix = data[4:12].decode('ascii', 'ignore').strip('\x00')
+                    serial = int.from_bytes(data[12:16], 'big')
+                    check_code = data[16:22].decode('ascii', 'ignore').strip('\x00')
+
+                    uid = f"{prefix}-{serial:06d}-{check_code}"
+
+                    # Classification (from lansearch.py)
+                    is_ilnk = False
+                    ilnk_prefixes = ["VSTD", "VSTF", "QHSV", "EEEE", "ROSS", "ISRP", "GCMN", "ELSA"]
+                    if prefix in ilnk_prefixes or re.match(r"[A-F]{5}", check_code):
+                        is_ilnk = True
+
+                    protocol = "iLnkP2P" if is_ilnk else "CS2 Network P2P"
+                    discovered[ip] = {
+                        "uid": uid,
+                        "protocol": protocol,
+                        "prefix": prefix,
+                        "serial": serial
+                    }
+                    print(f"  {P2P} P2P DEVICE: {ip} | UID: {uid} | Proto: {protocol}")
+            except socket.timeout:
+                break
+        sock.close()
+    except Exception as e:
+        print(f"  {ERR} P2P Discovery Error: {str(e)}")
+    return discovered
+
 
 def lan_scan():
     """Advanced LAN Scanner like Fing with fallbacks"""
@@ -1844,6 +1915,18 @@ def lan_scan():
                         devices_found[ip] = {"ip": ip, "method": "mDNS"}
                     else:
                         devices_found[ip]["method"] += "+mDNS"
+        except: pass
+
+        # 4. P2P Fallback
+        output.append("📡 Attempting P2P LAN Discovery (UDP 32108)...\n")
+        try:
+            p2p_devs = discover_p2p_lan()
+            for ip, p2p_info in p2p_devs.items():
+                if ip != my_ip:
+                    if ip not in devices_found:
+                        devices_found[ip] = {"ip": ip, "method": "P2P"}
+                    else:
+                        devices_found[ip]["method"] += "+P2P"
         except: pass
 
         # Process Results

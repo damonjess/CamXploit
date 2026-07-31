@@ -638,7 +638,7 @@ fun CamGuardianApp() {
                                 importedOsintIp = null
                                 showOsint = true 
                             }, modifier = Modifier.background(Color.Magenta.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.Public, null, tint = Color.Magenta, modifier = Modifier.size(18.dp)) }
-                            IconButton(onClick = { captureScreenshot(context, view) }, modifier = Modifier.background(Color.Cyan.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.PhotoCamera, null, tint = Color.Cyan, modifier = Modifier.size(18.dp)) }
+                            IconButton(onClick = { captureScreenshot(context, view) { capturedBitmap = it } }, modifier = Modifier.background(Color.Cyan.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.PhotoCamera, null, tint = Color.Cyan, modifier = Modifier.size(18.dp)) }
                             IconButton(onClick = { generatePdfReport(context, terminalText); generateHtmlReport(context, terminalText) }, modifier = Modifier.background(Color.Green.copy(0.1f), CircleShape).size(36.dp)) { Icon(Icons.Default.CheckCircle, null, tint = Color.Green, modifier = Modifier.size(18.dp)) }
                         }
                     }
@@ -656,9 +656,8 @@ fun CamGuardianApp() {
 
             Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).weight(1f)) {
                 when (selectedTab) {
-                    0 -> ConsoleTab(consoleIpInput, { consoleIpInput = it }, terminalText + currentPulse, { terminalText = "> Console Reset.\n" }, isScanning, scrollState, { startReconScan(consoleIpInput) }, { url, _ -> 
-                        val source = if (url.startsWith("rtsp://")) StreamSource.Rtsp(url) else StreamSource.Mjpeg(url)
-                        StreamViewerActivity.launch(context, source, consoleIpInput) 
+                    0 -> ConsoleTab(consoleIpInput, { consoleIpInput = it }, terminalText + currentPulse, { terminalText = "> Console Reset.\n" }, isScanning, scrollState, { startReconScan(consoleIpInput) }, { url, title -> 
+                        com.spyboy.camxploit.StreamActivity.launch(context, url, title) 
                     }, shodanApiKey = shodanApiKey, onDeepShodan = { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } })
                     1 -> OsintScreen(viewModel = osintViewModel)
                     2 -> ArchiveTab(context, selectedTab, terminalText, consoleIpInput) { viewingFile = it }
@@ -1005,9 +1004,57 @@ fun openFile(context: Context, file: File) { try { val uri = FileProvider.getUri
 fun openBrowserSearch(context: Context, engine: String, query: String) { val url = when (engine) { "GOOGLE" -> "https://www.google.com/search?q=${Uri.encode(query)}"; "SHODAN" -> "https://www.shodan.io/search?query=${Uri.encode(query)}"; else -> "" }; try { if (url.isNotEmpty()) context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (e: Exception) {} }
 fun shareFile(context: Context, file: File) { try { val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file); val intent = Intent(Intent.ACTION_SEND).apply { type = "*/*"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }; context.startActivity(Intent.createChooser(intent, "Share Report")) } catch (e: Exception) {} }
 fun saveContentToFile(context: Context, content: String, name: String, ext: String) { try { val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS); val file = File(dir, "${name}_${System.currentTimeMillis()}.$ext"); file.writeText(content) } catch (e: Exception) {} }
-fun captureScreenshot(context: Context, view: android.view.View) { val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888); view.draw(Canvas(bitmap)); if (saveBitmapToGallery(context, bitmap)) Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() }
-fun generateHtmlReport(context: Context, content: String) { saveContentToFile(context, "<html><body><pre>$content</pre></body></html>", "Report", "html") }
-fun generatePdfReport(context: Context, content: String) { val pdf = PdfDocument(); val page = pdf.startPage(PageInfo.Builder(595, 842, 1).create()); page.canvas.drawText(content.take(1000), 40f, 50f, Paint()); pdf.finishPage(page); try { val f = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "Report_${System.currentTimeMillis()}.pdf"); pdf.writeTo(FileOutputStream(f)) } catch (e: Exception) {} finally { pdf.close() } }
+fun captureScreenshot(context: Context, view: android.view.View, onCapture: (Bitmap) -> Unit) { 
+    val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+    view.draw(Canvas(bitmap))
+    onCapture(bitmap)
+    if (saveBitmapToGallery(context, bitmap)) Toast.makeText(context, "Screenshot Saved", Toast.LENGTH_SHORT).show() 
+}
+fun generateHtmlReport(context: Context, content: String) { saveContentToFile(context, "<html><body style='background:#000;color:#0F0;font-family:monospace'><pre>$content</pre></body></html>", "Report", "html") }
+fun generatePdfReport(context: Context, content: String) { 
+    val pdf = PdfDocument()
+    val paint = Paint().apply {
+        color = android.graphics.Color.BLACK
+        textSize = 10f
+        typeface = Typeface.MONOSPACE
+    }
+    val margin = 40f
+    val pageWidth = 595
+    val pageHeight = 842
+    var yPos = margin + 20f
+    
+    var pageInfo = PageInfo.Builder(pageWidth, pageHeight, 1).create()
+    var page = pdf.startPage(pageInfo)
+    var canvas = page.canvas
+
+    canvas.drawText("CAMXPLOIT AUDIT REPORT", margin, margin, Paint().apply { 
+        textSize = 16f
+        isFakeBoldText = true 
+    })
+    
+    content.lines().forEach { line ->
+        if (yPos > pageHeight - margin) {
+            pdf.finishPage(page)
+            pageInfo = PageInfo.Builder(pageWidth, pageHeight, pdf.pages.size + 1).create()
+            page = pdf.startPage(pageInfo)
+            canvas = page.canvas
+            yPos = margin
+        }
+        canvas.drawText(line.take(100), margin, yPos, paint)
+        yPos += 14f
+    }
+    
+    pdf.finishPage(page)
+    try {
+        val f = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "Report_${System.currentTimeMillis()}.pdf")
+        pdf.writeTo(FileOutputStream(f))
+        Toast.makeText(context, "PDF Report Generated", Toast.LENGTH_SHORT).show()
+    } catch (e: Exception) {
+        e.printStackTrace()
+    } finally {
+        pdf.close()
+    }
+}
 fun generateDetailedPdfReport(context: Context, terminalText: String, targetIp: String) { generatePdfReport(context, "Target: $targetIp\n\n$terminalText") }
 fun saveJsonReport(context: Context, content: String, ip: String) { try { val json = JSONObject().apply { put("target", ip); put("log", content) }; saveContentToFile(context, json.toString(), "Report_$ip", "json") } catch (e: Exception) {} }
 
