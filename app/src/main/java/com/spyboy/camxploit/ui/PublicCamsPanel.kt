@@ -1,17 +1,17 @@
 package com.spyboy.camxploit.ui
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.icons.Icons
@@ -25,33 +25,38 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.SubcomposeAsyncImage
 import com.spyboy.camxploit.StreamActivity
+import com.spyboy.camxploit.osint.InsecamClient
 import com.spyboy.camxploit.osint.InsecamScraper
 import com.spyboy.camxploit.osint.OsintViewModel
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun PublicCamsPanel(vm: OsintViewModel, neonGreen: Color, darkCard: Color) {
+fun PublicCamsPanel(
+    vm: OsintViewModel,
+    neonGreen: Color = Color(0xFF39FF14),
+    darkCard: Color = Color(0xFF1A1A1A)
+) {
     val context = LocalContext.current
     val countries by vm.countries.collectAsStateWithLifecycle()
-    val cameras by vm.insecamCameras.collectAsStateWithLifecycle()
-
-    var selectedCountry by remember { mutableStateOf<String?>(null) }
-    var showManualBrowser by remember { mutableStateOf(false) }
-
+    val cameras by vm.cameras.collectAsStateWithLifecycle()
+    val selectedCountry by vm.selectedCountry.collectAsStateWithLifecycle()
+    
+    // Scraper state
     val scraper = remember { InsecamScraper() }
     val scraperError by scraper.error.collectAsStateWithLifecycle()
     val scraperLoading by scraper.isLoading.collectAsStateWithLifecycle()
+    val hasMore by scraper.hasMorePages.collectAsStateWithLifecycle()
 
-    // Sync scraper state to ViewModel so outer UI can see it
+    var showManualBrowser by remember { mutableStateOf(false) }
+
+    // Sync scraper state to ViewModel so outer UI can see it if needed
     LaunchedEffect(scraper) {
         scraper.cameras.collect { vm.setInsecamCameras(it) }
     }
@@ -85,21 +90,21 @@ fun PublicCamsPanel(vm: OsintViewModel, neonGreen: Color, darkCard: Color) {
         CountryCameraView(
             cameras = cameras,
             loading = scraperLoading,
+            hasMore = hasMore,
             error = scraperError,
             scraper = scraper,
             darkCard = darkCard,
             neonGreen = neonGreen,
-            onBack = { selectedCountry = null },
-            onManualBrowse = { showManualBrowser = true },
-            onCameraError = { vm.removeDeadCamera(it) }
+            onBack = { vm.clearCountrySelection() },
+            onManualBrowse = { showManualBrowser = true }
         )
     } else {
-        CountryListView(
+        CountryGridView(
             countries = countries,
             darkCard = darkCard,
             neonGreen = neonGreen,
             onSelect = { code ->
-                selectedCountry = code
+                vm.selectCountry(code)
                 scraper.loadCountry(code)
             }
         )
@@ -119,37 +124,50 @@ fun PublicCamsPanel(vm: OsintViewModel, neonGreen: Color, darkCard: Color) {
 }
 
 @Composable
-private fun CountryListView(
+private fun CountryGridView(
     countries: List<OsintViewModel.InsecamCountry>,
     darkCard: Color,
     neonGreen: Color,
     onSelect: (String) -> Unit
 ) {
-    LazyColumn {
-        item {
+    Column {
+        Text(
+            "PUBLIC CAMERA SOURCES",
+            color = Color.Gray,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.sp
+        )
+        Spacer(Modifier.height(10.dp))
+
+        if (countries.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = neonGreen)
+            }
+        } else {
             Text(
                 "${countries.size} COUNTRIES",
                 color = neonGreen,
                 fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.sp
+                fontWeight = FontWeight.Bold
             )
-            Spacer(Modifier.height(10.dp))
-        }
-        if (countries.isEmpty()) {
-            item {
-                Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = neonGreen)
+            Spacer(Modifier.height(8.dp))
+
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(bottom = 100.dp)
+            ) {
+                items(countries.sortedByDescending { it.count }) { country ->
+                    CountryRow(
+                        country = country,
+                        darkCard = darkCard,
+                        onClick = { onSelect(country.code) }
+                    )
                 }
             }
-        } else {
-            items(countries.sortedByDescending { it.count }) { country ->
-                CountryRow(country, darkCard) { onSelect(country.code) }
-                Spacer(Modifier.height(6.dp))
-            }
-        }
-        item {
-            Spacer(Modifier.height(100.dp))
         }
     }
 }
@@ -157,26 +175,28 @@ private fun CountryListView(
 @OptIn(ExperimentalMaterialApi::class)
 @Composable
 private fun CountryCameraView(
-    cameras: List<InsecamScraper.Camera>,
+    cameras: List<InsecamClient.PublicCamera>,
     loading: Boolean,
+    hasMore: Boolean,
     error: String?,
     scraper: InsecamScraper,
     darkCard: Color,
     neonGreen: Color,
     onBack: () -> Unit,
-    onManualBrowse: () -> Unit,
-    onCameraError: (String) -> Unit
+    onManualBrowse: () -> Unit
 ) {
+    val context = LocalContext.current
     val pullRefreshState = rememberPullRefreshState(
         refreshing = loading,
         onRefresh = { scraper.retry() }
     )
 
     Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.KeyboardArrowLeft, "Back", tint = Color.White)
-            }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable { onBack() }
+        ) {
+            Icon(Icons.Default.KeyboardArrowLeft, "Back", tint = Color.White)
             Text("BACK", color = Color.White, fontSize = 12.sp)
             Spacer(Modifier.weight(1f))
             IconButton(onClick = { scraper.retry() }) {
@@ -184,9 +204,9 @@ private fun CountryCameraView(
             }
         }
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(10.dp))
         Text(
-            if (loading) "LOADING CAMERAS..." else "${cameras.size} CAMERAS",
+            if (loading && cameras.isEmpty()) "LOADING CAMERAS..." else "${cameras.size} CAMERAS",
             color = neonGreen,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
@@ -217,10 +237,7 @@ private fun CountryCameraView(
 
         Spacer(Modifier.height(10.dp))
 
-        val context = LocalContext.current
         val gridState = rememberLazyGridState()
-
-        val hasMore by scraper.hasMorePages.collectAsStateWithLifecycle()
 
         // Detect scroll to end for pagination
         val shouldLoadMore = remember {
@@ -241,25 +258,26 @@ private fun CountryCameraView(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
                 state = gridState,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxSize()
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 100.dp)
             ) {
                 items(cameras, key = { it.id }) { cam ->
-                    CameraThumbnailCard(
+                    CameraCard(
                         cam = cam,
                         darkCard = darkCard,
-                        onClick = {
+                        onViewStream = {
                             val viewerUrl = "http://www.insecam.org/en/view/${cam.id}/"
-                            StreamActivity.launch(context, viewerUrl, cam.location)
-                        },
-                        onImageError = { onCameraError(cam.id) }
+                            // Using StreamActivity.launch to maintain consistency
+                            StreamActivity.launch(context, viewerUrl, cam.location ?: cam.ip ?: "Camera")
+                        }
                     )
                 }
                 if (loading) {
-                    item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+                    item(span = { GridItemSpan(2) }) {
                         Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = neonGreen, modifier = Modifier.size(24.dp))
+                            CircularProgressIndicator(color = neonGreen, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                         }
                     }
                 }
@@ -277,83 +295,6 @@ private fun CountryCameraView(
 }
 
 @Composable
-private fun CameraThumbnailCard(
-    cam: InsecamScraper.Camera,
-    darkCard: Color,
-    onClick: () -> Unit,
-    onImageError: () -> Unit
-) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = darkCard),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(1.2f) // slightly taller so text fits
-            .clickable { onClick() }
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Image area
-            SubcomposeAsyncImage(
-                model = cam.imageUrl,
-                contentDescription = cam.location,
-                contentScale = ContentScale.Crop,
-                loading = {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(
-                            color = Color(0xFF39FF14),
-                            modifier = Modifier.size(24.dp),
-                            strokeWidth = 2.dp
-                        )
-                    }
-                },
-                error = {
-                    LaunchedEffect(Unit) {
-                        onImageError()
-                    }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color(0xFF111111)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                "NO SIGNAL",
-                                color = Color(0xFF555555),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                "CLEANING...",
-                                color = Color(0xFF333333),
-                                fontSize = 10.sp
-                            )
-                        }
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            )
-
-            // Text area with proper wrapping
-            Text(
-                text = cam.location.ifBlank { "Unknown Location" },
-                color = Color.White,
-                fontSize = 11.sp,
-                maxLines = 2, // allow 2 lines instead of 1
-                minLines = 2, // keeps cards uniform height
-                lineHeight = 14.sp,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
-            )
-        }
-    }
-}
-
-@Composable
 private fun CountryRow(
     country: OsintViewModel.InsecamCountry,
     darkCard: Color,
@@ -365,16 +306,16 @@ private fun CountryRow(
         modifier = Modifier.fillMaxWidth().clickable { onClick() }
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
-                Text(country.name.uppercase(), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                Text("CODE: ${country.code.uppercase()}", color = Color.Gray, fontSize = 11.sp)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(country.name.uppercase(), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text("CODE: ${country.code.uppercase()}", color = Color.Gray, fontSize = 10.sp)
             }
             Surface(color = Color(0xFF252525), shape = RoundedCornerShape(6.dp)) {
-                Text("${country.count}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
+                Text("${country.count}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
             }
         }
     }

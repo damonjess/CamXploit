@@ -12,15 +12,8 @@ import org.json.JSONArray
 
 class InsecamScraper {
 
-    data class Camera(
-        val id: String,
-        val imageUrl: String,
-        val location: String,
-        val countryCode: String
-    )
-
-    private val _cameras = MutableStateFlow<List<Camera>>(emptyList())
-    val cameras: StateFlow<List<Camera>> = _cameras.asStateFlow()
+    private val _cameras = MutableStateFlow<List<InsecamClient.PublicCamera>>(emptyList())
+    val cameras: StateFlow<List<InsecamClient.PublicCamera>> = _cameras.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -170,20 +163,21 @@ class InsecamScraper {
         }
     }
 
-    private class JsBridge(private val onResult: (List<Camera>) -> Unit) {
+    private class JsBridge(private val onResult: (List<InsecamClient.PublicCamera>) -> Unit) {
         @android.webkit.JavascriptInterface
         fun onData(json: String) {
             try {
                 val arr = JSONArray(json)
-                val list = mutableListOf<Camera>()
+                val list = mutableListOf<InsecamClient.PublicCamera>()
                 for (i in 0 until arr.length()) {
                     val obj = arr.getJSONObject(i)
                     val img = obj.optString("imageUrl")
                     if (img.isBlank() || img == "null" || img.contains("clear.gif")) continue
                     
-                    list += Camera(
+                    list += InsecamClient.PublicCamera(
                         id = obj.optString("id", "0"),
                         imageUrl = img,
+                        ip = obj.optString("ip", "Unknown IP"),
                         location = obj.optString("location", "Unknown").take(50),
                         countryCode = obj.optString("countryCode")
                     )
@@ -216,7 +210,8 @@ class InsecamScraper {
                             results.push({
                                 id: cleanId,
                                 imageUrl: img.src,
-                                location: caption ? caption.innerText.replace(/\s+/g, ' ').trim() : (ipMatch ? ipMatch[1] : 'Unknown Endpoint'),
+                                location: caption ? caption.innerText.replace(/\s+/g, ' ').trim() : 'Unknown Location',
+                                ip: ipMatch ? ipMatch[1] : 'Unknown IP',
                                 countryCode: '{{CODE}}'
                             });
                         }

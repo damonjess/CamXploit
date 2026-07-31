@@ -32,12 +32,17 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     // Insecam
     private val _countries = MutableStateFlow<List<InsecamCountry>>(emptyList())
     val countries: StateFlow<List<InsecamCountry>> = _countries.asStateFlow()
-    private val _insecamCameras = MutableStateFlow<List<InsecamScraper.Camera>>(emptyList())
-    val insecamCameras: StateFlow<List<InsecamScraper.Camera>> = _insecamCameras.asStateFlow()
+    private val _insecamCameras = MutableStateFlow<List<InsecamClient.PublicCamera>>(emptyList())
+    val cameras: StateFlow<List<InsecamClient.PublicCamera>> = _insecamCameras.asStateFlow()
+    val insecamCameras: StateFlow<List<InsecamClient.PublicCamera>> = cameras // Alias for backward compatibility if needed
+
     private val _insecamLoading = MutableStateFlow(false)
     val insecamLoading: StateFlow<Boolean> = _insecamLoading.asStateFlow()
     private val _insecamError = MutableStateFlow<String?>(null)
     val insecamError: StateFlow<String?> = _insecamError.asStateFlow()
+
+    private val _selectedCountry = MutableStateFlow<String?>(null)
+    val selectedCountry: StateFlow<String?> = _selectedCountry.asStateFlow()
 
     // Dorks
     private val _dorkQuery = MutableStateFlow("inurl:view.shtml intitle:live view")
@@ -132,12 +137,21 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // Called by UI layer when scraper finds cameras
-    fun setInsecamCameras(cameras: List<InsecamScraper.Camera>) {
+    fun setInsecamCameras(cameras: List<InsecamClient.PublicCamera>) {
         _insecamCameras.value = cameras
     }
 
     fun removeDeadCamera(id: String) {
         _insecamCameras.value = _insecamCameras.value.filter { it.id != id }
+    }
+
+    fun selectCountry(code: String) {
+        _selectedCountry.value = code
+    }
+
+    fun clearCountrySelection() {
+        _selectedCountry.value = null
+        _insecamCameras.value = emptyList()
     }
 
     // Intent for UI to load a specific country (Scraper handles actual work)

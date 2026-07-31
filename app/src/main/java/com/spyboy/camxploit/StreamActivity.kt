@@ -1,13 +1,16 @@
 package com.spyboy.camxploit
 
+import android.annotation.SuppressLint
 import android.os.Bundle
+import android.view.WindowManager
+import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -17,6 +20,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -40,19 +44,20 @@ class StreamActivity : ComponentActivity() {
         }
     }
 
+    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        
-        val url = intent.getStringExtra(EXTRA_URL) ?: ""
-        val title = intent.getStringExtra(EXTRA_TITLE) ?: "Live Feed"
 
-        // Fullscreen immersive
+        // Modern Immersive fullscreen
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).let { controller ->
             controller.hide(WindowInsetsCompat.Type.systemBars())
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        val streamUrl = intent.getStringExtra(EXTRA_URL) ?: ""
+        val title = intent.getStringExtra(EXTRA_TITLE) ?: "Live Feed"
 
         setContent {
             val neonGreen = Color(0xFF39FF14)
@@ -60,8 +65,53 @@ class StreamActivity : ComponentActivity() {
             var hasError by remember { mutableStateOf(false) }
             var webView by remember { mutableStateOf<WebView?>(null) }
 
+            val isolationJs = """
+                (function() {
+                    var style = document.getElementById('camxploit-isolation');
+                    if (!style) {
+                        style = document.createElement('style');
+                        style.id = 'camxploit-isolation';
+                        document.head.appendChild(style);
+                    }
+                    style.innerHTML = `
+                        * { visibility: hidden !important; }
+                        html, body { 
+                            background: black !important; 
+                            margin: 0 !important; 
+                            padding: 0 !important; 
+                            overflow: hidden !important; 
+                            width: 100vw !important; 
+                            height: 100vh !important; 
+                            visibility: visible !important; 
+                        }
+                        img#image0, img#image1, video, canvas, .stream img, .video-container img, 
+                        [class*='stream'], [class*='video'], [id*='stream'], [id*='video'],
+                        #image0, #image1 {
+                            visibility: visible !important;
+                            position: fixed !important;
+                            top: 0 !important;
+                            left: 0 !important;
+                            width: 100vw !important;
+                            height: 100vh !important;
+                            object-fit: contain !important;
+                            z-index: 999999 !important;
+                            display: block !important;
+                            background: black !important;
+                        }
+                        /* Hide common modal/popup/dialog elements */
+                        .modal, .popup, .dialog, .overlay, .alert, .message-box, 
+                        [class*='modal'], [class*='popup'], [class*='dialog'],
+                        [id*='modal'], [id*='popup'], [id*='dialog'] {
+                            display: none !important;
+                            visibility: hidden !important;
+                            z-index: -1 !important;
+                        }
+                    `;
+                })()
+            """.trimIndent()
+
             Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-                // WebView player - handles MJPEG, RTSP plugins, JS players automatically
+
                 AndroidView(
                     factory = { ctx ->
                         WebView(ctx).apply {
@@ -72,89 +122,153 @@ class StreamActivity : ComponentActivity() {
                             settings.useWideViewPort = true
                             settings.builtInZoomControls = true
                             settings.displayZoomControls = false
-                            // Using a desktop-like UA often helps with loading embedded players
-                            settings.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                            
-                            webChromeClient = WebChromeClient()
-                            webViewClient = object : WebViewClient() {
-                                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                                    isLoading = true
-                                    hasError = false
-                                }
-                                override fun onPageFinished(view: WebView?, url: String?) {
-                                    isLoading = false
-                                    // Inject JS to isolate the stream if it's an Insecam view
-                                    if (url?.contains("insecam.org/en/view/") == true) {
-                                        view?.evaluateJavascript("""
-                                            (function() {
-                                                var style = document.createElement('style');
-                                                style.innerHTML = 'body { background: black !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; } ' +
-                                                                  '* { visibility: hidden !important; } ' +
-                                                                  '#image0, #image0 * { visibility: visible !important; position: fixed !important; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) !important; width: 100% !important; height: auto !important; max-height: 100% !important; z-index: 999999 !important; }';
-                                                document.head.appendChild(style);
-                                            })();
-                                        """.trimIndent(), null)
+                            // Spoof Chrome 44 to bypass legacy browser sniffing ("browser too new")
+                            settings.userAgentString = "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36"
+
+                            webChromeClient = object : WebChromeClient() {
+                                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                    if (newProgress > 60) {
+                                        view?.evaluateJavascript(isolationJs, null)
+                                    }
+                                    if (newProgress == 100) {
+                                        isLoading = false
                                     }
                                 }
-                                override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
-                                    if (request?.isForMainFrame == true) {
+
+                                // Suppress JS Popups (Alerts, Confirms, Prompts)
+                                override fun onJsAlert(view: WebView?, url: String?, message: String?, result: android.webkit.JsResult?): Boolean {
+                                    result?.confirm()
+                                    return true
+                                }
+                                override fun onJsConfirm(view: WebView?, url: String?, message: String?, result: android.webkit.JsResult?): Boolean {
+                                    result?.confirm()
+                                    return true
+                                }
+                                override fun onJsPrompt(view: WebView?, url: String?, message: String?, defaultValue: String?, result: android.webkit.JsPromptResult?): Boolean {
+                                    result?.confirm()
+                                    return true
+                                }
+
+                                override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                                    return true // Suppress console logs in prod, but helps with debugging if needed
+                                }
+                            }
+
+                            webViewClient = object : WebViewClient() {
+                                override fun onPageFinished(view: WebView?, url: String?) {
+                                    view?.evaluateJavascript(isolationJs, null)
+                                    isLoading = false
+                                    hasError = false
+                                }
+
+                                override fun onReceivedError(
+                                    view: WebView?,
+                                    errorCode: Int,
+                                    description: String?,
+                                    failingUrl: String?
+                                ) {
+                                    if (failingUrl == streamUrl) {
                                         hasError = true
                                         isLoading = false
                                     }
                                 }
+
+                                override fun shouldOverrideUrlLoading(
+                                    view: WebView?,
+                                    request: WebResourceRequest?
+                                ): Boolean {
+                                    return false // Keep navigation internal
+                                }
                             }
-                            loadUrl(url)
+
+                            loadUrl(streamUrl)
                             webView = this
                         }
                     },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize().alpha(if (isLoading) 0f else 1f)
                 )
 
-                // Overlay header
+                // Header overlay
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(Color(0xCC000000))
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .statusBarsPadding(),
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = title.uppercase(),
-                        color = neonGreen,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(onClick = { webView?.reload() }) {
-                        Icon(Icons.Default.Refresh, "Reload", tint = Color.White)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "LIVE FEED",
+                            fontSize = 11.sp,
+                            color = neonGreen,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            title,
+                            fontSize = 13.sp,
+                            color = Color.White,
+                            maxLines = 1
+                        )
                     }
-                    IconButton(onClick = { finish() }) {
-                        Icon(Icons.Default.Close, "Close", tint = Color.White)
+                    Row {
+                        IconButton(onClick = {
+                            hasError = false
+                            isLoading = true
+                            webView?.reload()
+                        }) {
+                            Icon(Icons.Default.Refresh, "Reload", tint = Color.White)
+                        }
+                        IconButton(onClick = { finish() }) {
+                            Icon(Icons.Default.Close, "Close", tint = Color.White)
+                        }
                     }
                 }
 
+                // Loading spinner
                 if (isLoading) {
-                    CircularProgressIndicator(
-                        color = neonGreen,
-                        modifier = Modifier.align(Alignment.Center)
-                    )
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color = neonGreen,
+                            strokeWidth = 3.dp,
+                            modifier = Modifier.size(48.dp)
+                        )
+                    }
                 }
 
+                // Error state
                 if (hasError) {
-                    Column(
-                        modifier = Modifier.align(Alignment.Center),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text("STREAM UNAVAILABLE", color = Color.Red, fontWeight = FontWeight.Bold)
-                        Text("Camera may be offline", color = Color.Gray, fontSize = 12.sp)
-                        Button(
-                            onClick = { webView?.reload() },
-                            colors = ButtonDefaults.buttonColors(containerColor = neonGreen)
-                        ) {
-                            Text("RETRY", color = Color.Black)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                "STREAM OFFLINE",
+                                color = Color.Red,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "Camera may be down or blocked",
+                                color = Color.Gray,
+                                fontSize = 12.sp
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            Button(
+                                onClick = {
+                                    hasError = false
+                                    isLoading = true
+                                    webView?.reload()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = neonGreen)
+                            ) {
+                                Text("RETRY", color = Color.Black, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
