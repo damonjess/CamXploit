@@ -52,6 +52,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import com.spyboy.camxploit.osint.InsecamScraper
 import com.spyboy.camxploit.osint.OpentopiaScraper
+import com.spyboy.camxploit.ui.AutoRefreshImage
 import com.spyboy.camxploit.ui.FastMjpegPlayer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -59,6 +60,28 @@ import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
+
+private val neonCyan = Color(0xFF00FFFF)
+private val neonGreen = Color(0xFF39FF14)
+private val neonRed = Color(0xFFFF0033)
+private val orange = Color(0xFFFFA500)
+
+fun guessMjpegFromSnapshot(snapshotUrl: String): String? {
+    val replacements = listOf(
+        "current.jpg" to "video.mjpg",
+        "snapshot.jpg" to "video.mjpg",
+        "image.jpg" to "video.mjpg",
+        "still.jpg" to "video.mjpg",
+        "jpg" to "mjpg"
+    )
+    val lower = snapshotUrl.lowercase()
+    for ((old, new) in replacements) {
+        if (lower.contains(old)) {
+            return snapshotUrl.replace(old, new, ignoreCase = true)
+        }
+    }
+    return null
+}
 
 @UnstableApi
 class StreamViewerActivity : ComponentActivity() {
@@ -265,19 +288,27 @@ fun StreamPlayerScreen(
     onRecord: () -> Unit,
     viewModel: StreamViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
-    val neonCyan = Color(0xFF00FFFF)
     var resolvedUrl by remember { mutableStateOf(source?.url ?: "") }
+    var isGuessed by remember { mutableStateOf(false) }
     var isScraping by remember { mutableStateOf(false) }
+    var forcedMjpeg by remember { mutableStateOf(false) }
+    var hasError by remember { mutableStateOf(false) }
 
     val isInsecam = source?.url?.contains("insecam.org", ignoreCase = true) == true
     val isOpentopia = source?.url?.contains("opentopia.com", ignoreCase = true) == true
 
     LaunchedEffect(source?.url) {
-        if ((isInsecam || isOpentopia) && source != null) {
+        if (source == null) return@LaunchedEffect
+        
+        hasError = false
+        if (isInsecam || isOpentopia) {
             isScraping = true
             val result = withContext(Dispatchers.IO) {
                 if (isInsecam) {
                     val res = InsecamScraper.scrapePage(source.url)
+                    if (res.streamUrl.isNotBlank()) {
+                        forcedMjpeg = true
+                    }
                     StreamSource(
                         url = res.streamUrl,
                         title = res.title,
@@ -285,13 +316,24 @@ fun StreamPlayerScreen(
                         thumbnailUrl = res.thumbnailUrl
                     )
                 } else {
-                    val directUrl = OpentopiaScraper.scrapeDetailPage(source.url)
-                    StreamSource(
-                        url = directUrl,
-                        title = source.title,
-                        location = source.location,
-                        thumbnailUrl = source.thumbnailUrl
-                    )
+                    val pair = OpentopiaScraper.scrapeDetailPage(source.url)
+                    if (pair != null) {
+                        forcedMjpeg = pair.second
+                        StreamSource(
+                            url = pair.first,
+                            title = source.title,
+                            location = source.location,
+                            thumbnailUrl = source.thumbnailUrl
+                        )
+                    } else {
+                        // Fallback to the original page URL if scraping fails
+                        StreamSource(
+                            url = source.url,
+                            title = source.title,
+                            location = source.location,
+                            thumbnailUrl = source.thumbnailUrl
+                        )
+                    }
                 }
             }
             if (result.url.isNotBlank()) {
@@ -300,6 +342,16 @@ fun StreamPlayerScreen(
                 viewModel.startStream(source.copy(url = result.url))
             }
             isScraping = false
+        } else {
+            // Direct link: try to "upgrade" snapshot to MJPEG if possible
+            val guessed = guessMjpegFromSnapshot(source.url)
+            if (guessed != null) {
+                resolvedUrl = guessed
+                isGuessed = true
+                viewModel.startStream(source.copy(url = guessed))
+            } else {
+                isGuessed = false
+            }
         }
     }
 
@@ -354,10 +406,14 @@ fun StreamPlayerScreen(
                 contentAlignment = Alignment.Center
             ) {
                 val lowerUrl = resolvedUrl.lowercase()
-                val isMjpeg = lowerUrl.contains("mjpeg") || 
-                             lowerUrl.contains("mjpg") || 
-                             lowerUrl.contains("cgi-bin") ||
-                             source?.protocol?.lowercase() == "mjpeg"
+                val isSnapshot = lowerUrl.endsWith(".jpg") || 
+                                lowerUrl.endsWith(".jpeg") || 
+                                lowerUrl.endsWith(".png") ||
+                                lowerUrl.contains("snapshot") ||
+                                lowerUrl.contains("current") ||
+                                lowerUrl.contains("still") ||
+                                lowerUrl.contains("image.jpg") ||
+                                (lowerUrl.contains("image.cgi") && !lowerUrl.contains("video"))
 
                 when {
                     isScraping -> {
@@ -367,15 +423,54 @@ fun StreamPlayerScreen(
                             Text("Resolving camera feed...", color = Color.Gray, fontSize = 12.sp)
                         }
                     }
-                    isMjpeg -> {
+                    hasError -> {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                "Failed to load stream.\nThe camera may be offline.",
+                                color = Color.Red,
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(16.dp)
+                            )
+                            Button(onClick = { hasError = false; onRetry() }) {
+                                Text("Retry")
+                            }
+                        }
+                    }
+                    // True MJPEG stream → native decoder
+                    lowerUrl.contains("mjpeg") || 
+                    lowerUrl.contains("mjpg") || 
+                    lowerUrl.contains("cgi-bin/video") ||
+                    lowerUrl.contains("video.cgi") ||
+                    lowerUrl.contains(".mjpg") ||
+                    source?.protocol?.lowercase() == "mjpeg" ||
+                    forcedMjpeg -> {
                         FastMjpegPlayer(
                             url = resolvedUrl,
                             modifier = Modifier.fillMaxSize(),
-                            onError = { /* handled via status */ }
+                            onError = { 
+                                if (isGuessed && source != null) {
+                                    resolvedUrl = source.url
+                                    isGuessed = false
+                                } else {
+                                    hasError = true 
+                                }
+                            }
                         )
                     }
+                    // Snapshot JPEG → auto-refresh
+                    isSnapshot -> {
+                        AutoRefreshImage(
+                            url = resolvedUrl,
+                            modifier = Modifier.fillMaxSize(),
+                            refreshMs = 1500,
+                            onError = { hasError = true }
+                        )
+                    }
+                    // RTSP / HTTP video
                     lowerUrl.startsWith("rtsp://") || 
-                    lowerUrl.startsWith("rtmp://") -> {
+                    lowerUrl.startsWith("rtmp://") ||
+                    ((lowerUrl.startsWith("http://") || lowerUrl.startsWith("https://")) && 
+                     (lowerUrl.contains(".mp4") || lowerUrl.contains(".m3u8") || lowerUrl.contains("stream"))) -> {
                         AndroidView(
                             factory = { ctx ->
                                 PlayerView(ctx).apply {
@@ -390,6 +485,7 @@ fun StreamPlayerScreen(
                     else -> {
                         WebPlayer(
                             url = resolvedUrl,
+                            autoRefresh = isOpentopia && !forcedMjpeg,
                             onLoadingChange = { /* handled */ },
                             onError = { /* handled */ }
                         )
@@ -422,13 +518,28 @@ fun StreamPlayerScreen(
 @Composable
 fun WebPlayer(
     url: String,
+    autoRefresh: Boolean = false,
     onLoadingChange: (Boolean) -> Unit,
     onError: () -> Unit
 ) {
     val context = LocalContext.current
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+    if (autoRefresh) {
+        LaunchedEffect(url) {
+            while (true) {
+                kotlinx.coroutines.delay(15_000) // 15s refresh for Opentopia fallback
+                withContext(Dispatchers.Main) {
+                    webViewRef?.reload()
+                }
+            }
+        }
+    }
+
     AndroidView(
         factory = {
             WebView(context).apply {
+                webViewRef = this
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT
@@ -466,10 +577,6 @@ fun WebPlayer(
 
 @Composable
 fun StatusIndicator(status: StreamStatus, isRecording: Boolean, duration: Long) {
-    val neonGreen = Color(0xFF39FF14)
-    val neonRed = Color(0xFFFF0033)
-    val orange = Color(0xFFFFA500)
-
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 12.dp)) {
         if (isRecording) {
             val mins = duration / 60
@@ -483,6 +590,8 @@ fun StatusIndicator(status: StreamStatus, isRecording: Boolean, duration: Long) 
         } else {
             val (text, color) = when (status) {
                 is StreamStatus.Live -> "● LIVE" to neonGreen
+                is StreamStatus.Snapshot -> "● LIVE (Snapshot)" to neonGreen
+                is StreamStatus.Web -> "● WEB" to neonCyan
                 is StreamStatus.Connecting, is StreamStatus.Buffering -> "● SYNCING" to orange
                 is StreamStatus.Unauthorized -> "● LOCKED" to neonRed
                 is StreamStatus.Error -> "● OFFLINE" to Color.Red

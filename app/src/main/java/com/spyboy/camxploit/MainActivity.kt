@@ -611,7 +611,9 @@ fun CamGuardianApp() {
                         scrollState, 
                         { startReconScan(consoleIpInput) }, 
                         { url, title -> 
-                            com.spyboy.camxploit.StreamActivity.launch(context, url, title) 
+                            val protocol = if (url.startsWith("rtsp://")) "rtsp" else "mjpeg"
+                            val source = StreamSource(url = url, title = title, protocol = protocol)
+                            StreamViewerActivity.launch(context, source, consoleIpInput.ifBlank { "Unknown" }) 
                         }
                     )
                     1 -> OsintScreen(viewModel = osintViewModel)

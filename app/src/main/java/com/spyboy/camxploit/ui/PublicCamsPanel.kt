@@ -77,6 +77,7 @@ fun PublicCamsPanel(
         if (selectedCountry == null && source == OsintViewModel.Source.PublicCams) {
             OpentopiaHeader(
                 onLoad = { viewModel.loadOpentopiaCameras(it) },
+                onLoadGitHub = { viewModel.loadGitHubMotionJpegSources() },
                 neonGreen = neonGreen
             )
             Spacer(Modifier.height(16.dp))
@@ -92,6 +93,19 @@ fun PublicCamsPanel(
                     onBack = { viewModel.selectSource(OsintViewModel.Source.PublicCams) },
                     onViewClick = { cam ->
                         // Launch immediately with pageUrl, resolve inside activity
+                        StreamViewerActivity.launch(context, cam, cam.location)
+                    },
+                    onSaveClick = { viewModel.saveCamera(it) }
+                )
+            }
+            source == OsintViewModel.Source.GitHub -> {
+                GitHubResultView(
+                    cameras = publicCameras,
+                    loading = genericLoading,
+                    error = genericError,
+                    neonGreen = neonGreen,
+                    onBack = { viewModel.selectSource(OsintViewModel.Source.PublicCams) },
+                    onViewClick = { cam ->
                         StreamViewerActivity.launch(context, cam, cam.location)
                     },
                     onSaveClick = { viewModel.saveCamera(it) }
@@ -447,6 +461,7 @@ private fun CountryRow(
 @Composable
 fun OpentopiaHeader(
     onLoad: (Int) -> Unit,
+    onLoadGitHub: () -> Unit,
     neonGreen: Color
 ) {
     Card(
@@ -488,6 +503,84 @@ fun OpentopiaHeader(
                     Icon(Icons.Default.Search, null, tint = neonGreen, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("SCAN 100", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            
+            Spacer(Modifier.height(8.dp))
+            
+            AssistChip(
+                onClick = onLoadGitHub,
+                label = { Text("MotionJPEG", color = Color.White, fontSize = 10.sp) },
+                leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(14.dp), tint = neonGreen) },
+                colors = AssistChipDefaults.assistChipColors(
+                    containerColor = Color(0xFF1A1A1A),
+                    labelColor = Color.White
+                ),
+                border = BorderStroke(1.dp, Color.DarkGray)
+            )
+        }
+    }
+}
+
+@UnstableApi
+@Composable
+fun GitHubResultView(
+    cameras: List<StreamSource>,
+    loading: Boolean,
+    error: String?,
+    neonGreen: Color,
+    onBack: () -> Unit,
+    onViewClick: (StreamSource) -> Unit,
+    onSaveClick: (StreamSource) -> Unit
+) {
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable { onBack() }
+        ) {
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Back", tint = Color.White)
+            Text("BACK TO SOURCES", color = Color.White, fontSize = 12.sp)
+        }
+        
+        Spacer(Modifier.height(10.dp))
+        
+        if (loading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = neonGreen)
+            }
+        } else if (error != null) {
+            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF2A0A0A))) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("⚠ $error", color = Color(0xFFFF6B6B), fontSize = 12.sp)
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+                        Text("DISMISS", color = neonGreen)
+                    }
+                }
+            }
+        } else {
+            Text(
+                "GITHUB MJPEG RESULTS (${cameras.size})",
+                color = neonGreen,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+            Spacer(Modifier.height(10.dp))
+
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 100.dp)
+            ) {
+                items(cameras, key = { it.id }) { cam ->
+                    PublicCameraCard(
+                        camera = cam,
+                        onViewClick = { onViewClick(cam) },
+                        onSaveClick = { onSaveClick(cam) }
+                    )
                 }
             }
         }

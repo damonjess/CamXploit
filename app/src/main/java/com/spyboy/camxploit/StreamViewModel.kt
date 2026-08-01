@@ -18,6 +18,8 @@ sealed class StreamStatus {
     object Connecting : StreamStatus()
     object Buffering : StreamStatus()
     object Live : StreamStatus()
+    object Snapshot : StreamStatus()
+    object Web : StreamStatus()
     object Unauthorized : StreamStatus()
     data class Error(val message: String) : StreamStatus()
 }
@@ -87,6 +89,10 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
         when (source.protocol.lowercase()) {
             "rtsp", "rtmp" -> startRtspStream(source)
             "mjpeg" -> startMjpegStream(source.getAuthenticatedUrl())
+            "snapshot" -> {
+                _status.value = StreamStatus.Snapshot
+                _streamInfo.value = "Mode: Periodic Snapshot"
+            }
             "onvif" -> {
                 val url = source.getAuthenticatedUrl()
                 if (url.startsWith("rtsp://")) {
@@ -96,8 +102,21 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             else -> {
-                // Default to RTSP-capable handler if it's a common stream URL
-                if (source.url.startsWith("rtsp://") || source.url.startsWith("http://")) {
+                val lower = source.url.lowercase()
+                val cleanUrl = lower.substringBefore("?")
+                val isSnapshot = cleanUrl.endsWith(".jpg") || cleanUrl.endsWith(".jpeg") || 
+                                cleanUrl.endsWith(".png") || lower.contains("snapshot") ||
+                                lower.contains("current") || lower.contains("still") ||
+                                lower.contains("snap.jpg")
+
+                if (isSnapshot) {
+                    _status.value = StreamStatus.Snapshot
+                    _streamInfo.value = "Mode: Periodic Snapshot"
+                } else if (lower.startsWith("http") && (lower.contains("webcam") || lower.contains("camera") || lower.contains("view"))) {
+                    // Likely a web page fallback
+                    _status.value = StreamStatus.Web
+                    _streamInfo.value = "Mode: Web Player Fallback"
+                } else if (source.url.startsWith("rtsp://") || source.url.startsWith("http://")) {
                     startRtspStream(source)
                 } else {
                     _status.value = StreamStatus.Error("Unsupported protocol: ${source.protocol}")

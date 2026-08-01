@@ -1,3 +1,5 @@
+@file:OptIn(UnstableApi::class)
+
 package com.spyboy.camxploit.ui
 
 import androidx.compose.foundation.layout.*
@@ -9,7 +11,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.spyboy.camxploit.StreamActivity
+import androidx.media3.common.util.UnstableApi
+import com.spyboy.camxploit.StreamSource
+import com.spyboy.camxploit.StreamViewerActivity
 
 @Composable
 fun DirectStreamPanel() {
@@ -63,7 +67,20 @@ fun DirectStreamPanel() {
         Button(
             onClick = {
                 if (url.isBlank()) return@Button
-                StreamActivity.launch(context, url, label.ifBlank { url })
+                val protocol = when {
+                    url.startsWith("rtsp://") -> "rtsp"
+                    url.startsWith("rtmp://") -> "rtmp"
+                    url.contains("mjpeg") || url.contains("mjpg") -> "mjpeg"
+                    else -> "http"
+                }
+                val host = url.substringAfter("//").substringBefore("/")
+                val source = StreamSource(
+                    url = url,
+                    title = label.ifBlank { "Direct Feed" },
+                    protocol = protocol,
+                    location = host
+                )
+                StreamViewerActivity.launch(context, source, host.ifBlank { "Unknown" })
             },
             colors = ButtonDefaults.buttonColors(containerColor = cyan),
             modifier = Modifier.fillMaxWidth(),

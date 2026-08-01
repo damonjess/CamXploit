@@ -12,6 +12,7 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     sealed class Source { 
         object PublicCams : Source() 
         object Opentopia : Source()
+        object GitHub : Source()
         object DirectStream : Source()
         object Browser : Source()
     }
@@ -73,6 +74,28 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 e.printStackTrace()
                 _error.value = "Opentopia failed: ${e.message}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    /** Load direct MotionJPEG sources from GitHub repo */
+    fun loadGitHubMotionJpegSources() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
+            _selectedCountry.value = null
+            try {
+                val sources = GitHubMotionJpegClient.fetchSources()
+                _publicCameras.value = sources
+                _source.value = Source.GitHub
+                if (sources.isEmpty()) {
+                    _error.value = "No stream URLs found in repo. README may have changed format."
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _error.value = "GitHub fetch failed: ${e.message}"
             } finally {
                 _isLoading.value = false
             }

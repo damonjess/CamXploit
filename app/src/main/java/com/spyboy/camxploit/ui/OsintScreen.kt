@@ -55,7 +55,9 @@ fun OsintScreen(viewModel: OsintViewModel = viewModel()) {
         // 2. TABS
         TabRow(
             selectedTabIndex = when (source) {
-                is OsintViewModel.Source.PublicCams, is OsintViewModel.Source.Opentopia -> 0
+                is OsintViewModel.Source.PublicCams, 
+                is OsintViewModel.Source.Opentopia,
+                is OsintViewModel.Source.GitHub -> 0
                 is OsintViewModel.Source.DirectStream -> 1
                 is OsintViewModel.Source.Browser -> 2
             },
@@ -64,7 +66,9 @@ fun OsintScreen(viewModel: OsintViewModel = viewModel()) {
             indicator = { tabPositions ->
                 TabRowDefaults.SecondaryIndicator(
                     Modifier.tabIndicatorOffset(tabPositions[when (source) {
-                        is OsintViewModel.Source.PublicCams, is OsintViewModel.Source.Opentopia -> 0
+                        is OsintViewModel.Source.PublicCams, 
+                        is OsintViewModel.Source.Opentopia,
+                        is OsintViewModel.Source.GitHub -> 0
                         is OsintViewModel.Source.DirectStream -> 1
                         is OsintViewModel.Source.Browser -> 2
                     }]),
@@ -98,7 +102,9 @@ fun OsintScreen(viewModel: OsintViewModel = viewModel()) {
         // 3. CONTENT AREA
         Box(modifier = Modifier.weight(1f).padding(horizontal = 16.dp)) {
             when (source) {
-                is OsintViewModel.Source.PublicCams, is OsintViewModel.Source.Opentopia -> {
+                is OsintViewModel.Source.PublicCams, 
+                is OsintViewModel.Source.Opentopia,
+                is OsintViewModel.Source.GitHub -> {
                     PublicCamsPanel(viewModel, neonGreen, darkCard)
                 }
                 is OsintViewModel.Source.DirectStream -> {
