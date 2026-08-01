@@ -20,8 +20,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * For cameras that only serve snapshot JPEGs (not true MJPEG streams).
+ * For cameras that only serve snapshot JPEGs.
  * Refreshes the image every [refreshMs] to simulate live video.
+ * Appends a cache-buster so the camera serves a fresh frame each time.
  */
 @Composable
 fun AutoRefreshImage(
@@ -33,17 +34,21 @@ fun AutoRefreshImage(
     var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var errorCount by remember { mutableStateOf(0) }
+    var tick by remember { mutableStateOf(0L) }
 
     LaunchedEffect(url) {
         while (isActive && errorCount < 5) {
             try {
+                val cacheBuster = "?t=${System.currentTimeMillis()}"
+                val fullUrl = if (url.contains("?")) "$url&cb=$tick" else "$url$cacheBuster"
+                
                 val newBmp = withContext(Dispatchers.IO) {
-                    val conn = URL(url).openConnection() as HttpURLConnection
+                    val conn = URL(fullUrl).openConnection() as HttpURLConnection
                     conn.apply {
                         connectTimeout = 8000
                         readTimeout = 8000
                         setRequestProperty("User-Agent", "Mozilla/5.0")
-                        useCaches = false  // force fresh image, no cache
+                        useCaches = false
                         doInput = true
                     }
                     conn.inputStream.use { stream ->
@@ -62,6 +67,7 @@ fun AutoRefreshImage(
                     break
                 }
             }
+            tick++
             delay(refreshMs)
         }
     }
@@ -78,9 +84,9 @@ fun AutoRefreshImage(
             CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
         }
         Text(
-            text = "● LIVE (Snapshot)",
+            text = "● LIVE",
             color = Color(0xFF4CAF50),
-            modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
+            modifier = Modifier.align(Alignment.TopStart).padding(12.dp)
         )
     }
 }

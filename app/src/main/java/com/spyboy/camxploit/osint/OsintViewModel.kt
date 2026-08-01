@@ -40,6 +40,9 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     val selectedCountry: StateFlow<String?> = _selectedCountry.asStateFlow()
     private var currentPage = 1
 
+    private val _recentlyViewed = MutableStateFlow<List<StreamSource>>(emptyList())
+    val recentlyViewed: StateFlow<List<StreamSource>> = _recentlyViewed.asStateFlow()
+
     // Shared
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -56,6 +59,28 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
         if (s == Source.PublicCams) {
             _selectedCountry.value = null
             _publicCameras.value = emptyList()
+        }
+    }
+
+    fun addToRecentlyViewed(camera: StreamSource) {
+        val current = _recentlyViewed.value.toMutableList()
+        current.removeAll { it.id == camera.id || it.url == camera.url }
+        current.add(0, camera)
+        _recentlyViewed.value = current.take(10)
+    }
+
+    fun refreshCurrentSource() {
+        when (val s = _source.value) {
+            is Source.Opentopia -> loadOpentopiaCameras(_publicCameras.value.size.coerceAtLeast(50))
+            is Source.GitHub -> loadGitHubMotionJpegSources()
+            is Source.PublicCams -> {
+                if (_selectedCountry.value != null) {
+                    loadInsecamCountry(_selectedCountry.value!!)
+                } else {
+                    loadCountries()
+                }
+            }
+            else -> {}
         }
     }
 

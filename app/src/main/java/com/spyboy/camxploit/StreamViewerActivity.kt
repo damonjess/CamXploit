@@ -52,6 +52,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import com.spyboy.camxploit.osint.InsecamScraper
 import com.spyboy.camxploit.osint.OpentopiaScraper
+import com.spyboy.camxploit.osint.CameraUrlProbe
 import com.spyboy.camxploit.ui.AutoRefreshImage
 import com.spyboy.camxploit.ui.FastMjpegPlayer
 import kotlinx.coroutines.Dispatchers
@@ -288,69 +289,48 @@ fun StreamPlayerScreen(
     onRecord: () -> Unit,
     viewModel: StreamViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
-    var resolvedUrl by remember { mutableStateOf(source?.url ?: "") }
-    var isGuessed by remember { mutableStateOf(false) }
-    var isScraping by remember { mutableStateOf(false) }
-    var forcedMjpeg by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    var isLoading by remember { mutableStateOf(true) }
     var hasError by remember { mutableStateOf(false) }
+    var resolvedUrl by remember { mutableStateOf(source?.url ?: "") }
+    var isScraping by remember { mutableStateOf(false) }
+    var probeResult by remember { mutableStateOf<CameraUrlProbe.Result?>(null) }
 
-    val isInsecam = source?.url?.contains("insecam.org", ignoreCase = true) == true
-    val isOpentopia = source?.url?.contains("opentopia.com", ignoreCase = true) == true
+    val rawUrl = source?.url ?: ""
+    val title = source?.title ?: targetIp
 
-    LaunchedEffect(source?.url) {
-        if (source == null) return@LaunchedEffect
-        
-        hasError = false
-        if (isInsecam || isOpentopia) {
-            isScraping = true
+    val isWrapper = rawUrl.contains("insecam.org", ignoreCase = true) ||
+                    rawUrl.contains("opentopia.com", ignoreCase = true)
+
+    // Probe the URL to determine what kind of feed it actually is
+    if (!isScraping && probeResult == null && rawUrl.isNotBlank()) {
+        isScraping = true
+        LaunchedEffect(rawUrl) {
             val result = withContext(Dispatchers.IO) {
-                if (isInsecam) {
-                    val res = InsecamScraper.scrapePage(source.url)
-                    if (res.streamUrl.isNotBlank()) {
-                        forcedMjpeg = true
+                when {
+                    isWrapper -> {
+                        val direct = if (rawUrl.contains("insecam")) {
+                            InsecamScraper.scrapePage(rawUrl).streamUrl
+                        } else {
+                            OpentopiaScraper.scrapeDetailPage(rawUrl)?.first
+                        }
+                        if (!direct.isNullOrBlank() && direct != rawUrl) {
+                            CameraUrlProbe.probe(direct)
+                        } else {
+                            CameraUrlProbe.probe(rawUrl)
+                        }
                     }
-                    StreamSource(
-                        url = res.streamUrl,
-                        title = res.title,
-                        location = res.location,
-                        thumbnailUrl = res.thumbnailUrl
-                    )
-                } else {
-                    val pair = OpentopiaScraper.scrapeDetailPage(source.url)
-                    if (pair != null) {
-                        forcedMjpeg = pair.second
-                        StreamSource(
-                            url = pair.first,
-                            title = source.title,
-                            location = source.location,
-                            thumbnailUrl = source.thumbnailUrl
-                        )
-                    } else {
-                        // Fallback to the original page URL if scraping fails
-                        StreamSource(
-                            url = source.url,
-                            title = source.title,
-                            location = source.location,
-                            thumbnailUrl = source.thumbnailUrl
-                        )
-                    }
+                    else -> CameraUrlProbe.probe(rawUrl)
                 }
             }
-            if (result.url.isNotBlank()) {
-                resolvedUrl = result.url
-                // Update the stream in ViewModel if resolved
-                viewModel.startStream(source.copy(url = result.url))
-            }
+            probeResult = result
+            resolvedUrl = result.url
             isScraping = false
-        } else {
-            // Direct link: try to "upgrade" snapshot to MJPEG if possible
-            val guessed = guessMjpegFromSnapshot(source.url)
-            if (guessed != null) {
-                resolvedUrl = guessed
-                isGuessed = true
-                viewModel.startStream(source.copy(url = guessed))
-            } else {
-                isGuessed = false
+            isLoading = false
+            
+            // Sync with ViewModel
+            if (source != null) {
+                viewModel.startStream(source.copy(url = result.url))
             }
         }
     }
@@ -360,13 +340,13 @@ fun StreamPlayerScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text(targetIp, color = neonCyan, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        Text(source?.url ?: "", color = Color.Gray, fontSize = 10.sp, maxLines = 1)
+                        Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(resolvedUrl, color = Color.Gray, fontSize = 10.sp, maxLines = 1)
                     }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = neonCyan)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
                     }
                 },
                 actions = {
@@ -383,7 +363,10 @@ fun StreamPlayerScreen(
             ) {
                 BottomControls(
                     isRecording = isRecording,
-                    onRetry = onRetry,
+                    onRetry = {
+                        probeResult = null
+                        onRetry()
+                    },
                     onSnapshot = { onSnapshot(it) },
                     onPip = onPip,
                     onRecord = onRecord
@@ -397,7 +380,6 @@ fun StreamPlayerScreen(
                 .padding(padding)
                 .background(Color.Black)
         ) {
-            // Player Area
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -405,22 +387,23 @@ fun StreamPlayerScreen(
                     .background(Color.Black),
                 contentAlignment = Alignment.Center
             ) {
-                val lowerUrl = resolvedUrl.lowercase()
-                val isSnapshot = lowerUrl.endsWith(".jpg") || 
-                                lowerUrl.endsWith(".jpeg") || 
-                                lowerUrl.endsWith(".png") ||
-                                lowerUrl.contains("snapshot") ||
-                                lowerUrl.contains("current") ||
-                                lowerUrl.contains("still") ||
-                                lowerUrl.contains("image.jpg") ||
-                                (lowerUrl.contains("image.cgi") && !lowerUrl.contains("video"))
-
                 when {
+                    rawUrl.isBlank() -> {
+                        Text(
+                            "No stream URL provided",
+                            modifier = Modifier.align(Alignment.Center),
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                     isScraping -> {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(color = neonCyan)
                             Spacer(Modifier.height(8.dp))
-                            Text("Resolving camera feed...", color = Color.Gray, fontSize = 12.sp)
+                            Text(
+                                "Analyzing camera feed...",
+                                color = Color.Gray,
+                                fontSize = 12.sp
+                            )
                         }
                     }
                     hasError -> {
@@ -431,68 +414,66 @@ fun StreamPlayerScreen(
                                 fontSize = 14.sp,
                                 modifier = Modifier.padding(16.dp)
                             )
-                            Button(onClick = { hasError = false; onRetry() }) {
+                            Button(onClick = { 
+                                hasError = false
+                                probeResult = null
+                                onRetry() 
+                            }) {
                                 Text("Retry")
                             }
                         }
                     }
-                    // True MJPEG stream → native decoder
-                    lowerUrl.contains("mjpeg") || 
-                    lowerUrl.contains("mjpg") || 
-                    lowerUrl.contains("cgi-bin/video") ||
-                    lowerUrl.contains("video.cgi") ||
-                    lowerUrl.contains(".mjpg") ||
-                    source?.protocol?.lowercase() == "mjpeg" ||
-                    forcedMjpeg -> {
-                        FastMjpegPlayer(
-                            url = resolvedUrl,
-                            modifier = Modifier.fillMaxSize(),
-                            onError = { 
-                                if (isGuessed && source != null) {
-                                    resolvedUrl = source.url
-                                    isGuessed = false
-                                } else {
-                                    hasError = true 
-                                }
-                            }
-                        )
-                    }
-                    // Snapshot JPEG → auto-refresh
-                    isSnapshot -> {
-                        AutoRefreshImage(
-                            url = resolvedUrl,
-                            modifier = Modifier.fillMaxSize(),
-                            refreshMs = 1500,
-                            onError = { hasError = true }
-                        )
-                    }
-                    // RTSP / HTTP video
-                    lowerUrl.startsWith("rtsp://") || 
-                    lowerUrl.startsWith("rtmp://") ||
-                    ((lowerUrl.startsWith("http://") || lowerUrl.startsWith("https://")) && 
-                     (lowerUrl.contains(".mp4") || lowerUrl.contains(".m3u8") || lowerUrl.contains("stream"))) -> {
-                        AndroidView(
-                            factory = { ctx ->
-                                PlayerView(ctx).apply {
-                                    player = viewModel.getPlayer()
-                                    useController = true
-                                    setBackgroundColor(0xFF000000.toInt())
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
                     else -> {
-                        WebPlayer(
-                            url = resolvedUrl,
-                            autoRefresh = isOpentopia && !forcedMjpeg,
-                            onLoadingChange = { /* handled */ },
-                            onError = { /* handled */ }
-                        )
+                        val result = probeResult
+                        val lowerUrl = resolvedUrl.lowercase()
+                        
+                        when {
+                            // True MJPEG stream → native decoder
+                            result?.isMjpeg == true || lowerUrl.contains(".mjpg") -> {
+                                FastMjpegPlayer(
+                                    url = resolvedUrl,
+                                    modifier = Modifier.fillMaxSize(),
+                                    onError = { hasError = true }
+                                )
+                            }
+
+                            // Snapshot JPEG → auto-refresh every 1.5s
+                            result?.isSnapshot == true -> {
+                                AutoRefreshImage(
+                                    url = resolvedUrl,
+                                    modifier = Modifier.fillMaxSize(),
+                                    refreshMs = 1500,
+                                    onError = { hasError = true }
+                                )
+                            }
+                            
+                            // RTSP / RTMP feeds
+                            lowerUrl.startsWith("rtsp://") || lowerUrl.startsWith("rtmp://") -> {
+                                AndroidView(
+                                    factory = { ctx ->
+                                        PlayerView(ctx).apply {
+                                            player = viewModel.getPlayer()
+                                            useController = true
+                                            setBackgroundColor(0xFF000000.toInt())
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+
+                            // HTML wrapper or unknown → WebView fallback
+                            else -> {
+                                WebPlayer(
+                                    url = resolvedUrl,
+                                    onLoadingChange = { isLoading = it },
+                                    onError = { hasError = true }
+                                )
+                            }
+                        }
                     }
                 }
-
-                if ((status is StreamStatus.Connecting || status is StreamStatus.Buffering) && !isScraping) {
+                
+                if (isLoading && !isScraping && rawUrl.isNotBlank() && probeResult != null) {
                     CircularProgressIndicator(color = neonCyan)
                 }
             }
