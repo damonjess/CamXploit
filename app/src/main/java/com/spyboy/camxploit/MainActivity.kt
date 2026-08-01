@@ -101,20 +101,6 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent { CamGuardianApp() }
     }
-
-    fun openWebcamSearch(ip: String, brand: String? = null) {
-        val baseShodan = "https://www.shodan.io/search?query="
-        val query = when {
-            brand?.contains("hikvision", ignoreCase = true) == true -> "hikvision+port:80+OR+port:554"
-            brand?.contains("dahua", ignoreCase = true) == true -> "dahua+rtsp"
-            else -> "webcam+OR+ip-camera+OR+rtsp+$ip"
-        }
-        try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(baseShodan + query)))
-        } catch (e: Exception) {
-            Toast.makeText(this, "Cannot open browser: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
 }
 
 @Composable
@@ -369,9 +355,6 @@ fun CamGuardianApp() {
     var showDisclaimer by remember { mutableStateOf(false) }
     var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var publicIntel by remember { mutableStateOf("") }
-    var showShodanDialog by remember { mutableStateOf(false) }
-    var shodanApiKey by remember { mutableStateOf("") }
-    var shodanQuery by remember { mutableStateOf("webcam") }
     var selectedUrl by remember { mutableStateOf("") }
     
     val streamViewModel: StreamViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
@@ -521,43 +504,6 @@ fun CamGuardianApp() {
         AlertDialog(onDismissRequest = { }, title = { Text("LEGAL DISCLAIMER", color = Color.Red, fontWeight = FontWeight.Black) }, text = { Text("This tool is for educational and authorized security testing purposes only.", color = Color.White) }, confirmButton = { Button(onClick = { showDisclaimer = false }) { Text("I AGREE") } }, containerColor = Color(0xFF111111), shape = RoundedCornerShape(8.dp))
     }
 
-    if (showShodanDialog) {
-        var osintTab by remember { mutableIntStateOf(0) }
-        val shodanFilters = listOf("Hikvision" to "product:\"Hikvision IP Camera\"", "Dahua" to "http.title:\"WEB VIEW\" Dahua", "Axis" to "product:\"Axis Communications AB\"", "Exposed RTSP" to "port:554 has_screenshot:true")
-
-        AlertDialog(
-            onDismissRequest = { showShodanDialog = false },
-            title = { Text("GLOBAL OSINT RECON", color = Color.Magenta, fontWeight = FontWeight.Bold) },
-            text = {
-                Column {
-                    TabRow(selectedTabIndex = osintTab, containerColor = Color.Transparent, contentColor = Color.Magenta) {
-                        Tab(selected = osintTab == 0, onClick = { osintTab = 0 }) { Text("SHODAN API", modifier = Modifier.padding(8.dp), fontSize = 10.sp) }
-                        Tab(selected = osintTab == 1, onClick = { osintTab = 1 }) { Text("WEB SEARCH", modifier = Modifier.padding(8.dp), fontSize = 10.sp) }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    if (osintTab == 0) {
-                        OutlinedTextField(value = shodanApiKey, onValueChange = { shodanApiKey = it }, label = { Text("Shodan API Key") }, modifier = Modifier.fillMaxWidth(), textStyle = TextStyle(color = Color.White), singleLine = true)
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(value = shodanQuery, onValueChange = { shodanQuery = it }, label = { Text("Search Query") }, modifier = Modifier.fillMaxWidth(), textStyle = TextStyle(color = Color.White), singleLine = true)
-                        Spacer(Modifier.height(12.dp))
-                        LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.height(100.dp)) {
-                            items(shodanFilters.size) { index -> Button(onClick = { shodanQuery = shodanFilters[index].second }, colors = ButtonDefaults.buttonColors(Color(0xFF111111)), shape = RoundedCornerShape(4.dp)) { Text(shodanFilters[index].first, fontSize = 9.sp) } }
-                        }
-                    } else {
-                        OutlinedTextField(value = shodanQuery, onValueChange = { shodanQuery = it }, label = { Text("Search Query") }, modifier = Modifier.fillMaxWidth(), textStyle = TextStyle(color = Color.White))
-                        Spacer(Modifier.height(12.dp))
-                        Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { openBrowserSearch(context, "GOOGLE", shodanQuery) }, modifier = Modifier.weight(1f)) { Text("GOOGLE", fontSize = 10.sp) }
-                            Button(onClick = { selectedUrl = "https://www.shodan.io/search?query=${Uri.encode(shodanQuery)}"; selectedTab = 3; showShodanDialog = false }, modifier = Modifier.weight(1f)) { Text("SHODAN", fontSize = 10.sp) }
-                        }
-                    }
-                }
-            },
-            confirmButton = { if (osintTab == 0) Button(onClick = { showShodanDialog = false; if (shodanApiKey.isNotBlank()) { terminalText = "> Initiating Global Shodan Search...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, shodanQuery) } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } } }) { Text("RUN SCAN") } },
-            dismissButton = { TextButton(onClick = { showShodanDialog = false }) { Text("CLOSE") } },
-            containerColor = Color(0xFF0A0A0A)
-        )
-    }
 
     if (viewingFile != null) {
         AlertDialog(
@@ -656,9 +602,18 @@ fun CamGuardianApp() {
 
             Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).weight(1f)) {
                 when (selectedTab) {
-                    0 -> ConsoleTab(consoleIpInput, { consoleIpInput = it }, terminalText + currentPulse, { terminalText = "> Console Reset.\n" }, isScanning, scrollState, { startReconScan(consoleIpInput) }, { url, title -> 
-                        com.spyboy.camxploit.StreamActivity.launch(context, url, title) 
-                    }, shodanApiKey = shodanApiKey, onDeepShodan = { ip -> terminalText = "> Initiating Targeted Shodan API Scan on $ip...\n"; scope.launch(Dispatchers.IO) { try { val py = Python.getInstance(); val module = py.getModule("CamXploit"); val sys = py.getModule("sys"); sys.put("stdout", TerminalOutputStream { text -> scope.launch(Dispatchers.Main) { terminalText += text } }); module.callAttr("shodan_search", shodanApiKey, "ip:$ip") } catch (e: Exception) { withContext(Dispatchers.Main) { terminalText += "\n[!] Shodan Error: ${e.message}" } } } })
+                    0 -> ConsoleTab(
+                        consoleIpInput, 
+                        { consoleIpInput = it }, 
+                        terminalText + currentPulse, 
+                        { terminalText = "> Console Reset.\n" }, 
+                        isScanning, 
+                        scrollState, 
+                        { startReconScan(consoleIpInput) }, 
+                        { url, title -> 
+                            com.spyboy.camxploit.StreamActivity.launch(context, url, title) 
+                        }
+                    )
                     1 -> OsintScreen(viewModel = osintViewModel)
                     2 -> ArchiveTab(context, selectedTab, terminalText, consoleIpInput) { viewingFile = it }
                     3 -> StreamTab(
@@ -744,11 +699,6 @@ fun CamGuardianApp() {
                 },
                 onProbe = { ip, brand ->
                     lanViewModel.probeStream(ip, brand)
-                },
-                onCheckShodan = { ip ->
-                    selectedHostForDetail = null
-                    importedOsintIp = ip
-                    showOsint = true
                 }
             )
         }
@@ -763,15 +713,22 @@ fun CamGuardianApp() {
 }
 
 @Composable
-fun ConsoleTab(consoleIpInput: String, onIpChange: (String) -> Unit, terminalText: String, onTerminalClear: () -> Unit, isScanning: Boolean, scrollState: ScrollState, onStartScan: () -> Unit, onStreamSelect: (String, String) -> Unit, shodanApiKey: String = "", onDeepShodan: (String) -> Unit = {}) {
-    val context = LocalContext.current
+fun ConsoleTab(
+    consoleIpInput: String, 
+    onIpChange: (String) -> Unit, 
+    terminalText: String, 
+    onTerminalClear: () -> Unit, 
+    isScanning: Boolean, 
+    scrollState: ScrollState, 
+    onStartScan: () -> Unit, 
+    onStreamSelect: (String, String) -> Unit
+) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF1A1A1A), RoundedCornerShape(8.dp)).background(Color(0xFF080808)).padding(horizontal = 12.dp, vertical = 4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(text = "root@camxploit:~#", color = Color.Green.copy(alpha = 0.7f), fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                 TextField(value = consoleIpInput, onValueChange = onIpChange, textStyle = TextStyle(color = Color.White, fontSize = 16.sp, fontFamily = FontFamily.Monospace), modifier = Modifier.weight(1f), singleLine = true, colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, cursorColor = Color.Green), placeholder = { Text("target_ip", color = Color.DarkGray, fontSize = 14.sp, fontFamily = FontFamily.Monospace) })
                 IconButton(onClick = onStartScan, modifier = Modifier.size(32.dp)) { Icon(imageVector = if (isScanning) Icons.Default.Refresh else Icons.Default.Search, contentDescription = null, tint = if (isScanning) Color.Yellow else Color.Green, modifier = Modifier.size(18.dp)) }
-                if (shodanApiKey.isNotBlank()) { IconButton(onClick = { if (consoleIpInput.isBlank()) Toast.makeText(context, "⚠️ Set target host", Toast.LENGTH_SHORT).show() else onDeepShodan(consoleIpInput) }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Analytics, null, tint = Color.Magenta, modifier = Modifier.size(18.dp)) } }
             }
         }
         Surface(modifier = Modifier.fillMaxWidth().weight(1f).border(1.dp, Color(0xFF112211), RoundedCornerShape(4.dp)), color = Color(0xFF020202)) { Box { SelectionContainer { Text(text = terminalText, color = Color(0xFF00FF41), fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.fillMaxSize().padding(12.dp).verticalScroll(scrollState)) } } }
@@ -1004,7 +961,7 @@ fun LanHostCard(host: LanHost, onClick: () -> Unit) {
 }
 
 fun openFile(context: Context, file: File) { try { val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file); val intent = Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension)); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }; context.startActivity(intent) } catch (e: Exception) {} }
-fun openBrowserSearch(context: Context, engine: String, query: String) { val url = when (engine) { "GOOGLE" -> "https://www.google.com/search?q=${Uri.encode(query)}"; "SHODAN" -> "https://www.shodan.io/search?query=${Uri.encode(query)}"; else -> "" }; try { if (url.isNotEmpty()) context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (e: Exception) {} }
+fun openBrowserSearch(context: Context, engine: String, query: String) { val url = when (engine) { "GOOGLE" -> "https://www.google.com/search?q=${Uri.encode(query)}"; else -> "" }; try { if (url.isNotEmpty()) context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (e: Exception) {} }
 fun shareFile(context: Context, file: File) { try { val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file); val intent = Intent(Intent.ACTION_SEND).apply { type = "*/*"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }; context.startActivity(Intent.createChooser(intent, "Share Report")) } catch (e: Exception) {} }
 fun saveContentToFile(context: Context, content: String, name: String, ext: String) { try { val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS); val file = File(dir, "${name}_${System.currentTimeMillis()}.$ext"); file.writeText(content) } catch (e: Exception) {} }
 fun captureScreenshot(context: Context, view: android.view.View, onCapture: (Bitmap) -> Unit) { 
@@ -1078,7 +1035,7 @@ fun GoogleDorksDialog(ip: String, onDismiss: () -> Unit, onOpenBrowser: (String)
 
 @Composable
 fun ExternalSearchDialog(ip: String, onDismiss: () -> Unit, onSearch: (String) -> Unit, onOpenBrowser: (String, String) -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("OSINT") }, text = { Column { listOf("SHODAN", "CENSYS", "GOOGLE").forEach { engine -> Button(onClick = { if (engine == "GOOGLE") onOpenBrowser("GOOGLE", ip) else onSearch("https://www.shodan.io/host/$ip"); onDismiss() }, modifier = Modifier.fillMaxWidth()) { Text(engine) } } } }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text("CLOSE") } })
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("OSINT") }, text = { Column { listOf("GOOGLE").forEach { engine -> Button(onClick = { if (engine == "GOOGLE") onOpenBrowser("GOOGLE", ip) else onSearch(""); onDismiss() }, modifier = Modifier.fillMaxWidth()) { Text(engine) } } } }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text("CLOSE") } })
 }
 
 @Composable
@@ -1088,8 +1045,7 @@ fun CameraDetailBottomSheet(
     onViewStream: (String) -> Unit,
     onTestCredentials: (String) -> Unit,
     onOpenWebUi: (String) -> Unit,
-    onProbe: (String, String?) -> Unit,
-    onCheckShodan: (String) -> Unit
+    onProbe: (String, String?) -> Unit
 ) {
     val context = LocalContext.current
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -1279,14 +1235,6 @@ fun CameraDetailBottomSheet(
                     modifier = Modifier.weight(1f)
                 ) {
                     onOpenWebUi("http://${host.ip}")
-                }
-                DetailActionItem(
-                    icon = Icons.Default.Public,
-                    label = "Shodan",
-                    color = Color.Magenta,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    onCheckShodan(host.ip)
                 }
             }
             

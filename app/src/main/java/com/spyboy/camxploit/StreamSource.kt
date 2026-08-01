@@ -17,11 +17,13 @@ data class StreamSource(
     val protocol: String = "http",   // http, rtsp, rtmp, mms, mjpeg
     val username: String? = null,
     val password: String? = null,
-    val brand: String? = null
+    val brand: String? = null,
+    val pageUrl: String = "",
+    val streamUrl: String = ""
 ) : Parcelable {
 
     fun getAuthenticatedUrl(): String {
-        val u = url
+        val u = if (streamUrl.isNotBlank()) streamUrl else url
         val user = username
         val pass = password
         

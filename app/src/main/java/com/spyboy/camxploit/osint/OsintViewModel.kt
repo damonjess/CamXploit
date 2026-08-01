@@ -1,37 +1,23 @@
 package com.spyboy.camxploit.osint
 
 import android.app.Application
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.spyboy.camxploit.StreamSource
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
-private val Application.dataStore by preferencesDataStore("osint_prefs")
-
 class OsintViewModel(app: Application) : AndroidViewModel(app) {
 
-    sealed class Source { object Censys : Source(); object PublicCams : Source(); object Dorks : Source() }
-
-    private val CENSYS_ID = stringPreferencesKey("censys_id")
-    private val CENSYS_SECRET = stringPreferencesKey("censys_secret")
-    private val CENSYS_TOKEN = stringPreferencesKey("censys_token")
+    sealed class Source { 
+        object PublicCams : Source() 
+        object Opentopia : Source()
+        object DirectStream : Source()
+        object Browser : Source()
+    }
 
     private val _source = MutableStateFlow<Source>(Source.PublicCams)
     val source: StateFlow<Source> = _source.asStateFlow()
-
-    // Censys
-    private val _censysId = MutableStateFlow("")
-    val censysId: StateFlow<String> = _censysId.asStateFlow()
-    private val _censysSecret = MutableStateFlow("")
-    val censysSecret: StateFlow<String> = _censysSecret.asStateFlow()
-    private val _censysToken = MutableStateFlow("")
-    val censysToken: StateFlow<String> = _censysToken.asStateFlow()
-    private val _censysResults = MutableStateFlow<List<CensysClient.Host>>(emptyList())
-    val censysResults: StateFlow<List<CensysClient.Host>> = _censysResults.asStateFlow()
 
     // Insecam
     private val _countries = MutableStateFlow<List<InsecamCountry>>(emptyList())
@@ -53,111 +39,48 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     val selectedCountry: StateFlow<String?> = _selectedCountry.asStateFlow()
     private var currentPage = 1
 
-    // Dorks
-    private val _dorkQuery = MutableStateFlow("inurl:view.shtml intitle:live view")
-    val dorkQuery: StateFlow<String> = _dorkQuery.asStateFlow()
-
     // Shared
-    private val _query = MutableStateFlow("webcam")
-    val query: StateFlow<String> = _query.asStateFlow()
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    private val _errorMessage = MutableStateFlow<String?>(null)
-    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
-
-    // ═══════════════════════════════════════════════
-    // NEW CENSYS PLATFORM CLIENT
-    // ═══════════════════════════════════════════════
-    private var censysPlatformClient = CensysPlatformClient(apiToken = "")
-
-    companion object {
-        val WEBCAM_QUERIES = listOf(
-            "services.http.response.html_title:\"webcam\"",
-            "services.http.response.html_title:\"IP Camera\"",
-            "services.http.response.html_title:\"Live View\"",
-            "services.http.response.body:\"camera\" and services.port:80"
-        )
-    }
-
     init {
-        viewModelScope.launch {
-            getApplication<Application>().dataStore.data.collectLatest { data ->
-                _censysId.value = data[CENSYS_ID] ?: ""
-                _censysSecret.value = data[CENSYS_SECRET] ?: ""
-                val token = data[CENSYS_TOKEN] ?: "censys_gtfHWfPT_KW1VQjkRSgjvgT2vhRxqF1SJ"
-                _censysToken.value = token
-                censysPlatformClient = CensysPlatformClient(apiToken = token)
-            }
-        }
+        loadCountries()
     }
 
     fun selectSource(s: Source) {
         _source.value = s
         _error.value = null
+        if (s == Source.PublicCams) {
+            _selectedCountry.value = null
+            _publicCameras.value = emptyList()
+        }
     }
 
-    fun setCensysId(v: String) {
-        _censysId.value = v
-        viewModelScope.launch { getApplication<Application>().dataStore.edit { it[CENSYS_ID] = v } }
-    }
-    fun setCensysSecret(v: String) {
-        _censysSecret.value = v
-        viewModelScope.launch { getApplication<Application>().dataStore.edit { it[CENSYS_SECRET] = v } }
-    }
-    fun setCensysToken(v: String) {
-        _censysToken.value = v
-        viewModelScope.launch { getApplication<Application>().dataStore.edit { it[CENSYS_TOKEN] = v } }
-    }
-    fun setQuery(q: String) { _query.value = q }
-    fun setDorkQuery(q: String) { _dorkQuery.value = q }
-    fun applyPreset(preset: String) { _query.value = preset }
-
-    fun searchCensysCameras(query: String = WEBCAM_QUERIES[0], perPage: Int = 50) {
+    fun loadOpentopiaCameras(limit: Int = 50) {
         viewModelScope.launch {
             _isLoading.value = true
-            _errorMessage.value = null
+            _error.value = null
+            _selectedCountry.value = null // Clear country selection when loading Opentopia
             try {
-                if (_censysToken.value.isBlank()) throw Exception("Censys API Token is missing")
-                val result = censysPlatformClient.searchHosts(query = query, perPage = perPage)
-                _publicCameras.value = result.hits.map { it.toStreamSource() }
+                val cameras = OpentopiaScraper.fetchCameras(limit)
+                _publicCameras.value = cameras
+                _source.value = Source.Opentopia
+                if (cameras.isEmpty()) {
+                    _error.value = "Opentopia returned no cameras. Site layout may have changed."
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
-                _errorMessage.value = e.message ?: "Censys search failed"
+                _error.value = "Opentopia failed: ${e.message}"
             } finally {
                 _isLoading.value = false
             }
         }
     }
 
-    fun runCensys() {
-        val id = _censysId.value.trim()
-        val secret = _censysSecret.value.trim()
-        val q = _query.value.trim()
-        if (id.isBlank() || secret.isBlank()) { _error.value = "Enter Censys API ID and Secret"; return }
-        if (q.isBlank()) { _error.value = "Enter query"; return }
-        executeCensys(id, secret, q)
-    }
-
-    fun lookupIp(ip: String) {
-        val id = _censysId.value.trim()
-        val secret = _censysSecret.value.trim()
-        if (id.isBlank() || secret.isBlank()) { _error.value = "Enter Censys API ID and Secret for IP lookup"; return }
-        executeCensys(id, secret, ip)
-    }
-
-    private fun executeCensys(id: String, secret: String, q: String) {
-        _error.value = null; _censysResults.value = emptyList(); _isLoading.value = true
-        viewModelScope.launch {
-            try {
-                val hosts = CensysClient.search(id, secret, q)
-                _censysResults.value = hosts
-                if (hosts.isEmpty()) _error.value = "No results"
-            } catch (e: Exception) { _error.value = e.message ?: "Request failed" }
-            finally { _isLoading.value = false }
-        }
+    fun searchPublicCameras(query: String) {
+        // Placeholder if needed, but Insecam is mostly country-based in current implementation
     }
 
     data class InsecamCountry(val code: String, val name: String, val count: Int)
@@ -304,5 +227,5 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     fun setInsecamError(error: String?) { _insecamError.value = error }
     fun addCamera(camera: StreamSource) { _publicCameras.value = _publicCameras.value + camera }
     fun clearCameras() { _publicCameras.value = emptyList(); _insecamCameras.value = emptyList() }
-    fun clearError() { _error.value = null; _errorMessage.value = null }
+    fun clearError() { _error.value = null }
 }

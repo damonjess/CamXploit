@@ -117,10 +117,6 @@ except ImportError:
 import uuid
 import ssl
 from datetime import datetime
-try:
-    import shodan
-except ImportError:
-    shodan = None
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Suppress SSL warnings
@@ -594,30 +590,6 @@ def quick_test_url(url, timeout=5):
     except Exception as e:
         print(f"    ❌ {url} → Error: {type(e).__name__}")
 
-def shodan_search(api_key, query):
-    """Searches Shodan for cameras based on a query."""
-    if shodan is None:
-        print(f"  {ERR} Shodan library not available. Install it with 'pip install shodan'.")
-        return
-
-    print(f"\n[{GLOB}] Initiating Global Shodan Search: {query}")
-    try:
-        api = shodan.Shodan(api_key)
-        results = api.search(query)
-        print(f"  {OPEN} Total Results Found: {results['total']}")
-
-        for result in results['matches'][:10]: # Top 10 for terminal
-            ip = result['ip_str']
-            port = result['port']
-            org = result.get('org', 'Unknown Org')
-            print(f"  {RADR} {ip}:{port} ({org})")
-            if 'product' in result: print(f"     {INFO} Product: {result['product']}")
-            if 'location' in result:
-                loc = result['location']
-                print(f"     {GLOB} Location: {loc.get('city', 'Unknown')}, {loc.get('country_name', 'Unknown')}")
-    except Exception as e:
-        print(f"  {ERR} Shodan Search Error: {str(e)}")
-
 def discover_upnp_ssdp():
     """SSDP/UPnP multicast discovery - finds smart TVs, printers, cameras, routers"""
     import socket
@@ -640,7 +612,7 @@ def discover_upnp_ssdp():
 
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.settimeout(5)
         sock.sendto(ssdp_request.encode(), ('239.255.255.250', 1900))
 

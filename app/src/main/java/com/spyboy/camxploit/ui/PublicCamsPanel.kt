@@ -2,6 +2,7 @@ package com.spyboy.camxploit.ui
 
 import android.annotation.SuppressLint
 import android.webkit.WebView
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -56,14 +57,15 @@ fun PublicCamsPanel(
     val countries by viewModel.countries.collectAsStateWithLifecycle()
     val cameras by viewModel.cameras.collectAsStateWithLifecycle()
     val selectedCountry by viewModel.selectedCountry.collectAsStateWithLifecycle()
-    val publicCameras by viewModel.publicCameras.collectAsStateWithLifecycle()
     
+    val source by viewModel.source.collectAsStateWithLifecycle()
+    val publicCameras by viewModel.publicCameras.collectAsStateWithLifecycle()
+    val genericLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val genericError by viewModel.error.collectAsStateWithLifecycle()
+
     val scraperError by viewModel.insecamError.collectAsStateWithLifecycle()
     val scraperLoading by viewModel.insecamLoading.collectAsStateWithLifecycle()
     val hasMore by viewModel.hasMorePages.collectAsStateWithLifecycle()
-    
-    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
-    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
 
     var showManualBrowser by remember { mutableStateOf(false) }
 
@@ -72,61 +74,70 @@ fun PublicCamsPanel(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // ── CENSYS QUICK-SEARCH CHIPS (Header) ──
-        if (selectedCountry == null && publicCameras.isEmpty()) {
-            CensysQuickSearchHeader(viewModel)
-            Spacer(Modifier.height(8.dp))
+        if (selectedCountry == null && source == OsintViewModel.Source.PublicCams) {
+            OpentopiaHeader(
+                onLoad = { viewModel.loadOpentopiaCameras(it) },
+                neonGreen = neonGreen
+            )
+            Spacer(Modifier.height(16.dp))
         }
 
-        if (publicCameras.isNotEmpty() && selectedCountry == null) {
-            // Censys results view
-            CensysResultsView(
-                cameras = publicCameras,
-                isLoading = isLoading,
-                errorMessage = errorMessage,
-                neonGreen = neonGreen,
-                onBack = { viewModel.clearCameras() },
-                onSaveClick = { viewModel.saveCamera(it) }
-            )
-        } else if (selectedCountry != null) {
-            CountryCameraView(
-                cameras = cameras,
-                loading = scraperLoading,
-                hasMore = hasMore,
-                error = scraperError,
-                darkCard = darkCard,
-                neonGreen = neonGreen,
-                onBack = { viewModel.clearCountrySelection() },
-                onRetry = { viewModel.loadInsecamCountry(selectedCountry!!) },
-                onLoadMore = { viewModel.loadNextInsecamPage() },
-                onManualBrowse = { showManualBrowser = true },
-                onViewClick = { cam ->
-                    val viewUrl = "http://www.insecam.org/en/view/${cam.id}/"
-                    scope.launch {
-                        val result = InsecamScraper.scrapePage(viewUrl)
-                        val streamUrl = result.streamUrl.ifBlank { viewUrl }
-                        val source = StreamSource(
-                            id = cam.id,
-                            url = streamUrl,
-                            title = cam.location ?: cam.ip ?: "Camera",
-                            location = cam.location ?: "Unknown",
-                            thumbnailUrl = cam.imageUrl,
-                            protocol = "mjpeg"
-                        )
-                        StreamViewerActivity.launch(context, source, cam.location ?: cam.ip ?: "Public")
+        when {
+            source == OsintViewModel.Source.Opentopia -> {
+                OpentopiaResultView(
+                    cameras = publicCameras,
+                    loading = genericLoading,
+                    error = genericError,
+                    neonGreen = neonGreen,
+                    onBack = { viewModel.selectSource(OsintViewModel.Source.PublicCams) },
+                    onViewClick = { cam ->
+                        // Launch immediately with pageUrl, resolve inside activity
+                        StreamViewerActivity.launch(context, cam, cam.location)
+                    },
+                    onSaveClick = { viewModel.saveCamera(it) }
+                )
+            }
+            selectedCountry != null -> {
+                CountryCameraView(
+                    cameras = cameras,
+                    loading = scraperLoading,
+                    hasMore = hasMore,
+                    error = scraperError,
+                    darkCard = darkCard,
+                    neonGreen = neonGreen,
+                    onBack = { viewModel.clearCountrySelection() },
+                    onRetry = { viewModel.loadInsecamCountry(selectedCountry!!) },
+                    onLoadMore = { viewModel.loadNextInsecamPage() },
+                    onManualBrowse = { showManualBrowser = true },
+                    onViewClick = { cam ->
+                        val viewUrl = "http://www.insecam.org/en/view/${cam.id}/"
+                        scope.launch {
+                            val result = InsecamScraper.scrapePage(viewUrl)
+                            val streamUrl = result.streamUrl.ifBlank { viewUrl }
+                            val source = StreamSource(
+                                id = cam.id,
+                                url = streamUrl,
+                                title = cam.location ?: cam.ip ?: "Camera",
+                                location = cam.location ?: "Unknown",
+                                thumbnailUrl = cam.imageUrl,
+                                protocol = "mjpeg"
+                            )
+                            StreamViewerActivity.launch(context, source, cam.location ?: cam.ip ?: "Public")
+                        }
+                    },
+                    onSaveCamera = { viewModel.saveCamera(it) }
+                )
+            }
+            else -> {
+                CountryGridView(
+                    countries = countries,
+                    darkCard = darkCard,
+                    neonGreen = neonGreen,
+                    onSelect = { code ->
+                        viewModel.selectCountry(code)
                     }
-                },
-                onSaveCamera = { viewModel.saveCamera(it) }
-            )
-        } else {
-            CountryGridView(
-                countries = countries,
-                darkCard = darkCard,
-                neonGreen = neonGreen,
-                onSelect = { code ->
-                    viewModel.selectCountry(code)
-                }
-            )
+                )
+            }
         }
     }
 
@@ -140,95 +151,6 @@ fun PublicCamsPanel(
                 StreamViewerActivity.launch(context, source, "Public")
             }
         )
-    }
-}
-
-@Composable
-fun CensysQuickSearchHeader(viewModel: OsintViewModel) {
-    Column(modifier = Modifier.padding(bottom = 8.dp)) {
-        Text(
-            text = "Censys Search",
-            style = MaterialTheme.typography.labelLarge,
-            color = Color.Gray,
-            modifier = Modifier.padding(bottom = 4.dp)
-        )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            AssistChip(
-                onClick = { viewModel.searchCensysCameras(OsintViewModel.WEBCAM_QUERIES[0]) },
-                label = { Text("Webcams", fontSize = 10.sp) },
-                leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(14.dp)) },
-                colors = AssistChipDefaults.assistChipColors(labelColor = Color.White)
-            )
-            AssistChip(
-                onClick = { viewModel.searchCensysCameras(OsintViewModel.WEBCAM_QUERIES[1]) },
-                label = { Text("IP Cameras", fontSize = 10.sp) },
-                leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(14.dp)) },
-                colors = AssistChipDefaults.assistChipColors(labelColor = Color.White)
-            )
-            AssistChip(
-                onClick = { viewModel.searchCensysCameras(OsintViewModel.WEBCAM_QUERIES[2]) },
-                label = { Text("Live View", fontSize = 10.sp) },
-                leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(14.dp)) },
-                colors = AssistChipDefaults.assistChipColors(labelColor = Color.White)
-            )
-        }
-    }
-}
-
-@UnstableApi
-@Composable
-fun CensysResultsView(
-    cameras: List<StreamSource>,
-    isLoading: Boolean,
-    errorMessage: String?,
-    neonGreen: Color,
-    onBack: () -> Unit,
-    onSaveClick: (StreamSource) -> Unit
-) {
-    val context = LocalContext.current
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.clickable { onBack() }.padding(bottom = 8.dp)
-        ) {
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Back", tint = Color.White)
-            Text("BACK TO COUNTRIES", color = Color.White, fontSize = 12.sp)
-        }
-
-        if (isLoading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = neonGreen)
-            }
-        } else if (errorMessage != null) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(errorMessage, color = MaterialTheme.colorScheme.error)
-            }
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 100.dp)
-            ) {
-                items(cameras) { camera ->
-                    PublicCameraCard(
-                        camera = camera,
-                        onViewClick = {
-                            StreamViewerActivity.launch(
-                                context = context,
-                                source = camera,
-                                ip = camera.location.ifBlank { "Public" }
-                            )
-                        },
-                        onSaveClick = { onSaveClick(camera) }
-                    )
-                }
-            }
-        }
     }
 }
 
@@ -517,6 +439,121 @@ private fun CountryRow(
             }
             Surface(color = Color(0xFF252525), shape = RoundedCornerShape(6.dp)) {
                 Text("${country.count}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+            }
+        }
+    }
+}
+
+@Composable
+fun OpentopiaHeader(
+    onLoad: (Int) -> Unit,
+    neonGreen: Color
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF111111)),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text(
+                text = "OPENTOPIA LIVE DIRECTORY",
+                color = Color.Gray,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Button(
+                    onClick = { onLoad(50) },
+                    modifier = Modifier.weight(1f).height(40.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, Color.DarkGray)
+                ) {
+                    Icon(Icons.Default.Search, null, tint = neonGreen, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("SCAN 50", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+                Button(
+                    onClick = { onLoad(100) },
+                    modifier = Modifier.weight(1f).height(40.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1A)),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, Color.DarkGray)
+                ) {
+                    Icon(Icons.Default.Search, null, tint = neonGreen, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("SCAN 100", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@UnstableApi
+@Composable
+fun OpentopiaResultView(
+    cameras: List<StreamSource>,
+    loading: Boolean,
+    error: String?,
+    neonGreen: Color,
+    onBack: () -> Unit,
+    onViewClick: (StreamSource) -> Unit,
+    onSaveClick: (StreamSource) -> Unit
+) {
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable { onBack() }
+        ) {
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Back", tint = Color.White)
+            Text("BACK TO SOURCES", color = Color.White, fontSize = 12.sp)
+        }
+        
+        Spacer(Modifier.height(10.dp))
+        
+        if (loading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = neonGreen)
+            }
+        } else if (error != null) {
+            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF2A0A0A))) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("⚠ $error", color = Color(0xFFFF6B6B), fontSize = 12.sp)
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+                        Text("DISMISS", color = neonGreen)
+                    }
+                }
+            }
+        } else {
+            Text(
+                "OPENTOPIA RESULTS (${cameras.size})",
+                color = neonGreen,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+            Spacer(Modifier.height(10.dp))
+
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 100.dp)
+            ) {
+                items(cameras, key = { it.id }) { cam ->
+                    PublicCameraCard(
+                        camera = cam,
+                        onViewClick = { onViewClick(cam) },
+                        onSaveClick = { onSaveClick(cam) }
+                    )
+                }
             }
         }
     }

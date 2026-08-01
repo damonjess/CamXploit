@@ -51,6 +51,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import com.spyboy.camxploit.osint.InsecamScraper
+import com.spyboy.camxploit.osint.OpentopiaScraper
 import com.spyboy.camxploit.ui.FastMjpegPlayer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -269,17 +270,34 @@ fun StreamPlayerScreen(
     var isScraping by remember { mutableStateOf(false) }
 
     val isInsecam = source?.url?.contains("insecam.org", ignoreCase = true) == true
+    val isOpentopia = source?.url?.contains("opentopia.com", ignoreCase = true) == true
 
     LaunchedEffect(source?.url) {
-        if (isInsecam && source != null) {
+        if ((isInsecam || isOpentopia) && source != null) {
             isScraping = true
             val result = withContext(Dispatchers.IO) {
-                InsecamScraper.scrapePage(source.url)
+                if (isInsecam) {
+                    val res = InsecamScraper.scrapePage(source.url)
+                    StreamSource(
+                        url = res.streamUrl,
+                        title = res.title,
+                        location = res.location,
+                        thumbnailUrl = res.thumbnailUrl
+                    )
+                } else {
+                    val directUrl = OpentopiaScraper.scrapeDetailPage(source.url)
+                    StreamSource(
+                        url = directUrl,
+                        title = source.title,
+                        location = source.location,
+                        thumbnailUrl = source.thumbnailUrl
+                    )
+                }
             }
-            if (result.streamUrl.isNotBlank()) {
-                resolvedUrl = result.streamUrl
+            if (result.url.isNotBlank()) {
+                resolvedUrl = result.url
                 // Update the stream in ViewModel if resolved
-                viewModel.startStream(source.copy(url = result.streamUrl))
+                viewModel.startStream(source.copy(url = result.url))
             }
             isScraping = false
         }
