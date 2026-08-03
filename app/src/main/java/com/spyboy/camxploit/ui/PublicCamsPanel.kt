@@ -124,7 +124,7 @@ fun PublicCamsPanel(
         }
     }
 
-    LaunchedEffect(shouldLoadMore.value, hasMore, selectedCountry) {
+    LaunchedEffect(shouldLoadMore.value, hasMore, selectedCountry, cameras.size) {
         if (shouldLoadMore.value && !scraperLoading && hasMore && selectedCountry != null) {
             viewModel.loadNextInsecamPage()
         }

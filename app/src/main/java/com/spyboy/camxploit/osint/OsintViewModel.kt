@@ -213,15 +213,26 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
             _insecamLoading.value = true
             _insecamError.value = null
             try {
-                val results = InsecamScraper.scrapeListing(code, if (append) currentPage + 1 else 1)
-                if (append) {
-                    _insecamCameras.value = _insecamCameras.value + results
-                    currentPage++
-                } else {
-                    _insecamCameras.value = results
-                    currentPage = 1
+                // Fetch 3 pages at once to provide a better user experience (18 cameras instead of 6)
+                val startPage = if (append) currentPage + 1 else 1
+                val pagesToFetch = 3
+                val allResults = mutableListOf<InsecamClient.PublicCamera>()
+                
+                for (p in 0 until pagesToFetch) {
+                    val pageResults = InsecamScraper.scrapeListing(code, startPage + p)
+                    allResults.addAll(pageResults)
+                    if (pageResults.size < 6) break // No more cameras on this page
                 }
-                _hasMorePages.value = results.size >= 6
+
+                if (append) {
+                    _insecamCameras.value = _insecamCameras.value + allResults
+                    currentPage += pagesToFetch
+                } else {
+                    _insecamCameras.value = allResults
+                    currentPage = pagesToFetch
+                }
+                // Insecam now shows 6 cameras per page. If we got less than what we asked for, there are no more.
+                _hasMorePages.value = allResults.size >= (pagesToFetch * 6)
             } catch (e: Exception) {
                 _insecamError.value = "Failed to load cameras: ${e.message}"
             } finally {
