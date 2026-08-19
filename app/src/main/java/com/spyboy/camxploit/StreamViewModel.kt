@@ -140,18 +140,33 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
         player.playWhenReady = true
     }
 
+    /**
+     * Marks an MJPEG source as ready for the UI-owned continuous renderer.
+     * The renderer emits frames through [onMjpegFrame], so this method deliberately
+     * does not start a second HTTP connection.
+     */
+    fun prepareMjpegPlayback(source: StreamSource) {
+        currentSource = source
+        stopStream()
+        _status.value = StreamStatus.Connecting
+        _streamInfo.value = "Mode: Continuous MJPEG"
+    }
+
+    /** Receives frames from the single UI-owned MJPEG connection. */
+    fun onMjpegFrame(bitmap: Bitmap) {
+        _mjpegBitmap.value = bitmap
+        _status.value = StreamStatus.Live
+        _streamInfo.value = "Resolution: ${bitmap.width}x${bitmap.height} | MJPEG"
+
+        if (_isRecording.value) {
+            recorder.feedMjpegFrame(bitmap)
+        }
+    }
+
     private fun startMjpegStream(url: String) {
         mjpegJob = viewModelScope.launch {
             MjpegFrameGrabber(url).stream(
-                onFrame = { bitmap ->
-                    _mjpegBitmap.value = bitmap
-                    _status.value = StreamStatus.Live
-                    _streamInfo.value = "Resolution: ${bitmap.width}x${bitmap.height} | MJPEG"
-                    
-                    if (_isRecording.value) {
-                        recorder.feedMjpegFrame(bitmap)
-                    }
-                },
+                onFrame = ::onMjpegFrame,
                 onError = { error ->
                     _status.value = StreamStatus.Error(error)
                 }

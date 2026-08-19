@@ -57,7 +57,7 @@ object OpentopiaScraper {
             cameras
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch listings", e)
-            cameras // return what we got so far
+            throw IllegalStateException("Opentopia source failed after loading ${cameras.size} result(s): ${e.message}", e)
         }
     }
 
@@ -208,14 +208,15 @@ object OpentopiaScraper {
             ?: "Unknown"
 
         return StreamSource(
-            id = UUID.randomUUID().toString(),
+            id = UUID.nameUUIDFromBytes(pageUrl.toByteArray(Charsets.UTF_8)).toString(),
             url = pageUrl,
             pageUrl = pageUrl,
             streamUrl = "",
             thumbnailUrl = thumbUrl,
             title = title,
             location = location,
-            protocol = "http"
+            protocol = "http",
+            sourceLabel = "Opentopia"
         )
     }
 

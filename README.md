@@ -1,196 +1,60 @@
-<h4 align="center"> If you find this GitHub repo useful, please consider giving it a star! ⭐️ </h4> 
-<p align="center">
-    <a href="https://spyboy.in/twitter">
-      <img src="https://img.shields.io/badge/-TWITTER-black?logo=twitter&style=for-the-badge">
-    </a>
-    &nbsp;
-    <a href="https://spyboy.in/">
-      <img src="https://img.shields.io/badge/-spyboy.in-black?logo=google&style=for-the-badge">
-    </a>
-    &nbsp;
-    <a href="https://spyboy.blog/">
-      <img src="https://img.shields.io/badge/-spyboy.blog-black?logo=wordpress&style=for-the-badge">
-    </a>
-    &nbsp;
-    <a href="https://spyboy.in/Discord">
-      <img src="https://img.shields.io/badge/-Discord-black?logo=discord&style=for-the-badge">
-    </a>
-  
-</p>
+# Complete Intel tab upgrade bundle
 
-<p align="center">
-  <img width="20%" src="https://github.com/spyboy-productions/CamXploit/blob/main/CCTV recon.jpg" />
-</p>
+This bundle combines the earlier pagination and MJPEG playback fixes with the Intel-tab reliability and usability upgrades.
 
+## Included upgrades
 
+| Area | Upgrade delivered |
+|---|---|
+| Source reliability | Country, GitHub, and Opentopia loading errors now propagate to the view model instead of silently becoming empty lists. |
+| Source health | The Intel screen maintains source-specific loading, healthy, partial, and error states and displays them below search. |
+| Stable identities | GitHub and Opentopia cards derive deterministic IDs from their canonical URLs, improving refresh deduplication and diagnostics. |
+| Feed verification | Each public-result card has **CHECK** and **INFO** actions. The check identifies MJPEG, snapshot, RTSP, web, or unavailable responses and records diagnostics. |
+| Filters and sorting | Source grids support All, Verified, MJPEG, and Snapshot filters plus an A–Z toggle. |
+| Diagnostics | A camera diagnostics sheet exposes source, verification result, response content type, effective URL, and check result. |
+| Pagination | Country pagination checks for the directory’s actual next-page controls rather than assuming every page has six cards. The grid shows its current page. |
+| Source transparency | Country-directory counts are labelled as estimates that may vary. |
+| User cameras | Intel now includes a **MY CAMS** tab that reads the existing saved-camera Room database and presents the same filter, verification, diagnostic, play, and save controls. |
+| Navigation | GitHub is treated as selected under Public Cams; My Cameras has its own tab index. |
+| MJPEG smoothness | The viewer waits for HTTP classification, keeps an effective MJPEG protocol, and uses one continuous renderer connection instead of competing display/background MJPEG connections. |
 
-CamXploit is a security reconnaissance tool designed to help researchers and defenders assess whether an IP address is hosting a **potentially exposed IP camera or CCTV service**.
+## Files in the bundle
 
-The tool performs **non-intrusive checks** such as scanning commonly used camera ports, identifying accessible web interfaces, and highlighting common configuration weaknesses (e.g., default setups or publicly accessible services). It also provides contextual search links to assist further **manual investigation and verification**.
-
-CamXploit is intended for **security research, awareness, and authorized testing**, helping organizations and individuals identify misconfigurations and reduce the risk of unauthorized access to camera infrastructure.
-  
-
-> [!IMPORTANT]
-> CamXploit performs reconnaissance and configuration analysis only and must be used **strictly on systems you own or have explicit authorization to test**.
-
-### 📱 Android Application (Native)
-CamXploit now features a native Android application built with **Kotlin, Jetpack Compose, and Chaquopy**. It provides a modern, high-performance interface for all reconnaissance tasks directly on your mobile device.
-
-- **Console Tab**: Direct interaction with the scanner.
-- **Intel Tab**: Deep scan and vulnerability analysis.
-- **Archive**: Saved reports and scan logs.
-- **Stream Viewer**: Live RTSP/HTTP stream viewing with recording capabilities.
-- **LAN Scanner**: Enhanced local network discovery.
-
-To build the app, open the project in **Android Studio**.
-
-### 💻 CLI Version
-The stand-alone Python script for terminal use is located in the root directory (or `legacy_kivy/` if you are using the older Kivy-based interface).
-
-### ☁️ Run It Instantly on Google Colab (No Installation Needed)
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/spyboy-productions/CamXploit/blob/main/CamXploit.ipynb)
-
----
-
-## 🆕 What's New in v2.0.2
-- **RTSP Detection & Testing**: Actively probes ports for RTSP (not just port 554), detects RTSP on non-standard ports (e.g., 443, 8000)
-- **Service Name Display**: Shows service names for each open port (e.g., `[OPEN] 8080/tcp HTTP-Alt (Web Interface)`)
-- **RTSP Credential Testing**: Tests RTSP Basic Auth credentials on RTSP ports (prioritized over HTTP)
-- **Smart Brand Detection**: Automatically suggests RTSP URLs for known camera brands (Axis, Hikvision, Dahua) even if RTSP not detected
-- **Enhanced Credential Testing**: Priority-based testing (most common credentials first), faster timeouts, progress indicators
-- **Expanded Credential Database**: 100+ default credentials across multiple camera brands
-- **Better Stream Detection**: Clear VLC vs browser guidance, multipart stream detection
-- **Performance Improvements**: Automatic port deduplication, better timeout handling, prevents hanging
-- **IP:PORT Format Support**: Accept IP:PORT format (e.g., `192.168.1.1:85`) to scan specific ports or ensure custom ports are checked
-- **Expanded Port Coverage**: Added common alternative ports (81-89, 21-23, 1024-1030, etc.) for better camera detection
-
----
-
-## 🚀 **Features**  
-
-✔️ **Scans all common CCTV ports**  
-✔️ **Detects exposed camera login pages**  
-✔️ **Checks if the device is a camera stream**  
-✔️ **Identifies camera brands & known vulnerabilities**  
-✔️ **Tests for default credentials on login pages**  
-✔️ **Provides manual search links (Shodan, Censys, Zoomeye, Google Dorking)**  
-✔️ **Google Dorking suggestions for deeper recon**  
-✔️ **Enhanced Camera Detection** with detailed port analysis and brand identification  
-✔️ **Live Stream Detection** for RTSP, RTMP, HTTP, and MMS protocols  
-✔️ **Comprehensive IP & Location Information** with Google Maps/Earth links  
-✔️ **Multi-threaded Port Scanning** for faster results  
-✔️ **Enhanced Error Handling** and SSL support  
-✔️ **Detailed Camera Brand Detection** (Hikvision, Dahua, Axis, Sony, Bosch, Samsung, Panasonic, Vivotek, CP Plus)  
-✔️ **ONVIF Protocol Support** for standardized camera communication  
-✔️ **Smart Brute-force Protection** with rate limiting  
-✔️ **Detailed Port Analysis** showing server information and authentication types  
-✔️ **RTSP Detection on Any Port** - Actively probes ports for RTSP, not just standard port 554  
-✔️ **Service Name Identification** - Shows what service is running on each open port  
-✔️ **RTSP Credential Testing** - Tests RTSP Basic Auth (most important for CCTV cameras!)  
-✔️ **Smart RTSP Suggestions** - Automatically suggests RTSP URLs for detected camera brands  
-✔️ **Priority Credential Testing** - Tests most common credentials first (admin:admin, admin:1234, etc.)  
-✔️ **Expanded Credential Database** - 100+ default credentials across all major CCTV brands  
-✔️ **VLC Integration Guide** - Clear instructions for viewing RTSP streams in VLC Media Player  
-✔️ **Multipart Stream Detection** - Detects MJPEG streams (multipart/x-mixed-replace)  
-✔️ **IP:PORT Format Support** - Accept IP:PORT input to scan specific ports or ensure custom ports are checked  
-
----
-
-## 📚 Supported Brands & Devices
-- Hikvision, Dahua, Axis, Sony, Bosch, Samsung, Panasonic, Vivotek, CP Plus, and most generic DVR/NVRs
-- CP Plus DVRs (e.g., CP-UVR-0401E1-IC2) with custom ports
-- Any device exposing RTSP, HTTP, RTMP, or MMS video streams
-
----
-
-## 🛠️ **Installation**  
-
-### **1️⃣ Clone the Repository**  
-```bash
-git clone https://github.com/spyboy-productions/CamXploit.git
+```text
+app/src/main/java/com/spyboy/camxploit/
+├── StreamSource.kt
+├── StreamViewerActivity.kt
+├── StreamViewModel.kt
+├── osint/
+│   ├── GitHubMotionJpegClient.kt
+│   ├── InsecamScraper.kt
+│   ├── IntelModels.kt                 (new)
+│   ├── OpentopiaScraper.kt
+│   └── OsintViewModel.kt
+└── ui/
+    ├── FastMjpegPlayer.kt
+    ├── OsintScreen.kt
+    └── PublicCamsPanel.kt
 ```
-```
-cd CamXploit
-```  
-```bash
-pip install -r requirements.txt
-```
----
-```
-python CamXploit.py
-```
-Enter the **public IP address** (or `IP:PORT` format) of the target device when prompted.
 
-**Input Formats:**
-- `192.168.1.1` - Scans all common CCTV ports
-- `192.168.1.1:85` - Scans all ports + ensures port 85 is checked (useful for custom ports)
-- `192.168.1.1:9000` - Scans all ports + ensures port 9000 is checked  
+## Install
 
-### **🔍 What It Does:**  
-1️⃣ **Scans open ports** (Common CCTV ports) with service name identification  
-2️⃣ **Checks if a camera is present**  
-3️⃣ If a camera is found, it:  
-   - Searches for **login pages**  
-   - Tests **RTSP credentials** (prioritized) and **HTTP credentials**  
-   - Identifies **camera brand & vulnerabilities**  
-   - **Suggests RTSP URLs** for detected brands  
-   - Detects **live streams** (RTSP, RTMP, HTTP, MMS) with viewing instructions  
-   - Provides **location information** with maps  
-   - Shows **service names** and authentication types  
-4️⃣ Provides **manual search URLs** for deeper investigation  
+Copy the `app` folder from this archive into the root of your Android Studio project, choosing **Replace** when prompted. Then run **Sync Project with Gradle Files**, build the debug variant, and install the app on a device.
 
----
+## Test checklist
 
-## ⚡ Usage Tips
-- Scanning all ports (1000+) may take several minutes, depending on your network and target.
-- The tool uses multi-threading for port, login, and password checks for speed.
-- If you see "No camera found" but you know a camera is present, check the open ports and look for custom ports in the output.
-- For best results, run as administrator/root to avoid local firewall issues.
-- **RTSP ports are prioritized for credential testing** (most important for CCTV cameras)
-- **RTSP links are shown prominently** - use VLC Media Player to test them
-- **HTTP/HTTPS streams can be opened directly** in your web browser
-- **Credential testing has a 2-minute timeout** to prevent hanging
-- **Service names help identify** what's running on each port
-- **Use IP:PORT format** if you know a specific port (e.g., `192.168.1.1:85`) - ensures that port is scanned even if not in common ports list
-- **Custom ports are automatically included** when using IP:PORT format
+| Test | Expected result |
+|---|---|
+| Open **INTEL → PUBLIC CAMS** | The existing country directory is displayed and its count label states that estimates may vary. |
+| Select a country and load pages | The header displays the current page; **LOAD 6 MORE CAMERAS** appears only when the source reports another page. |
+| Force an unavailable network/source | A red source error banner states the actual failure rather than showing a blank result list. |
+| Open Opentopia or GitHub results | The matching Public Cams tab remains selected and a source-health banner appears. |
+| Select **CHECK** on a camera | The card updates to MJPEG, Snapshot, RTSP, Web page, or Unavailable when the probe completes. |
+| Select **INFO** | The diagnostics dialog displays effective URL, response content type, verification state, and message. |
+| Select **MY CAMS** | Your Room-saved cameras appear in an Intel collection with filters and diagnostics. |
+| View an owned MJPEG source | It uses continuous MJPEG playback rather than the periodic snapshot refresh path; normal playback should have one stream connection. |
+| Validation limitation | The source-level cross-file references were verified after modification. A full Gradle compilation could not be run in the sandbox because it has no Android SDK or Kotlin compiler configured. The project must be synced and built in your local Android Studio environment. |
 
----
+## Notes
 
-## 📚 Troubleshooting
-- If no open ports are found, ensure the target is online and not behind a strict firewall.
-- If live streams are not detected, try accessing the URLs manually in VLC or a browser.
-- For best detection, ensure your Python version is 3.6+ and all dependencies are installed.
-- **RTSP streams require VLC Media Player** - HTTP streams work in browser
-- **If RTSP not detected on standard port 554**, check other ports (443, 8000, etc.)
-- **Brand detection helps suggest RTSP URLs** even if RTSP probe fails
-- **If a port is being missed**, use IP:PORT format (e.g., `192.168.1.1:85`) to ensure that specific port is scanned
-- **Custom/non-standard ports** can be scanned by using IP:PORT format - the tool will include them in the scan
-
----
-
-## 📸 **Example Output**  
-
-<img width="100%" align="centre" src="https://github.com/spyboy-productions/CamXploit/blob/main/demo.png" />
-
----
-
-
-## 🤖 **To-Do & Future Features**  
-- [x] Add multi-threaded scanning for speed  
-- [x] Expand camera brand detection  
-- [x] RTSP detection and credential testing
-- [x] Service name display for ports
-- [x] Enhanced credential database
-- [ ] Implement logging feature  
-- [ ] Add screenshot capture functionality  
-- [ ] Implement report generation  
-- [ ] Add network range scanning  
-- [ ] Implement MAC address lookup  
-
----
-## 🙌 **Contributions**  
-Feel free to submit issues, suggestions, or pull requests!  
-
-<h4 align="center"> If you find this GitHub repo useful, please consider giving it a star! ⭐️ </h4> 
+Third-party directories can change their HTML or block automated requests at any time. The new source-health banner is intended to make that visible. Keep cameras you own or are authorized to access in **MY CAMS**; use the verification status and diagnostics dialog to troubleshoot them.

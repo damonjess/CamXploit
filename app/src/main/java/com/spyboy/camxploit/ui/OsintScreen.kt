@@ -55,11 +55,12 @@ fun OsintScreen(viewModel: OsintViewModel = viewModel()) {
         // 2. TABS
         TabRow(
             selectedTabIndex = when (source) {
-                is OsintViewModel.Source.PublicCams, 
+                is OsintViewModel.Source.PublicCams,
                 is OsintViewModel.Source.Opentopia,
                 is OsintViewModel.Source.GitHub -> 0
-                is OsintViewModel.Source.DirectStream -> 1
-                is OsintViewModel.Source.Browser -> 2
+                is OsintViewModel.Source.MyCameras -> 1
+                is OsintViewModel.Source.DirectStream -> 2
+                is OsintViewModel.Source.Browser -> 3
             },
             containerColor = Color.Black,
             contentColor = neonGreen,
@@ -69,8 +70,9 @@ fun OsintScreen(viewModel: OsintViewModel = viewModel()) {
                         is OsintViewModel.Source.PublicCams, 
                         is OsintViewModel.Source.Opentopia,
                         is OsintViewModel.Source.GitHub -> 0
-                        is OsintViewModel.Source.DirectStream -> 1
-                        is OsintViewModel.Source.Browser -> 2
+                        is OsintViewModel.Source.MyCameras -> 1
+                        is OsintViewModel.Source.DirectStream -> 2
+                        is OsintViewModel.Source.Browser -> 3
                     }]),
                     color = neonGreen
                 )
@@ -78,9 +80,15 @@ fun OsintScreen(viewModel: OsintViewModel = viewModel()) {
             divider = {}
         ) {
             Tab(
-                selected = source is OsintViewModel.Source.PublicCams || source is OsintViewModel.Source.Opentopia,
+                selected = source is OsintViewModel.Source.PublicCams || source is OsintViewModel.Source.Opentopia || source is OsintViewModel.Source.GitHub,
                 onClick = { viewModel.selectSource(OsintViewModel.Source.PublicCams) },
                 text = { Text("PUBLIC CAMS", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                icon = { Icon(Icons.Default.Public, null, modifier = Modifier.size(18.dp)) }
+            )
+            Tab(
+                selected = source is OsintViewModel.Source.MyCameras,
+                onClick = { viewModel.loadMyCameras() },
+                text = { Text("MY CAMS", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
                 icon = { Icon(Icons.Default.Public, null, modifier = Modifier.size(18.dp)) }
             )
             Tab(
@@ -102,9 +110,10 @@ fun OsintScreen(viewModel: OsintViewModel = viewModel()) {
         // 3. CONTENT AREA
         Box(modifier = Modifier.weight(1f).padding(horizontal = 16.dp)) {
             when (source) {
-                is OsintViewModel.Source.PublicCams, 
+                is OsintViewModel.Source.PublicCams,
                 is OsintViewModel.Source.Opentopia,
-                is OsintViewModel.Source.GitHub -> {
+                is OsintViewModel.Source.GitHub,
+                is OsintViewModel.Source.MyCameras -> {
                     PublicCamsPanel(viewModel, neonGreen, darkCard)
                 }
                 is OsintViewModel.Source.DirectStream -> {

@@ -9,16 +9,37 @@ import kotlinx.coroutines.launch
 
 class OsintViewModel(app: Application) : AndroidViewModel(app) {
 
+    private companion object {
+        const val INSECAM_PAGE_SIZE = 6
+    }
+
     sealed class Source { 
         object PublicCams : Source() 
         object Opentopia : Source()
         object GitHub : Source()
+        object MyCameras : Source()
         object DirectStream : Source()
         object Browser : Source()
     }
 
     private val _source = MutableStateFlow<Source>(Source.PublicCams)
     val source: StateFlow<Source> = _source.asStateFlow()
+
+    private val _sourceHealth = MutableStateFlow(
+        IntelSourceId.values().associateWith { SourceHealth() }
+    )
+    val sourceHealth: StateFlow<Map<IntelSourceId, SourceHealth>> = _sourceHealth.asStateFlow()
+
+    private fun updateSourceHealth(
+        sourceId: IntelSourceId,
+        status: SourceHealthStatus,
+        message: String,
+        itemCount: Int = 0
+    ) {
+        _sourceHealth.value = _sourceHealth.value + (
+            sourceId to SourceHealth(status, message, itemCount, System.currentTimeMillis())
+        )
+    }
 
     // Insecam
     private val _countries = MutableStateFlow<List<InsecamCountry>>(emptyList())
@@ -29,6 +50,59 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     private val _publicCameras = MutableStateFlow<List<StreamSource>>(emptyList())
     val publicCameras: StateFlow<List<StreamSource>> = _publicCameras.asStateFlow()
 
+    private val _cameraDiagnostics = MutableStateFlow<Map<String, CameraDiagnostics>>(emptyMap())
+    val cameraDiagnostics: StateFlow<Map<String, CameraDiagnostics>> = _cameraDiagnostics.asStateFlow()
+
+    fun verifyCamera(camera: StreamSource) {
+        val id = camera.id
+        _cameraDiagnostics.value = _cameraDiagnostics.value + (
+            id to CameraDiagnostics(
+                source = camera.sourceLabel,
+                effectiveUrl = camera.bestPlaybackUrl(),
+                verification = CameraVerification.VERIFYING,
+                message = "Checking feed…"
+            )
+        )
+        viewModelScope.launch {
+            try {
+                val result = CameraUrlProbe.probe(camera.bestPlaybackUrl())
+                val verification = when {
+                    result.isMjpeg -> CameraVerification.MJPEG
+                    result.isSnapshot -> CameraVerification.SNAPSHOT
+                    result.url.startsWith("rtsp://", ignoreCase = true) -> CameraVerification.RTSP
+                    result.isHtml -> CameraVerification.WEB
+                    else -> CameraVerification.UNAVAILABLE
+                }
+                val diagnostics = CameraDiagnostics(
+                    source = camera.sourceLabel,
+                    effectiveUrl = result.url,
+                    contentType = result.contentType,
+                    verification = verification,
+                    checkedAt = System.currentTimeMillis(),
+                    message = if (verification == CameraVerification.UNAVAILABLE) "No supported camera response detected" else "Verified"
+                )
+                _cameraDiagnostics.value = _cameraDiagnostics.value + (id to diagnostics)
+                _publicCameras.value = _publicCameras.value.map {
+                    if (it.id == id) it.copy(
+                        verification = verification.label,
+                        contentType = result.contentType,
+                        verifiedAt = diagnostics.checkedAt ?: 0L
+                    ) else it
+                }
+            } catch (e: Exception) {
+                _cameraDiagnostics.value = _cameraDiagnostics.value + (
+                    id to CameraDiagnostics(
+                        source = camera.sourceLabel,
+                        effectiveUrl = camera.bestPlaybackUrl(),
+                        verification = CameraVerification.UNAVAILABLE,
+                        checkedAt = System.currentTimeMillis(),
+                        message = e.message ?: "Verification failed"
+                    )
+                )
+            }
+        }
+    }
+
     private val _insecamLoading = MutableStateFlow(false)
     val insecamLoading: StateFlow<Boolean> = _insecamLoading.asStateFlow()
     private val _insecamError = MutableStateFlow<String?>(null)
@@ -38,6 +112,8 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _selectedCountry = MutableStateFlow<String?>(null)
     val selectedCountry: StateFlow<String?> = _selectedCountry.asStateFlow()
+    private val _currentCountryPage = MutableStateFlow(1)
+    val currentCountryPage: StateFlow<Int> = _currentCountryPage.asStateFlow()
     private var currentPage = 1
 
     private val _recentlyViewed = MutableStateFlow<List<StreamSource>>(emptyList())
@@ -73,6 +149,7 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
         when (val s = _source.value) {
             is Source.Opentopia -> loadOpentopiaCameras(_publicCameras.value.size.coerceAtLeast(50))
             is Source.GitHub -> loadGitHubMotionJpegSources()
+            is Source.MyCameras -> loadMyCameras()
             is Source.PublicCams -> {
                 if (_selectedCountry.value != null) {
                     loadInsecamCountry(_selectedCountry.value!!)
@@ -88,17 +165,22 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
+            updateSourceHealth(IntelSourceId.OPENTOPIA, SourceHealthStatus.LOADING, "Loading directory…")
             _selectedCountry.value = null // Clear country selection when loading Opentopia
             try {
                 val cameras = OpentopiaScraper.fetchCameras(limit)
                 _publicCameras.value = cameras
                 _source.value = Source.Opentopia
                 if (cameras.isEmpty()) {
-                    _error.value = "Opentopia returned no cameras. Site layout may have changed."
+                    _error.value = "Opentopia returned no cameras. The source may be empty or its layout may have changed."
+                    updateSourceHealth(IntelSourceId.OPENTOPIA, SourceHealthStatus.ERROR, "No usable camera cards returned")
+                } else {
+                    updateSourceHealth(IntelSourceId.OPENTOPIA, SourceHealthStatus.HEALTHY, "Loaded ${cameras.size} cameras", cameras.size)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
                 _error.value = "Opentopia failed: ${e.message}"
+                updateSourceHealth(IntelSourceId.OPENTOPIA, SourceHealthStatus.ERROR, e.message ?: "Source request failed")
             } finally {
                 _isLoading.value = false
             }
@@ -110,17 +192,54 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
+            updateSourceHealth(IntelSourceId.GITHUB, SourceHealthStatus.LOADING, "Loading curated stream list…")
             _selectedCountry.value = null
             try {
                 val sources = GitHubMotionJpegClient.fetchSources()
                 _publicCameras.value = sources
                 _source.value = Source.GitHub
                 if (sources.isEmpty()) {
-                    _error.value = "No stream URLs found in repo. README may have changed format."
+                    _error.value = "No supported stream URLs were found in the source list."
+                    updateSourceHealth(IntelSourceId.GITHUB, SourceHealthStatus.ERROR, "No supported stream URLs found")
+                } else {
+                    updateSourceHealth(IntelSourceId.GITHUB, SourceHealthStatus.HEALTHY, "Loaded ${sources.size} stream URLs", sources.size)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
                 _error.value = "GitHub fetch failed: ${e.message}"
+                updateSourceHealth(IntelSourceId.GITHUB, SourceHealthStatus.ERROR, e.message ?: "Source request failed")
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun loadMyCameras() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
+            _selectedCountry.value = null
+            updateSourceHealth(IntelSourceId.MY_CAMERAS, SourceHealthStatus.LOADING, "Loading saved cameras…")
+            try {
+                val cameraDao = com.spyboy.camxploit.CameraDatabase.getDatabase(getApplication()).cameraDao()
+                val cameras = cameraDao.getAllCameras().first().map { saved ->
+                    saved.toStreamSource().copy(
+                        id = "saved-${saved.id}",
+                        sourceLabel = "My Cameras",
+                        verification = saved.streamType.uppercase()
+                    )
+                }
+                _publicCameras.value = cameras
+                _source.value = Source.MyCameras
+                updateSourceHealth(
+                    IntelSourceId.MY_CAMERAS,
+                    if (cameras.isEmpty()) SourceHealthStatus.PARTIAL else SourceHealthStatus.HEALTHY,
+                    if (cameras.isEmpty()) "No saved cameras yet" else "Loaded ${cameras.size} saved camera(s)",
+                    cameras.size
+                )
+            } catch (e: Exception) {
+                _error.value = "Could not load saved cameras: ${e.message}"
+                updateSourceHealth(IntelSourceId.MY_CAMERAS, SourceHealthStatus.ERROR, e.message ?: "Database read failed")
             } finally {
                 _isLoading.value = false
             }
@@ -128,7 +247,7 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun searchPublicCameras(query: String) {
-        // Placeholder if needed, but Insecam is mostly country-based in current implementation
+        // Filtering is applied by the Compose screen to preserve all loaded source results.
     }
 
     data class InsecamCountry(val code: String, val name: String, val count: Int)
@@ -193,6 +312,7 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
     fun selectCountry(code: String) {
         _selectedCountry.value = code
         currentPage = 1
+        _currentCountryPage.value = 1
         _insecamCameras.value = emptyList()
         _publicCameras.value = emptyList()
         _hasMorePages.value = true
@@ -205,6 +325,7 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
         _publicCameras.value = emptyList()
         _hasMorePages.value = true
         currentPage = 1
+        _currentCountryPage.value = 1
     }
 
     fun loadInsecamCountry(code: String, append: Boolean = false) {
@@ -212,18 +333,33 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _insecamLoading.value = true
             _insecamError.value = null
+            updateSourceHealth(IntelSourceId.COUNTRY_DIRECTORY, SourceHealthStatus.LOADING, "Loading country page…")
             try {
-                val results = InsecamScraper.scrapeListing(code, if (append) currentPage + 1 else 1)
+                val requestedPage = if (append) currentPage + 1 else 1
+                val listing = InsecamScraper.scrapeListing(code, requestedPage)
+                val results = listing.cameras
+
                 if (append) {
-                    _insecamCameras.value = _insecamCameras.value + results
-                    currentPage++
+                    // Keep earlier pages and discard any duplicate camera IDs from the source.
+                    _insecamCameras.value = (_insecamCameras.value + results).distinctBy { it.id }
+                    if (results.isNotEmpty()) currentPage = requestedPage
                 } else {
                     _insecamCameras.value = results
                     currentPage = 1
                 }
-                _hasMorePages.value = results.size >= 6
+
+                // Follow the source pagination control instead of assuming a fixed page size.
+                _hasMorePages.value = listing.hasNextPage
+                _currentCountryPage.value = currentPage
+                updateSourceHealth(
+                    IntelSourceId.COUNTRY_DIRECTORY,
+                    SourceHealthStatus.HEALTHY,
+                    "Loaded ${_insecamCameras.value.size} camera(s)",
+                    _insecamCameras.value.size
+                )
             } catch (e: Exception) {
                 _insecamError.value = "Failed to load cameras: ${e.message}"
+                updateSourceHealth(IntelSourceId.COUNTRY_DIRECTORY, SourceHealthStatus.ERROR, e.message ?: "Country request failed")
             } finally {
                 _insecamLoading.value = false
             }

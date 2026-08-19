@@ -2,11 +2,6 @@ package com.spyboy.camxploit.ui
 
 import android.webkit.WebResourceRequest
 import android.webkit.WebViewClient
-
-
-
-
-
 import android.annotation.SuppressLint
 import android.webkit.WebView
 import androidx.compose.foundation.BorderStroke
@@ -47,9 +42,13 @@ import androidx.media3.common.util.UnstableApi
 import coil.compose.AsyncImage
 import com.spyboy.camxploit.StreamSource
 import com.spyboy.camxploit.StreamViewerActivity
+import com.spyboy.camxploit.osint.CameraDiagnostics
 import com.spyboy.camxploit.osint.InsecamClient
 import com.spyboy.camxploit.osint.InsecamScraper
+import com.spyboy.camxploit.osint.IntelSourceId
 import com.spyboy.camxploit.osint.OsintViewModel
+import com.spyboy.camxploit.osint.SourceHealth
+import com.spyboy.camxploit.osint.SourceHealthStatus
 import com.spyboy.camxploit.osint.ThumbnailResolver
 import kotlinx.coroutines.launch
 import android.graphics.Bitmap
@@ -78,22 +77,42 @@ fun PublicCamsPanel(
     val publicCameras by viewModel.publicCameras.collectAsStateWithLifecycle()
     val genericLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val genericError by viewModel.error.collectAsStateWithLifecycle()
+    val sourceHealth by viewModel.sourceHealth.collectAsStateWithLifecycle()
+    val diagnostics by viewModel.cameraDiagnostics.collectAsStateWithLifecycle()
 
     val recentlyViewed by viewModel.recentlyViewed.collectAsStateWithLifecycle()
 
     val scraperError by viewModel.insecamError.collectAsStateWithLifecycle()
     val scraperLoading by viewModel.insecamLoading.collectAsStateWithLifecycle()
     val hasMore by viewModel.hasMorePages.collectAsStateWithLifecycle()
+    val currentCountryPage by viewModel.currentCountryPage.collectAsStateWithLifecycle()
 
     var showManualBrowser by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var verificationFilter by remember { mutableStateOf("ALL") }
+    var sortAlphabetically by remember { mutableStateOf(false) }
+    var selectedDiagnosticCamera by remember { mutableStateOf<StreamSource?>(null) }
 
-    val filteredPublicCameras = remember(publicCameras, searchQuery) {
-        if (searchQuery.isBlank()) publicCameras
-        else publicCameras.filter {
+    val activeHealth = when (source) {
+        is OsintViewModel.Source.Opentopia -> sourceHealth[IntelSourceId.OPENTOPIA]
+        is OsintViewModel.Source.GitHub -> sourceHealth[IntelSourceId.GITHUB]
+        is OsintViewModel.Source.MyCameras -> sourceHealth[IntelSourceId.MY_CAMERAS]
+        else -> if (selectedCountry != null) sourceHealth[IntelSourceId.COUNTRY_DIRECTORY] else null
+    }
+
+    val filteredPublicCameras = remember(publicCameras, searchQuery, verificationFilter, sortAlphabetically) {
+        val textFiltered = if (searchQuery.isBlank()) publicCameras else publicCameras.filter {
             it.title.contains(searchQuery, ignoreCase = true) ||
-                    it.location.contains(searchQuery, ignoreCase = true)
+                it.location.contains(searchQuery, ignoreCase = true) ||
+                it.sourceLabel.contains(searchQuery, ignoreCase = true)
         }
+        val verificationFiltered = when (verificationFilter) {
+            "VERIFIED" -> textFiltered.filter { it.verification !in listOf("Unchecked", "Verifying", "Unavailable") }
+            "MJPEG" -> textFiltered.filter { it.verification == "MJPEG" }
+            "SNAPSHOT" -> textFiltered.filter { it.verification == "Snapshot" }
+            else -> textFiltered
+        }
+        if (sortAlphabetically) verificationFiltered.sortedBy { it.title.lowercase() } else verificationFiltered
     }
 
     val filteredInsecamCameras = remember(cameras, searchQuery) {
@@ -164,6 +183,30 @@ fun PublicCamsPanel(
                 )
             }
 
+            item {
+                IntelSourceStatus(activeHealth)
+                if (source is OsintViewModel.Source.Opentopia || source is OsintViewModel.Source.GitHub || source is OsintViewModel.Source.MyCameras) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("ALL", "VERIFIED", "MJPEG", "SNAPSHOT").forEach { filter ->
+                            FilterChip(
+                                selected = verificationFilter == filter,
+                                onClick = { verificationFilter = filter },
+                                label = { Text(filter, fontSize = 9.sp) }
+                            )
+                        }
+                    }
+                    TextButton(
+                        onClick = { sortAlphabetically = !sortAlphabetically },
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Text(if (sortAlphabetically) "SORT: A–Z" else "SORT: SOURCE ORDER", fontSize = 10.sp)
+                    }
+                }
+            }
+
             // 2. Recently Viewed
             if (recentlyViewed.isNotEmpty()) {
                 item {
@@ -214,7 +257,9 @@ fun PublicCamsPanel(
                             viewModel.addToRecentlyViewed(cam)
                             StreamViewerActivity.launch(context, cam, cam.location)
                         },
-                        onSaveClick = { viewModel.saveCamera(it) }
+                        onSaveClick = { viewModel.saveCamera(it) },
+                        onVerify = { viewModel.verifyCamera(it) },
+                        onDiagnostics = { selectedDiagnosticCamera = it }
                     )
                 }
                 source == OsintViewModel.Source.GitHub -> {
@@ -228,7 +273,26 @@ fun PublicCamsPanel(
                             viewModel.addToRecentlyViewed(cam)
                             StreamViewerActivity.launch(context, cam, cam.location)
                         },
-                        onSaveClick = { viewModel.saveCamera(it) }
+                        onSaveClick = { viewModel.saveCamera(it) },
+                        onVerify = { viewModel.verifyCamera(it) },
+                        onDiagnostics = { selectedDiagnosticCamera = it }
+                    )
+                }
+                source == OsintViewModel.Source.MyCameras -> {
+                    opentopiaResults(
+                        cameras = filteredPublicCameras,
+                        loading = genericLoading,
+                        error = genericError,
+                        neonGreen = neonGreen,
+                        heading = "MY CAMERAS",
+                        onBack = { viewModel.selectSource(OsintViewModel.Source.PublicCams) },
+                        onViewClick = { cam ->
+                            viewModel.addToRecentlyViewed(cam)
+                            StreamViewerActivity.launch(context, cam, cam.location)
+                        },
+                        onSaveClick = { viewModel.saveCamera(it) },
+                        onVerify = { viewModel.verifyCamera(it) },
+                        onDiagnostics = { selectedDiagnosticCamera = it }
                     )
                 }
                 selectedCountry != null -> {
@@ -237,8 +301,11 @@ fun PublicCamsPanel(
                         loading = scraperLoading,
                         error = scraperError,
                         neonGreen = neonGreen,
+                        hasMore = hasMore,
+                        page = currentCountryPage,
                         onBack = { viewModel.clearCountrySelection() },
                         onRetry = { viewModel.loadInsecamCountry(selectedCountry!!) },
+                        onLoadMore = { viewModel.loadNextInsecamPage() },
                         onManualBrowse = { showManualBrowser = true },
                         onViewClick = { cam ->
                             val viewUrl = "http://www.insecam.org/en/view/${cam.id}/"
@@ -257,7 +324,31 @@ fun PublicCamsPanel(
                                 StreamViewerActivity.launch(context, source, cam.location ?: cam.ip ?: "Public")
                             }
                         },
-                        onSaveCamera = { viewModel.saveCamera(it) }
+                        onSaveCamera = { viewModel.saveCamera(it) },
+                        onVerifyCamera = { cam ->
+                            viewModel.verifyCamera(
+                                StreamSource(
+                                    id = cam.id,
+                                    url = "http://www.insecam.org/en/view/${cam.id}/",
+                                    title = cam.location ?: cam.ip ?: "Camera",
+                                    location = cam.location ?: "Unknown",
+                                    thumbnailUrl = cam.imageUrl,
+                                    protocol = "mjpeg",
+                                    sourceLabel = "Country directory"
+                                )
+                            )
+                        },
+                        onDiagnostics = { cam ->
+                            selectedDiagnosticCamera = StreamSource(
+                                id = cam.id,
+                                url = "http://www.insecam.org/en/view/${cam.id}/",
+                                title = cam.location ?: cam.ip ?: "Camera",
+                                location = cam.location ?: "Unknown",
+                                thumbnailUrl = cam.imageUrl,
+                                protocol = "mjpeg",
+                                sourceLabel = "Country directory"
+                            )
+                        }
                     )
                 }
                 else -> {
@@ -285,6 +376,14 @@ fun PublicCamsPanel(
         )
     }
 
+    selectedDiagnosticCamera?.let { camera ->
+        CameraDiagnosticsDialog(
+            camera = camera,
+            diagnostics = diagnostics[camera.id],
+            onDismiss = { selectedDiagnosticCamera = null }
+        )
+    }
+
     if (showManualBrowser && selectedCountry != null) {
         ManualBrowserOverlay(
             url = "http://www.insecam.org/en/bycountry/$selectedCountry/",
@@ -298,6 +397,60 @@ fun PublicCamsPanel(
     }
 }
 
+@Composable
+private fun IntelSourceStatus(health: SourceHealth?) {
+    if (health == null || health.status == SourceHealthStatus.IDLE) return
+
+    val color = when (health.status) {
+        SourceHealthStatus.HEALTHY -> Color(0xFF39FF14)
+        SourceHealthStatus.LOADING -> Color(0xFF00FFFF)
+        SourceHealthStatus.PARTIAL -> Color(0xFFFFA500)
+        SourceHealthStatus.ERROR -> Color(0xFFFF6B6B)
+        SourceHealthStatus.IDLE -> Color.Gray
+    }
+    val label = when (health.status) {
+        SourceHealthStatus.LOADING -> "SOURCE LOADING"
+        SourceHealthStatus.HEALTHY -> "SOURCE READY"
+        SourceHealthStatus.PARTIAL -> "SOURCE PARTIAL"
+        SourceHealthStatus.ERROR -> "SOURCE ERROR"
+        SourceHealthStatus.IDLE -> "SOURCE IDLE"
+    }
+
+    Surface(
+        color = Color(0xFF151515),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+    ) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+            Text(label, color = color, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Text(health.message, color = Color.LightGray, fontSize = 10.sp, maxLines = 2)
+        }
+    }
+}
+
+@Composable
+private fun CameraDiagnosticsDialog(
+    camera: StreamSource,
+    diagnostics: CameraDiagnostics?,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("CAMERA DIAGNOSTICS") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(camera.title, fontWeight = FontWeight.Bold)
+                Text("Source: ${camera.sourceLabel.ifBlank { "Manual / unknown" }}", fontSize = 12.sp)
+                Text("Status: ${diagnostics?.verification?.label ?: camera.verification}", fontSize = 12.sp)
+                Text("Content type: ${diagnostics?.contentType?.ifBlank { "Not checked" } ?: camera.contentType.ifBlank { "Not checked" }}", fontSize = 12.sp)
+                Text("URL: ${diagnostics?.effectiveUrl?.ifBlank { camera.bestPlaybackUrl() } ?: camera.bestPlaybackUrl()}", fontSize = 11.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(diagnostics?.message ?: "Select CHECK to verify this feed.", fontSize = 12.sp, color = Color.Gray)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("CLOSE") } }
+    )
+}
+
 private fun LazyListScope.countryGridResults(
     countries: List<OsintViewModel.InsecamCountry>,
     darkCard: Color,
@@ -306,7 +459,7 @@ private fun LazyListScope.countryGridResults(
 ) {
     item {
         Text(
-            "PUBLIC CAMERA SOURCES",
+            "PUBLIC CAMERA SOURCES • DIRECTORY COUNTS MAY VARY",
             color = Color.Gray,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
@@ -359,11 +512,16 @@ private fun LazyListScope.countryCameraResults(
     loading: Boolean,
     error: String?,
     neonGreen: Color,
+    hasMore: Boolean,
+    page: Int,
     onBack: () -> Unit,
     onRetry: () -> Unit,
+    onLoadMore: () -> Unit,
     onManualBrowse: () -> Unit,
     onViewClick: (InsecamClient.PublicCamera) -> Unit,
-    onSaveCamera: (StreamSource) -> Unit
+    onSaveCamera: (StreamSource) -> Unit,
+    onVerifyCamera: (InsecamClient.PublicCamera) -> Unit,
+    onDiagnostics: (InsecamClient.PublicCamera) -> Unit
 ) {
     item {
         Row(
@@ -380,7 +538,7 @@ private fun LazyListScope.countryCameraResults(
 
         Spacer(Modifier.height(10.dp))
         Text(
-            if (loading && cameras.isEmpty()) "LOADING CAMERAS..." else "${cameras.size} CAMERAS",
+            if (loading && cameras.isEmpty()) "LOADING CAMERAS..." else "${cameras.size} CAMERAS • PAGE $page",
             color = neonGreen,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
@@ -429,7 +587,8 @@ private fun LazyListScope.countryCameraResults(
                             title = cam.location ?: cam.ip ?: "Camera",
                             location = cam.location ?: "Unknown",
                             thumbnailUrl = cam.imageUrl,
-                            protocol = "mjpeg"
+                            protocol = "mjpeg",
+                            sourceLabel = "Country directory"
                         ),
                         onViewClick = { onViewClick(cam) },
                         onSaveClick = {
@@ -439,15 +598,32 @@ private fun LazyListScope.countryCameraResults(
                                 title = cam.location ?: cam.ip ?: "Camera",
                                 location = cam.location ?: "Unknown",
                                 thumbnailUrl = cam.imageUrl,
-                                protocol = "mjpeg"
+                                protocol = "mjpeg",
+                                sourceLabel = "Country directory"
                             ))
-                        }
+                        },
+                        onVerify = { onVerifyCamera(cam) },
+                        onDiagnostics = { onDiagnostics(cam) }
                     )
                 }
             }
             if (row.size == 1) Spacer(Modifier.weight(1f))
         }
         Spacer(Modifier.height(10.dp))
+    }
+
+    // Make pagination discoverable even if the automatic scroll listener does not fire.
+    if (hasMore && !loading && error == null) {
+        item {
+            OutlinedButton(
+                onClick = onLoadMore,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                border = BorderStroke(1.dp, neonGreen),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = neonGreen)
+            ) {
+                Text("LOAD 6 MORE CAMERAS", fontWeight = FontWeight.Bold)
+            }
+        }
     }
 
     if (loading) {
@@ -463,7 +639,9 @@ private fun LazyListScope.countryCameraResults(
 fun PublicCameraCard(
     camera: StreamSource,
     onViewClick: () -> Unit,
-    onSaveClick: () -> Unit
+    onSaveClick: () -> Unit,
+    onVerify: () -> Unit = {},
+    onDiagnostics: () -> Unit = {}
 ) {
     var thumbnailBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val thumbUrl = camera.bestThumbnailUrl()
@@ -563,21 +741,41 @@ fun PublicCameraCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                if (camera.sourceLabel.isNotBlank() || camera.verification != "Unchecked") {
+                    Text(
+                        text = listOf(camera.sourceLabel, camera.verification).filter { it.isNotBlank() }.joinToString(" • "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (camera.verification == "Unavailable") Color(0xFFFF6B6B) else Color(0xFF39FF14),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(4.dp))
 
                 Row(
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    TextButton(onClick = onSaveClick, contentPadding = PaddingValues(0.dp)) {
-                        Text("SAVE", fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    }
-                    IconButton(onClick = onViewClick, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = "View", tint = Color(0xFF39FF14))
+                    TextButton(
+                        onClick = onSaveClick,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(0.dp)
+                    ) { Text("SAVE", fontSize = 9.sp, fontWeight = FontWeight.Bold) }
+                    TextButton(
+                        onClick = onVerify,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(0.dp)
+                    ) { Text("CHECK", fontSize = 9.sp, fontWeight = FontWeight.Bold) }
+                    IconButton(onClick = onViewClick, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "View camera", tint = Color(0xFF39FF14))
                     }
                 }
+                TextButton(
+                    onClick = onDiagnostics,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(0.dp)
+                ) { Text("INFO / DIAGNOSTICS", fontSize = 9.sp, fontWeight = FontWeight.Bold) }
             }
         }
     }
@@ -682,7 +880,9 @@ private fun LazyListScope.gitHubResults(
     neonGreen: Color,
     onBack: () -> Unit,
     onViewClick: (StreamSource) -> Unit,
-    onSaveClick: (StreamSource) -> Unit
+    onSaveClick: (StreamSource) -> Unit,
+    onVerify: (StreamSource) -> Unit,
+    onDiagnostics: (StreamSource) -> Unit
 ) {
     item {
         Row(
@@ -738,7 +938,9 @@ private fun LazyListScope.gitHubResults(
                         PublicCameraCard(
                             camera = cam,
                             onViewClick = { onViewClick(cam) },
-                            onSaveClick = { onSaveClick(cam) }
+                            onSaveClick = { onSaveClick(cam) },
+                            onVerify = { onVerify(cam) },
+                            onDiagnostics = { onDiagnostics(cam) }
                         )
                     }
                 }
@@ -755,9 +957,12 @@ private fun LazyListScope.opentopiaResults(
     loading: Boolean,
     error: String?,
     neonGreen: Color,
+    heading: String = "OPENTOPIA RESULTS",
     onBack: () -> Unit,
     onViewClick: (StreamSource) -> Unit,
-    onSaveClick: (StreamSource) -> Unit
+    onSaveClick: (StreamSource) -> Unit,
+    onVerify: (StreamSource) -> Unit,
+    onDiagnostics: (StreamSource) -> Unit
 ) {
     item {
         Row(
@@ -794,7 +999,7 @@ private fun LazyListScope.opentopiaResults(
     } else {
         item {
             Text(
-                "OPENTOPIA RESULTS (${cameras.size})",
+                "$heading (${cameras.size})",
                 color = neonGreen,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
@@ -813,7 +1018,9 @@ private fun LazyListScope.opentopiaResults(
                         PublicCameraCard(
                             camera = cam,
                             onViewClick = { onViewClick(cam) },
-                            onSaveClick = { onSaveClick(cam) }
+                            onSaveClick = { onSaveClick(cam) },
+                            onVerify = { onVerify(cam) },
+                            onDiagnostics = { onDiagnostics(cam) }
                         )
                     }
                 }

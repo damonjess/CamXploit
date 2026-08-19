@@ -20,7 +20,12 @@ object InsecamScraper {
     /**
      * Scrapes a specific Insecam country page for a list of cameras.
      */
-    suspend fun scrapeListing(countryCode: String, page: Int = 1): List<InsecamClient.PublicCamera> = withContext(Dispatchers.IO) {
+    data class ListingPage(
+        val cameras: List<InsecamClient.PublicCamera>,
+        val hasNextPage: Boolean
+    )
+
+    suspend fun scrapeListing(countryCode: String, page: Int = 1): ListingPage = withContext(Dispatchers.IO) {
         try {
             val url = if (page == 1) {
                 "http://www.insecam.org/en/bycountry/${countryCode.uppercase()}/"
@@ -58,10 +63,17 @@ object InsecamScraper {
                     }
                 }
             }
-            results
+            val hasNextPage = doc.select("a[href*='page=']").any { link ->
+                val href = link.attr("href")
+                val text = link.text().trim()
+                href.contains("page=${page + 1}") || text.equals("next", ignoreCase = true) || text == ">"
+            }
+            // Some directory pages do not expose a usable Next link. Preserve the known
+            // six-card page fallback so users can still request the next page; an empty
+            // next response then cleanly removes the Load More control.
+            ListingPage(results, hasNextPage || results.size >= 6)
         } catch (e: Exception) {
-            e.printStackTrace()
-            emptyList()
+            throw IllegalStateException("Country directory request failed for ${countryCode.uppercase()}: ${e.message}", e)
         }
     }
 

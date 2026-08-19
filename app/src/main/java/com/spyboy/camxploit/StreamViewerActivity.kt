@@ -166,8 +166,12 @@ class StreamViewerActivity : ComponentActivity() {
             }
         }
 
+        // HTTP camera URLs are classified by StreamPlayerScreen before playback begins.
+        // Starting them here can create a second MJPEG connection or treat HTTP as RTSP.
         if (savedInstanceState == null) {
-            streamSource?.let { viewModel.startStream(it) }
+            streamSource
+                ?.takeIf { it.protocol.equals("rtsp", true) || it.protocol.equals("rtmp", true) || it.protocol.equals("onvif", true) }
+                ?.let { viewModel.startStream(it) }
         }
     }
 
@@ -327,10 +331,24 @@ fun StreamPlayerScreen(
             resolvedUrl = result.url
             isScraping = false
             isLoading = false
-            
-            // Sync with ViewModel
+
+            // Use one effective protocol for both playback state and renderer selection.
+            // A declared MJPEG source is retained when the probe is inconclusive, but an
+            // explicit snapshot response always takes precedence.
             if (source != null) {
-                viewModel.startStream(source.copy(url = result.url))
+                val declaredMjpeg = source.protocol.equals("mjpeg", ignoreCase = true)
+                val effectiveProtocol = when {
+                    result.isMjpeg || (declaredMjpeg && !result.isSnapshot) -> "mjpeg"
+                    result.isSnapshot -> "snapshot"
+                    else -> source.protocol
+                }
+                val effectiveSource = source.copy(url = result.url, protocol = effectiveProtocol)
+
+                if (effectiveProtocol.equals("mjpeg", ignoreCase = true)) {
+                    viewModel.prepareMjpegPlayback(effectiveSource)
+                } else {
+                    viewModel.startStream(effectiveSource)
+                }
             }
         }
     }
@@ -414,10 +432,13 @@ fun StreamPlayerScreen(
                                 fontSize = 14.sp,
                                 modifier = Modifier.padding(16.dp)
                             )
-                            Button(onClick = { 
+                            Button(onClick = {
+                                val useNativeMjpeg = source?.protocol.equals("mjpeg", ignoreCase = true) || probeResult?.isMjpeg == true
                                 hasError = false
                                 probeResult = null
-                                onRetry() 
+                                // The native player reconnects when it re-enters composition. Avoid
+                                // restarting the ViewModel MJPEG decoder in parallel.
+                                if (!useNativeMjpeg) onRetry()
                             }) {
                                 Text("Retry")
                             }
@@ -429,10 +450,13 @@ fun StreamPlayerScreen(
                         
                         when {
                             // True MJPEG stream → native decoder
-                            result?.isMjpeg == true || lowerUrl.contains(".mjpg") -> {
+                            result?.isMjpeg == true ||
+                                (source?.protocol.equals("mjpeg", ignoreCase = true) && result?.isSnapshot != true) ||
+                                lowerUrl.contains(".mjpg") -> {
                                 FastMjpegPlayer(
                                     url = resolvedUrl,
                                     modifier = Modifier.fillMaxSize(),
+                                    onFrame = viewModel::onMjpegFrame,
                                     onError = { hasError = true }
                                 )
                             }

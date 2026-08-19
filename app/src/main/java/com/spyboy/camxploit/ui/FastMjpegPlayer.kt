@@ -26,6 +26,7 @@ import java.net.URL
 fun FastMjpegPlayer(
     url: String,
     modifier: Modifier = Modifier,
+    onFrame: (Bitmap) -> Unit = {},
     onError: () -> Unit = {}
 ) {
     var frame by remember { mutableStateOf<Bitmap?>(null) }
@@ -68,6 +69,8 @@ fun FastMjpegPlayer(
                                 frame = bmp
                                 isBuffering = false
                             }
+                            // Invoke on the decoder coroutine so recording work never blocks Compose.
+                            onFrame(bmp)
                         }
                         buffer.reset()
                     } else {

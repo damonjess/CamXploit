@@ -36,8 +36,7 @@ object GitHubMotionJpegClient {
 
             parseMarkdown(markdown)
         } catch (e: Exception) {
-            e.printStackTrace()
-            emptyList()
+            throw IllegalStateException("GitHub MotionJPEG source failed: ${e.message}", e)
         }
     }
 
@@ -94,19 +93,23 @@ object GitHubMotionJpegClient {
                 if (isStream) {
                     val protocol = when {
                         url.startsWith("rtsp://") -> "rtsp"
-                        else -> "mjpeg"
+                        url.contains("mjpg", ignoreCase = true) ||
+                            url.contains("mjpeg", ignoreCase = true) ||
+                            url.contains("MotionJpeg", ignoreCase = true) -> "mjpeg"
+                        else -> "http" // Let the feed probe distinguish snapshots from wrapper pages.
                     }
 
                     sources.add(
                         StreamSource(
-                            id = UUID.randomUUID().toString(),
+                            id = UUID.nameUUIDFromBytes(url.toByteArray(Charsets.UTF_8)).toString(),
                             url = url,
                             pageUrl = url,
                             streamUrl = url,
-                            thumbnailUrl = if (protocol == "mjpeg") url else null,
+                            thumbnailUrl = if (protocol == "rtsp") null else url,
                             title = if (linkText.isNotBlank() && !linkText.contains("Stream URL", ignoreCase = true)) linkText else currentTitle,
                             location = "GitHub Curated",
-                            protocol = protocol
+                            protocol = protocol,
+                            sourceLabel = "GitHub MotionJPEG"
                         )
                     )
                 }

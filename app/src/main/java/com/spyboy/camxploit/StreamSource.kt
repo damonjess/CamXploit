@@ -19,7 +19,11 @@ data class StreamSource(
     val password: String? = null,
     val brand: String? = null,
     val pageUrl: String = "",
-    val streamUrl: String = ""
+    val streamUrl: String = "",
+    val sourceLabel: String = "",
+    val verification: String = "Unchecked",
+    val contentType: String = "",
+    val verifiedAt: Long = 0L
 ) : Parcelable {
 
     fun getAuthenticatedUrl(): String {
