@@ -659,7 +659,7 @@ fun CamGuardianApp() {
                         },
                         onHostClick = { selectedHostForDetail = it }
                     )
-                    5 -> StormBreakerScreen(stormViewModel)
+                    5 -> StormBreakerScreen(stormViewModel, consoleIpInput)
                     6 -> SavedCamerasTab({ cam -> StreamViewerActivity.launch(context, cam.toStreamSource(), cam.ip) }, { consoleIpInput = it; selectedTab = 0 })
                     7 -> ToolsScreen()
                     8 -> SentinelScreen(viewModel = sentinelViewModel)
