@@ -32,6 +32,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
 
+import androidx.compose.ui.platform.LocalContext
+
 // ─── Theme Tokens ─────────────────────────────────────────────
 private val Background   = Color(0xFF0A0A0A)
 private val Surface      = Color(0xFF141414)
@@ -45,14 +47,20 @@ private val TextMuted    = Color(0xFF888888)
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StormBreakerScreen(
-    viewModel: StormViewModel
+    viewModel: StormViewModel,
+    defaultTargetIp: String = ""
 ) {
+    val context     = LocalContext.current
     val config      by viewModel.config.collectAsState()
     val metrics     by viewModel.metrics.collectAsState()
     val logs        by viewModel.logs.collectAsState()
     val validation  by viewModel.validationState.collectAsState()
     val report      by viewModel.report.collectAsState()
     val isRunning   = metrics.isRunning
+
+    LaunchedEffect(defaultTargetIp) {
+        viewModel.setTargetIpIfEmpty(defaultTargetIp)
+    }
     
     val scrollState = rememberScrollState()
     val haptic = LocalHapticFeedback.current
@@ -200,8 +208,8 @@ fun StormBreakerScreen(
                 Spacer(modifier = Modifier.height(12.dp))
                 CompactReportCard(
                     report = report,
-                    onSave = { viewModel.saveReport() },
-                    onExport = { viewModel.exportReport() }
+                    onSave = { viewModel.saveReport(context) },
+                    onExport = { viewModel.exportReport(context) }
                 )
             }
         }
