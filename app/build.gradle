@@ -27,14 +27,9 @@ android {
             if (System.getenv("GITHUB_ACTIONS") == "true") {
                 buildPython "python3.12"
             } else {
-                buildPython "py", "-3.12"
+                buildPython "python3"
             }
             version "3.12"
-            pip {
-                install "requests"
-                install "XlsxWriter"
-                install "beautifulsoup4"
-            }
         }
     }
 
