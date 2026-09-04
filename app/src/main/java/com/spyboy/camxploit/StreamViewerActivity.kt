@@ -545,6 +545,7 @@ fun WebPlayer(
         factory = {
             WebView(context).apply {
                 webViewRef = this
+                setBackgroundColor(0xFF000000.toInt())
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT

@@ -14,6 +14,7 @@ import android.graphics.pdf.PdfDocument
 import android.graphics.pdf.PdfDocument.PageInfo
 import android.util.Base64
 import android.view.TextureView
+import android.view.View
 import android.webkit.*
 import android.widget.Toast
 import android.widget.ImageButton
@@ -99,7 +100,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { CamGuardianApp() }
+        setContent {
+            MaterialTheme(colorScheme = darkColorScheme()) {
+                CamGuardianApp()
+            }
+        }
     }
 }
 
@@ -771,22 +776,192 @@ fun StreamTab(
     recordingDuration: Long, 
     onToggleRecording: () -> Unit
 ) {
-    val context = LocalContext.current; val scope = rememberCoroutineScope(); var currentExoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }; var currentWebView by remember { mutableStateOf<WebView?>(null) }; var currentTextureView by remember { mutableStateOf<TextureView?>(null) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var currentExoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
+    var currentWebView by remember { mutableStateOf<WebView?>(null) }
+    var currentTextureView by remember { mutableStateOf<TextureView?>(null) }
+
     DisposableEffect(selectedUrl) { onDispose { currentExoPlayer?.release(); currentExoPlayer = null } }
-    val streamUrls = remember(terminalText) { val start = terminalText.indexOf("===LINKS_START==="); val end = terminalText.indexOf("===LINKS_END==="); if (start != -1 && end != -1) terminalText.substring(start, end).lines().filter { it.contains("|") }.mapNotNull { val p = it.split("|"); if (p.size >= 2) p[1].trim() to p[0].trim() else null }.distinctBy { it.first } else emptyList() }
-    LaunchedEffect(streamUrls) { if (selectedUrl.isEmpty() && streamUrls.isNotEmpty()) onUrlSelected(streamUrls.first().first) }
+
+    val streamUrls = remember(terminalText) {
+        val start = terminalText.indexOf("===LINKS_START===")
+        val end = terminalText.indexOf("===LINKS_END===")
+        if (start != -1 && end != -1) {
+            terminalText.substring(start, end).lines().filter { it.contains("|") }.mapNotNull {
+                val p = it.split("|")
+                if (p.size >= 2) p[1].trim() to p[0].trim() else null
+            }.distinctBy { it.first }
+        } else emptyList()
+    }
+
+    LaunchedEffect(streamUrls) {
+        if (selectedUrl.isEmpty() && streamUrls.isNotEmpty()) {
+            onUrlSelected(streamUrls.first().first)
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) { 
             Text(text = "STREAM VIEWER", color = Color.Magenta, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-            if (isRecording) { Row(verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(8.dp).background(Color.Red, CircleShape)); Spacer(Modifier.width(4.dp)); Text(text = "REC ${String.format("%02d:%02d", recordingDuration / 60, recordingDuration % 60)}", color = Color.Red, fontSize = 12.sp) } }
+            if (isRecording) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).background(Color.Red, CircleShape))
+                    Spacer(Modifier.width(4.dp))
+                    Text(text = "REC ${String.format("%02d:%02d", recordingDuration / 60, recordingDuration % 60)}", color = Color.Red, fontSize = 12.sp)
+                }
+            }
         }
+
+        Spacer(Modifier.height(8.dp))
+
+        if (streamUrls.isNotEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                streamUrls.forEach { (url, label) ->
+                    val isSelected = url == selectedUrl
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { onUrlSelected(url) },
+                        label = { Text(label, fontSize = 11.sp, color = if (isSelected) Color.Black else Color.Green) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color.Green,
+                            containerColor = Color(0xFF111111)
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            borderColor = Color(0xFF333333),
+                            selectedBorderColor = Color.Green,
+                            enabled = true,
+                            selected = isSelected
+                        )
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
         if (selectedUrl.isNotEmpty()) {
-            val auth = buildAuthUrl(selectedUrl, extractCredentials(terminalText).first, extractCredentials(terminalText).second); Column(Modifier.weight(1f)) {
-                if (selectedUrl.startsWith("rtsp")) { AndroidView(factory = { ctx -> ExoPlayer.Builder(ctx).build().apply { setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).setDebugLoggingEnabled(true).createMediaSource(MediaItem.fromUri(auth))); prepare(); playWhenReady = true; currentExoPlayer = this }.let { PlayerView(ctx).apply { player = it; currentTextureView = TextureView(ctx); try { this.javaClass.getMethod("setVideoSurfaceView", android.view.View::class.java).invoke(this, currentTextureView) } catch (e: Exception) {} } } }, Modifier.fillMaxWidth().weight(1f)) }
-                else { AndroidView(factory = { ctx -> WebView(ctx).apply { currentWebView = this; settings.javaScriptEnabled = true; loadUrl(auth) } }, Modifier.fillMaxSize().weight(1f)) }
-                Row(Modifier.align(Alignment.CenterHorizontally).padding(8.dp), Arrangement.spacedBy(16.dp)) {
-                    IconButton(onClick = { scope.launch { val b = if (selectedUrl.startsWith("rtsp")) currentTextureView?.getBitmap() else currentWebView?.let { val bmp = Bitmap.createBitmap(it.width, it.height, Bitmap.Config.ARGB_8888); it.draw(Canvas(bmp)); bmp }; b?.let { if (saveBitmapToGallery(context, it)) Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() } } }) { Icon(Icons.Default.PhotoCamera, null, tint = Color.Cyan) }
-                    IconButton(onClick = { onToggleRecording() }) { Icon(if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord, null, tint = Color.White) }
+            val (user, pass) = extractCredentials(terminalText)
+            val auth = buildAuthUrl(selectedUrl, user, pass)
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .background(Color.Black, RoundedCornerShape(8.dp))
+                    .border(1.dp, Color(0xFF222222), RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(8.dp))
+            ) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .background(Color.Black)
+                ) {
+                    if (selectedUrl.startsWith("rtsp")) {
+                        AndroidView(
+                            factory = { ctx ->
+                                ExoPlayer.Builder(ctx).build().apply {
+                                    setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).setDebugLoggingEnabled(true).createMediaSource(MediaItem.fromUri(auth)))
+                                    prepare()
+                                    playWhenReady = true
+                                    currentExoPlayer = this
+                                }.let { player ->
+                                    PlayerView(ctx).apply {
+                                        this.player = player
+                                        currentTextureView = TextureView(ctx)
+                                        try {
+                                            this.javaClass.getMethod("setVideoSurfaceView", View::class.java).invoke(this, currentTextureView)
+                                        } catch (e: Exception) {}
+                                    }
+                                }
+                            },
+                            Modifier.fillMaxSize()
+                        )
+                    } else {
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    currentWebView = this
+                                    setBackgroundColor(android.graphics.Color.BLACK)
+                                    settings.apply {
+                                        javaScriptEnabled = true
+                                        domStorageEnabled = true
+                                        useWideViewPort = true
+                                        loadWithOverviewMode = true
+                                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                    }
+                                    loadUrl(auth)
+                                }
+                            },
+                            Modifier.fillMaxSize()
+                        )
+                    }
+                }
+
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF0D0D0D))
+                        .padding(12.dp),
+                    Arrangement.SpaceEvenly,
+                    Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                val b = if (selectedUrl.startsWith("rtsp")) currentTextureView?.getBitmap() else currentWebView?.let {
+                                    val bmp = Bitmap.createBitmap(it.width, it.height, Bitmap.Config.ARGB_8888)
+                                    it.draw(Canvas(bmp))
+                                    bmp
+                                }
+                                b?.let { if (saveBitmapToGallery(context, it)) Toast.makeText(context, "📷 Snapshot Saved", Toast.LENGTH_SHORT).show() }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20)),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Icon(Icons.Default.PhotoCamera, null, tint = Color.Green, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("SNAP", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    Button(
+                        onClick = { onToggleRecording() },
+                        colors = ButtonDefaults.buttonColors(containerColor = if (isRecording) Color(0xFF8B0000) else Color(0xFF222222)),
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, if (isRecording) Color.Red else Color(0xFF444444))
+                    ) {
+                        Icon(
+                            if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
+                            null,
+                            tint = if (isRecording) Color.White else Color.Red,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (isRecording) "STOP REC" else "RECORD", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        } else {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .background(Color(0xFF0A0A0A), RoundedCornerShape(8.dp))
+                    .border(1.dp, Color(0xFF1A1A1A), RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Videocam, null, tint = Color.DarkGray, modifier = Modifier.size(64.dp))
+                    Spacer(Modifier.height(12.dp))
+                    Text("NO ACTIVE STREAM FEED", color = Color.Gray, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Run target scan in CONSOLE or LAN tab to discover streams", color = Color.DarkGray, fontSize = 11.sp)
                 }
             }
         }
@@ -795,8 +970,33 @@ fun StreamTab(
 
 @Composable
 fun MiniPlayer(url: String, user: String, pass: String) {
-    val auth = buildAuthUrl(url, user, pass); if (url.startsWith("rtsp")) AndroidView(factory = { ctx -> PlayerView(ctx).apply { useController = false; player = ExoPlayer.Builder(ctx).build().apply { setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).createMediaSource(MediaItem.fromUri(auth))); prepare(); play() } } }, Modifier.fillMaxSize())
-    else AndroidView(factory = { ctx -> WebView(ctx).apply { settings.javaScriptEnabled = true; loadUrl(auth) } }, Modifier.fillMaxSize())
+    val auth = buildAuthUrl(url, user, pass)
+    if (url.startsWith("rtsp")) {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    useController = false
+                    player = ExoPlayer.Builder(ctx).build().apply {
+                        setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).createMediaSource(MediaItem.fromUri(auth)))
+                        prepare()
+                        play()
+                    }
+                }
+            },
+            Modifier.fillMaxSize()
+        )
+    } else {
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                    settings.javaScriptEnabled = true
+                    loadUrl(auth)
+                }
+            },
+            Modifier.fillMaxSize()
+        )
+    }
 }
 
 @Composable
