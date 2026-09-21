@@ -1504,6 +1504,7 @@ class Color:
     RESET = '\033[0m'
 
 def scan_single_target(target_ip, specific_port=None):
+    global storm_results
     print(f"\n{SCAN} Scanning target IP: {target_ip}")
 
     # 1. Geolocation & OSINT (New)
@@ -1782,7 +1783,6 @@ def scan_single_target(target_ip, specific_port=None):
             print("===LINKS_END===")
 
         # Append to storm_results for Kotlin to retrieve
-        global storm_results
         storm_results.append({
             "ip": target_ip,
             "mac": mac,
@@ -1794,6 +1794,15 @@ def scan_single_target(target_ip, specific_port=None):
         })
     else:
         print(f"  {ERR} No open ports found on {target_ip}.")
+        storm_results.append({
+            "ip": target_ip,
+            "mac": mac,
+            "vendor": vendor,
+            "brand": "Unknown",
+            "open_ports": [],
+            "detected_links": [],
+            "success_cred": None
+        })
 
 def discover_mdns():
     """
@@ -2055,7 +2064,67 @@ def get_local_ip():
     except:
         return "127.0.0.1"
 
+def print_scan_summary(targets):
+    """Prints a structured summary report after scan completion."""
+    global storm_results
+
+    total_targets = len(targets) if targets else 0
+    responsive_targets = [r for r in storm_results if r.get("open_ports")]
+    total_responsive = len(responsive_targets)
+
+    total_ports = sum(len(r.get("open_ports", [])) for r in storm_results)
+
+    all_links = []
+    for r in storm_results:
+        all_links.extend(r.get("detected_links", []))
+    total_streams = len(all_links)
+
+    cracked_targets = [r for r in storm_results if r.get("success_cred")]
+    total_cracked = len(cracked_targets)
+
+    print("\n" + "=" * 54)
+    print("           📋 CAMXPLOIT SCAN SUMMARY REPORT")
+    print("=" * 54)
+    print(f"  🎯 Targets Evaluated  : {total_targets}")
+    print(f"  🟢 Responsive Hosts   : {total_responsive}")
+    print(f"  🔌 Open Ports Found   : {total_ports}")
+    print(f"  🎥 Discovered Streams : {total_streams}")
+    print(f"  🔑 Credentials Cracked: {total_cracked}")
+    print("─" * 54)
+
+    if responsive_targets:
+        print("  📊 AUDIT DETAILS BY TARGET:")
+        for res in responsive_targets:
+            ip = res.get("ip", "Unknown")
+            brand = res.get("brand", "Generic")
+            mac = res.get("mac", "Unknown")
+            vendor = res.get("vendor", "Unknown")
+            ports = res.get("open_ports", [])
+            links = res.get("detected_links", [])
+            cred = res.get("success_cred")
+
+            ports_str = ", ".join(str(p) for p in sorted(ports)) if ports else "None"
+            hw_info = f"{mac} ({vendor})" if mac != "Unknown" else vendor
+
+            print(f"\n  📌 Target IP         : {ip}")
+            print(f"     • Hardware / MAC  : {hw_info}")
+            print(f"     • Camera Brand    : {brand}")
+            print(f"     • Open Port(s)    : {ports_str}")
+            print(f"     • Camera Streams  : {len(links)} link(s) discovered")
+
+            if cred:
+                user, pwd, url = cred
+                cred_display = "UNPASSWORDED" if user == "" and pwd == "" else f"{user}:{pwd}"
+                print(f"     • Security Status : 🔥 CRACKED ({cred_display}) @ {url}")
+            else:
+                print(f"     • Security Status : 🛡️ Protected / No Default Logins Cracked")
+    else:
+        print("  ℹ️ No responsive camera hosts or open ports were detected.")
+
+    print("=" * 54 + "\n")
+
 def main(target_input=None):
+    clear_storm_results()
     print_banner()
     if not target_input: return
 
@@ -2073,6 +2142,8 @@ def main(target_input=None):
             port = int(parts[1].strip())
             print(f"{INFO} Target: {ip} | Targeted Port: {port}")
             scan_single_target(ip, specific_port=port)
+            print(f"\n{DONE} ALL SCANS COMPLETE.")
+            print_scan_summary([ip])
             return
 
         if "/" in target_input:
@@ -2131,6 +2202,7 @@ def main(target_input=None):
             scan_single_target(ip)
 
     print(f"\n{DONE} ALL SCANS COMPLETE.")
+    print_scan_summary(targets)
 
 def start_remote_relay(target_ip, port):
     """
