@@ -14,29 +14,51 @@ object OpentopiaScraper {
     private const val TAG = "OpentopiaScraper"
     private const val BASE_URL = "https://www.opentopia.com"
     private const val TIMEOUT_MS = 15_000
-    private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-    /** Fetch camera listings from the main page and category pages */
+    /** Fetch camera listings from the main page and paginated directory pages */
     suspend fun fetchCameras(limit: Int = 50): List<StreamSource> = withContext(Dispatchers.IO) {
         val cameras = mutableListOf<StreamSource>()
-        val sources = listOf("$BASE_URL/", "$BASE_URL/hottest/", "$BASE_URL/newest/", "$BASE_URL/popular/")
+        val seenPageUrls = mutableSetOf<String>()
 
-        try {
-            for (sourceUrl in sources) {
-                if (cameras.size >= limit) break
-                
-                val doc = Jsoup.connect(sourceUrl)
+        // Construct list of page URLs to attempt
+        val sources = mutableListOf("$BASE_URL/", "$BASE_URL/showlist.php")
+        val numPagesNeeded = (limit / 10).coerceAtLeast(5)
+        for (p in 1..numPagesNeeded) {
+            sources.add("$BASE_URL/showlist.php?p=$p")
+        }
+
+        for (sourceUrl in sources.distinct()) {
+            if (cameras.size >= limit) break
+
+            try {
+                val response = Jsoup.connect(sourceUrl)
                     .userAgent(USER_AGENT)
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+                    .header("Accept-Language", "en-US,en;q=0.5")
+                    .header("Referer", BASE_URL)
                     .timeout(TIMEOUT_MS)
                     .followRedirects(true)
-                    .get()
+                    .ignoreHttpErrors(true)
+                    .execute()
+
+                if (response.statusCode() != 200) {
+                    Log.w(TAG, "Source '$sourceUrl' returned HTTP status ${response.statusCode()}")
+                    continue
+                }
+
+                val doc = response.parse()
 
                 // Try multiple listing strategies
                 val strategies = listOf(
-                    "table tr",
-                    ".camera", ".webcam", ".cam-item", ".listing-item",
-                    ".col-md-4", ".col-sm-6", ".col-lg-3",
-                    "[class*=cam]", "[class*=webcam]"
+                    "a[href*='showcam']",
+                    "a[href*='site']",
+                    "a[href*='target']",
+                    "a[href*='webcam']",
+                    "a[href*='camera']",
+                    ".thumbnail", ".camera", ".webcam", ".cam-item", ".listing-item",
+                    ".col-md-4", ".col-sm-6", ".col-lg-3", "table tr",
+                    "[class*=cam]", "a:has(img)"
                 )
 
                 for (selector in strategies) {
@@ -45,20 +67,19 @@ object OpentopiaScraper {
                     Log.d(TAG, "Source '$sourceUrl' Strategy '$selector' found ${elements.size} elements")
                     for (el in elements) {
                         val cam = parseListingElement(el) ?: continue
-                        if (cameras.none { it.pageUrl == cam.pageUrl }) {
+                        if (seenPageUrls.add(cam.pageUrl)) {
                             cameras.add(cam)
                         }
                         if (cameras.size >= limit) break
                     }
                 }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to fetch listing from $sourceUrl", e)
             }
-
-            Log.d(TAG, "Total cameras fetched: ${cameras.size}")
-            cameras
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to fetch listings", e)
-            throw IllegalStateException("Opentopia source failed after loading ${cameras.size} result(s): ${e.message}", e)
         }
+
+        Log.d(TAG, "Total cameras fetched: ${cameras.size}")
+        cameras
     }
 
     /**
@@ -68,11 +89,22 @@ object OpentopiaScraper {
     suspend fun scrapeDetailPage(detailUrl: String): Pair<String, Boolean>? = withContext(Dispatchers.IO) {
         try {
             Log.d(TAG, "Scraping detail page: $detailUrl")
-            val doc = Jsoup.connect(detailUrl)
+            val response = Jsoup.connect(detailUrl)
                 .userAgent(USER_AGENT)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+                .header("Accept-Language", "en-US,en;q=0.5")
+                .header("Referer", BASE_URL)
                 .timeout(TIMEOUT_MS)
                 .followRedirects(true)
-                .get()
+                .ignoreHttpErrors(true)
+                .execute()
+
+            if (response.statusCode() != 200) {
+                Log.w(TAG, "Detail page '$detailUrl' returned HTTP status ${response.statusCode()}")
+                return@withContext null
+            }
+
+            val doc = response.parse()
 
             // Log the page title to confirm we got the right page
             Log.d(TAG, "Page title: ${doc.title()}")
@@ -111,24 +143,24 @@ object OpentopiaScraper {
             // Strategy 3: Any image in a "cam" named container that isn't a logo
             candidates += doc.select("[class*=cam] img, [id*=cam] img").mapNotNull { it.attr("src") }
 
-            // Strategy 3: Iframes (often embed the real stream)
+            // Strategy 4: Iframes (often embed the real stream)
             candidates += doc.select("iframe").mapNotNull { 
                 it.attr("src").takeIf { src -> src.isNotBlank() && !src.contains("google", ignoreCase = true) }
             }
 
-            // Strategy 4: Meta refresh
+            // Strategy 5: Meta refresh
             doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")
                 ?.substringAfter("url=", "")
                 ?.takeIf { it.isNotBlank() }
                 ?.let { candidates += it }
 
-            // Strategy 5: Links to direct streams
+            // Strategy 6: Links to direct streams
             candidates += doc.select("a").mapNotNull { a ->
                 val href = a.attr("href")
                 if (href.contains("mjpg") || href.contains("mjpeg") || href.contains("stream")) href else null
             }
 
-            // Strategy 6: Any image that points to an external IP (not opentopia assets)
+            // Strategy 7: Any image that points to an external IP (not opentopia assets)
             candidates += allImages.mapNotNull { img ->
                 val src = img.attr("src")
                 if (src.contains(":") && (src.startsWith("http") || src.startsWith("//")) 
@@ -195,28 +227,50 @@ object OpentopiaScraper {
     }
 
     private fun parseListingElement(el: Element): StreamSource? {
-        val img = el.selectFirst("img") ?: return null
-        val thumbUrl = resolveUrl(img.attr("src"))
-        val title = img.attr("alt").ifBlank { img.attr("title") }.ifBlank { "Live Camera" }
+        val img = if (el.tagName() == "img") el else (el.selectFirst("img") ?: el.closest("a")?.selectFirst("img") ?: el.parent()?.selectFirst("img"))
+        val link = if (el.tagName() == "a") el else (el.closest("a") ?: el.selectFirst("a") ?: el.parent()?.selectFirst("a") ?: el.parent()?.closest("a"))
 
-        val link = img.closest("a") ?: el.selectFirst("a") ?: return null
-        val pageUrl = resolveUrl(link.attr("href"))
-        if (pageUrl.isBlank() || !pageUrl.contains("opentopia", ignoreCase = true)) return null
+        val rawHref = link?.attr("href") ?: ""
+        if (rawHref.isBlank() || rawHref == "#" || rawHref.startsWith("javascript:")) return null
+
+        val pageUrl = resolveUrl(BASE_URL, rawHref)
+        val normalizedPageUrl = pageUrl.trimEnd('/')
+
+        if (normalizedPageUrl.isBlank() ||
+            normalizedPageUrl == BASE_URL ||
+            normalizedPageUrl == "$BASE_URL/index.php" ||
+            normalizedPageUrl == "$BASE_URL/showlist.php" ||
+            normalizedPageUrl == "$BASE_URL/search.php" ||
+            !normalizedPageUrl.contains("opentopia", ignoreCase = true)
+        ) {
+            return null
+        }
+
+        val rawThumb = img?.attr("src")?.ifBlank { img.attr("data-src") }
+            ?: img?.attr("data-original")
+        val thumbUrl = if (!rawThumb.isNullOrBlank()) resolveUrl(BASE_URL, rawThumb) else ""
+
+        val title = img?.attr("alt")?.ifBlank { null }
+            ?: img?.attr("title")?.ifBlank { null }
+            ?: link?.attr("title")?.ifBlank { null }
+            ?: el.selectFirst(".title, .name, h3, h4, h5, b, strong")?.text()?.ifBlank { null }
+            ?: "Live Camera"
 
         val location = el.selectFirst(".location, .country, .city, .loc, [class*=location], [class*=country]")?.text()?.trim()
             ?: el.parent()?.selectFirst(".location, .country, .city")?.text()?.trim()
+            ?: link?.selectFirst(".location, .country, .city")?.text()?.trim()
             ?: "Unknown"
 
         return StreamSource(
-            id = UUID.nameUUIDFromBytes(pageUrl.toByteArray(Charsets.UTF_8)).toString(),
-            url = pageUrl,
-            pageUrl = pageUrl,
+            id = UUID.nameUUIDFromBytes(normalizedPageUrl.toByteArray(Charsets.UTF_8)).toString(),
+            url = normalizedPageUrl,
+            pageUrl = normalizedPageUrl,
             streamUrl = "",
             thumbnailUrl = thumbUrl,
             title = title,
             location = location,
             protocol = "http",
-            sourceLabel = "Opentopia"
+            sourceLabel = "Opentopia",
         )
     }
 
@@ -225,10 +279,10 @@ object OpentopiaScraper {
         if (relative.startsWith("http")) return relative
         return try {
             URL(URL(base), relative).toString()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             relative
         }
     }
-
-    private fun resolveUrl(relative: String): String = resolveUrl(BASE_URL, relative)
 }
+
+

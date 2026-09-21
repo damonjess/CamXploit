@@ -24,6 +24,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.util.UnstableApi
@@ -82,25 +84,25 @@ fun OsintScreen(viewModel: OsintViewModel = viewModel()) {
             Tab(
                 selected = source is OsintViewModel.Source.PublicCams || source is OsintViewModel.Source.Opentopia || source is OsintViewModel.Source.GitHub,
                 onClick = { viewModel.selectSource(OsintViewModel.Source.PublicCams) },
-                text = { Text("PUBLIC CAMS", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                text = { Text("PUBLIC CAMS", fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false) },
                 icon = { Icon(Icons.Default.Public, null, modifier = Modifier.size(18.dp)) }
             )
             Tab(
                 selected = source is OsintViewModel.Source.MyCameras,
                 onClick = { viewModel.loadMyCameras() },
-                text = { Text("MY CAMS", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                text = { Text("MY CAMS", fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false) },
                 icon = { Icon(Icons.Default.Public, null, modifier = Modifier.size(18.dp)) }
             )
             Tab(
                 selected = source is OsintViewModel.Source.DirectStream,
                 onClick = { viewModel.selectSource(OsintViewModel.Source.DirectStream) },
-                text = { Text("DIRECT", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                text = { Text("DIRECT", fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false) },
                 icon = { Icon(Icons.Default.SettingsInputAntenna, null, modifier = Modifier.size(18.dp)) }
             )
             Tab(
                 selected = source is OsintViewModel.Source.Browser,
                 onClick = { viewModel.selectSource(OsintViewModel.Source.Browser) },
-                text = { Text("BROWSER", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                text = { Text("BROWSER", fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false) },
                 icon = { Icon(Icons.Default.Language, null, modifier = Modifier.size(18.dp)) }
             )
         }
@@ -113,25 +115,41 @@ fun OsintScreen(viewModel: OsintViewModel = viewModel()) {
                 is OsintViewModel.Source.PublicCams,
                 is OsintViewModel.Source.Opentopia,
                 is OsintViewModel.Source.GitHub,
-                is OsintViewModel.Source.MyCameras -> {
+                is OsintViewModel.Source.MyCameras,
+                is OsintViewModel.Source.Browser -> {
                     PublicCamsPanel(viewModel, neonGreen, darkCard)
                 }
                 is OsintViewModel.Source.DirectStream -> {
                     DirectStreamPanel()
                 }
-                is OsintViewModel.Source.Browser -> {
-                    InsecamBrowserScreen(
-                        onClose = { viewModel.selectSource(OsintViewModel.Source.PublicCams) },
-                        onStreamUrl = { url, title ->
-                            val streamSource = StreamSource(
-                                url = url,
-                                title = title,
-                                protocol = "mjpeg"
-                            )
-                            StreamViewerActivity.launch(context, streamSource, "Public")
-                        }
-                    )
-                }
+            }
+        }
+    }
+
+    // 4. FULL SCREEN BROWSER DIALOG OVERLAY
+    if (source is OsintViewModel.Source.Browser) {
+        Dialog(
+            onDismissRequest = { viewModel.selectSource(OsintViewModel.Source.PublicCams) },
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                decorFitsSystemWindows = false
+            )
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = Color.Black
+            ) {
+                InsecamBrowserScreen(
+                    onClose = { viewModel.selectSource(OsintViewModel.Source.PublicCams) },
+                    onStreamUrl = { url, title ->
+                        val streamSource = StreamSource(
+                            url = url,
+                            title = title,
+                            protocol = "mjpeg"
+                        )
+                        StreamViewerActivity.launch(context, streamSource, "Public")
+                    }
+                )
             }
         }
     }
