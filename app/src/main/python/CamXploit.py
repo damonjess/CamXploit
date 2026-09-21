@@ -1314,27 +1314,114 @@ def banner_grab(ip, port):
     return None
 
 def get_geolocation(ip):
-    """Fetches geolocation data for a public IP."""
+    """Fetches accurate geolocation data for public IP, or resolves Public WAN IP for private LAN addresses."""
     print(f"\n  [{GLOB}] Fetching Geolocation for {ip}...")
     try:
-        # Check if it's a private IP
-        if ipaddress.ip_address(ip).is_private:
-            print(f"       {INFO} Private IP detected (Local Network).")
-            return None
+        is_private = ipaddress.ip_address(ip).is_private
+        target_ip = ip
+        if is_private:
+            print(f"       {INFO} Private LAN IP detected ({ip}).")
+            print(f"       {INFO} Local network addresses do not have direct public geolocations.")
+            print(f"       {GLOB} Resolving Public WAN IP for this gateway...")
+            # Try resolving Public WAN IP
+            wan_ip = None
+            for wan_service in ["https://api.ipify.org", "https://icanhazip.com", "https://ifconfig.me/ip"]:
+                try:
+                    res = make_request(wan_service, timeout=4)
+                    if res.status_code == 200 and res.text.strip():
+                        candidate = res.text.strip()
+                        if not ipaddress.ip_address(candidate).is_private:
+                            wan_ip = candidate
+                            break
+                except Exception:
+                    continue
 
-        url = f"http://ip-api.com/json/{ip}?fields=status,message,country,countryCode,regionName,city,zip,lat,lon,timezone,isp,org,as,query"
-        r = make_request(url, timeout=5)
-        if r.status_code == 200:
-            data = json.loads(r.text)
-            if data['status'] == 'success':
-                print(f"       {GLOB} Location: {data.get('city')}, {data.get('regionName')}, {data.get('country')}")
-                print(f"       {INFO} ISP: {data.get('isp')} ({data.get('as')})")
-                print(f"       {INFO} Timezone: {data.get('timezone')}")
-                print(f"       {RADR} Coordinates: {data.get('lat')}, {data.get('lon')}")
-                print(f"       {GLOB} Maps: https://www.google.com/maps?q={data.get('lat')},{data.get('lon')}")
-                return data
+            if wan_ip:
+                print(f"       🌐 Gateway Public WAN IP: {wan_ip}")
+                target_ip = wan_ip
+            else:
+                print(f"       {INFO} Could not resolve Public WAN IP (offline or restricted).")
+                return None
+
+        # Fetch geolocation from reliable HTTPS services with fallback
+        geo_result = None
+
+        # Service 1: ipapi.co (HTTPS)
+        try:
+            url1 = f"https://ipapi.co/{target_ip}/json/"
+            r1 = make_request(url1, timeout=5)
+            if r1.status_code == 200:
+                d1 = json.loads(r1.text)
+                if not d1.get("error"):
+                    geo_result = {
+                        "ip": target_ip,
+                        "city": d1.get("city") or "Unknown",
+                        "region": d1.get("region") or "Unknown",
+                        "country": d1.get("country_name") or "Unknown",
+                        "isp": d1.get("org") or d1.get("asn") or "Unknown",
+                        "lat": d1.get("latitude"),
+                        "lon": d1.get("longitude"),
+                        "timezone": d1.get("timezone") or "Unknown"
+                    }
+        except Exception:
+            pass
+
+        # Service 2: ipinfo.io (HTTPS fallback)
+        if not geo_result:
+            try:
+                url2 = f"https://ipinfo.io/{target_ip}/json"
+                r2 = make_request(url2, timeout=5)
+                if r2.status_code == 200:
+                    d2 = json.loads(r2.text)
+                    loc = d2.get("loc", "").split(",")
+                    lat = loc[0] if len(loc) > 0 else None
+                    lon = loc[1] if len(loc) > 1 else None
+                    geo_result = {
+                        "ip": target_ip,
+                        "city": d2.get("city") or "Unknown",
+                        "region": d2.get("region") or "Unknown",
+                        "country": d2.get("country") or "Unknown",
+                        "isp": d2.get("org") or "Unknown",
+                        "lat": lat,
+                        "lon": lon,
+                        "timezone": d2.get("timezone") or "Unknown"
+                    }
+            except Exception:
+                pass
+
+        # Service 3: ip-api.com (Fallback)
+        if not geo_result:
+            try:
+                url3 = f"http://ip-api.com/json/{target_ip}?fields=status,message,country,regionName,city,lat,lon,timezone,isp,org,as,query"
+                r3 = make_request(url3, timeout=5)
+                if r3.status_code == 200:
+                    d3 = json.loads(r3.text)
+                    if d3.get("status") == "success":
+                        geo_result = {
+                            "ip": target_ip,
+                            "city": d3.get("city") or "Unknown",
+                            "region": d3.get("regionName") or "Unknown",
+                            "country": d3.get("country") or "Unknown",
+                            "isp": d3.get("isp") or d3.get("org") or "Unknown",
+                            "lat": d3.get("lat"),
+                            "lon": d3.get("lon"),
+                            "timezone": d3.get("timezone") or "Unknown"
+                        }
+            except Exception:
+                pass
+
+        if geo_result:
+            print(f"       {GLOB} Location: {geo_result['city']}, {geo_result['region']}, {geo_result['country']}")
+            print(f"       {INFO} ISP: {geo_result['isp']}")
+            print(f"       {INFO} Timezone: {geo_result['timezone']}")
+            if geo_result.get('lat') and geo_result.get('lon'):
+                print(f"       {RADR} Coordinates: {geo_result['lat']}, {geo_result['lon']}")
+                print(f"       {GLOB} Maps: https://www.google.com/maps?q={geo_result['lat']},{geo_result['lon']}")
+            return geo_result
+        else:
+            print(f"       {ERR} Geolocation lookups failed for {target_ip}.")
     except Exception as e:
-        print(f"       {ERR} Geolocation failed: {str(e)}")
+        print(f"       {ERR} Geolocation error: {str(e)}")
     return None
 
 def get_osint_links(ip):

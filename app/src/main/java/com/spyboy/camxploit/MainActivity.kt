@@ -58,6 +58,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -730,6 +731,9 @@ fun ConsoleTab(
     onStartScan: () -> Unit, 
     onStreamSelect: (String, String) -> Unit
 ) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF1A1A1A), RoundedCornerShape(8.dp)).background(Color(0xFF080808)).padding(horizontal = 12.dp, vertical = 4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -743,8 +747,43 @@ fun ConsoleTab(
             val actionModifier = Modifier.weight(1f).height(36.dp)
             val actionShape = RoundedCornerShape(4.dp)
             Button(onClick = onTerminalClear, modifier = actionModifier, colors = ButtonDefaults.buttonColors(Color(0xFF110000)), border = BorderStroke(1.dp, Color.Red.copy(alpha = 0.3f)), shape = actionShape, contentPadding = PaddingValues(0.dp)) { Icon(Icons.Default.Delete, null, tint = Color.Red, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(6.dp)); Text("CLEAR", color = Color.Red, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
-            Button(onClick = { }, modifier = actionModifier, colors = ButtonDefaults.buttonColors(Color(0xFF001122)), border = BorderStroke(1.dp, Color.Cyan.copy(alpha = 0.3f)), shape = actionShape, contentPadding = PaddingValues(0.dp)) { Icon(Icons.Default.ContentCopy, null, tint = Color.Cyan, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(6.dp)); Text("COPY", color = Color.Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
-            Button(onClick = { }, modifier = actionModifier, colors = ButtonDefaults.buttonColors(Color(0xFF002200)), border = BorderStroke(1.dp, Color.Green.copy(alpha = 0.3f)), shape = actionShape, contentPadding = PaddingValues(0.dp)) { Icon(Icons.Default.Share, null, tint = Color.Green, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(6.dp)); Text("EXPORT", color = Color.Green, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+            Button(
+                onClick = {
+                    if (terminalText.isNotBlank()) {
+                        clipboardManager.setText(AnnotatedString(terminalText))
+                        Toast.makeText(context, "Terminal log copied to clipboard", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Terminal is empty", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = actionModifier,
+                colors = ButtonDefaults.buttonColors(Color(0xFF001122)),
+                border = BorderStroke(1.dp, Color.Cyan.copy(alpha = 0.3f)),
+                shape = actionShape,
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Icon(Icons.Default.ContentCopy, null, tint = Color.Cyan, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("COPY", color = Color.Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+            Button(
+                onClick = {
+                    if (terminalText.isNotBlank()) {
+                        exportTerminalText(context, terminalText)
+                    } else {
+                        Toast.makeText(context, "Terminal is empty", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = actionModifier,
+                colors = ButtonDefaults.buttonColors(Color(0xFF002200)),
+                border = BorderStroke(1.dp, Color.Green.copy(alpha = 0.3f)),
+                shape = actionShape,
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Icon(Icons.Default.Share, null, tint = Color.Green, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("EXPORT", color = Color.Green, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
         }
         LaunchedEffect(scrollState.maxValue) { if (scrollState.value > scrollState.maxValue - 1000 || terminalText.length < 1000) scrollState.animateScrollTo(scrollState.maxValue) }
         val detectedLinks = remember(terminalText) { if (terminalText.contains("===LINKS_START===")) terminalText.substringAfter("===LINKS_START===").substringBefore("===LINKS_END===").lines().filter { it.contains("|") } else emptyList() }
@@ -1171,6 +1210,28 @@ fun captureScreenshot(context: Context, view: android.view.View, onCapture: (Bit
     view.draw(Canvas(bitmap))
     onCapture(bitmap)
     if (saveBitmapToGallery(context, bitmap)) Toast.makeText(context, "Screenshot Saved", Toast.LENGTH_SHORT).show() 
+}
+fun exportTerminalText(context: Context, text: String) {
+    if (text.isBlank()) {
+        Toast.makeText(context, "Terminal is empty", Toast.LENGTH_SHORT).show()
+        return
+    }
+    try {
+        val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
+        val file = File(dir, "CamXploit_Log_${System.currentTimeMillis()}.txt")
+        file.writeText(text)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "CamXploit Terminal Log")
+            putExtra(Intent.EXTRA_TEXT, text)
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Export Terminal Log"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show()
+    }
 }
 fun generateHtmlReport(context: Context, content: String) { saveContentToFile(context, "<html><body style='background:#000;color:#0F0;font-family:monospace'><pre>$content</pre></body></html>", "Report", "html") }
 fun generatePdfReport(context: Context, content: String) { 
