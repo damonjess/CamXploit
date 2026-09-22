@@ -447,12 +447,17 @@ fun StreamPlayerScreen(
                     else -> {
                         val result = probeResult
                         val lowerUrl = resolvedUrl.lowercase()
+                        val isMjpegUrl = result?.isMjpeg == true ||
+                                source?.protocol.equals("mjpeg", ignoreCase = true) ||
+                                lowerUrl.contains(".mjpg") || lowerUrl.contains(".mjpeg") ||
+                                lowerUrl.contains(".mjpq") || lowerUrl.contains("video.cgi") ||
+                                lowerUrl.contains("videostream") || lowerUrl.contains("mjpg") ||
+                                lowerUrl.contains("mjpeg") || lowerUrl.contains("nphmotionjpeg") ||
+                                lowerUrl.contains("action=stream")
                         
                         when {
                             // True MJPEG stream → native decoder
-                            result?.isMjpeg == true ||
-                                (source?.protocol.equals("mjpeg", ignoreCase = true) && result?.isSnapshot != true) ||
-                                lowerUrl.contains(".mjpg") -> {
+                            isMjpegUrl && result?.isSnapshot != true -> {
                                 FastMjpegPlayer(
                                     url = resolvedUrl,
                                     modifier = Modifier.fillMaxSize(),

@@ -131,8 +131,8 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
         
         // RTSP-specific factory for robustness (handles handshake, RTP over TCP/UDP)
         val rtspSource = RtspMediaSource.Factory()
-            .setDebugLoggingEnabled(true)
-            .setForceUseRtpTcp(true) // Common for camera stability over NAT/Firewalls
+            .setForceUseRtpTcp(true)
+            .setDebugLoggingEnabled(false)
             .createMediaSource(mediaItem)
         
         player.setMediaSource(rtspSource)

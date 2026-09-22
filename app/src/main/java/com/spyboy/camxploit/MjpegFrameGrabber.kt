@@ -8,87 +8,118 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
-class MjpegFrameGrabber(private val streamUrl: String) {
+/**
+ * Resilient MJPEG frame grabber.
+ * Parses multipart/x-mixed-replace stream by scanning for JPEG SOI (0xFFD8)
+ * and EOI (0xFFD9) markers with automatic retry reconnection for network resiliency.
+ */
+class MjpegFrameGrabber(
+    private val streamUrl: String,
+    private val frameDelayMs: Long = 0L
+) {
 
-    private val JPEG_SOI = byteArrayOf(0xFF.toByte(), 0xD8.toByte()) // JPEG start
-    private val JPEG_EOI = byteArrayOf(0xFF.toByte(), 0xD9.toByte()) // JPEG end
+    private class ReusableByteArrayOutputStream(initialCapacity: Int = 128 * 1024) :
+        ByteArrayOutputStream(initialCapacity)
 
     /**
-     * Connects to an MJPEG stream and emits decoded Bitmaps.
-     * Parses the multipart/x-mixed-replace stream by scanning for
-     * JPEG SOI/EOI markers directly — works regardless of boundary format.
+     * Connects to an MJPEG stream and emits decoded Bitmaps with automatic reconnect on transient errors.
      *
-     * @param onFrame  Called with each decoded Bitmap (called on IO thread)
-     * @param onError  Called if connection or parsing fails
+     * @param onFrame Called with each decoded Bitmap (called on IO thread)
+     * @param onError Called if connection or parsing repeatedly fails after retries
      */
     suspend fun stream(
         onFrame: suspend (Bitmap) -> Unit,
         onError: suspend (String) -> Unit
     ) = withContext(Dispatchers.IO) {
-        try {
-            val conn = (URL(streamUrl).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 5_000
-                readTimeout    = 10_000
-                requestMethod  = "GET"
-                setRequestProperty("Accept", "multipart/x-mixed-replace, image/jpeg")
-            }
+        val frameBuffer = ReusableByteArrayOutputStream(128 * 1024)
+        val readBuf = ByteArray(8192)
+        var retryCount = 0
+        val maxRetries = 5
 
-            if (conn.responseCode != 200) {
-                onError("HTTP ${conn.responseCode}")
-                return@withContext
-            }
+        while (isActive && retryCount < maxRetries) {
+            var conn: HttpURLConnection? = null
+            var frameReceivedInSession = false
 
-            val input: InputStream = conn.inputStream
-            val buffer = ByteArrayOutputStream()
-            val readBuf = ByteArray(4096)
+            try {
+                conn = (URL(streamUrl).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 8_000
+                    readTimeout = 15_000
+                    requestMethod = "GET"
+                    setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    setRequestProperty("Accept", "multipart/x-mixed-replace, image/jpeg, */*")
+                    setRequestProperty("Connection", "keep-alive")
+                    setRequestProperty("Cache-Control", "no-cache")
+                }
 
-            var inJpeg = false
-            var frameCount = 0
-
-            while (isActive) {
-                val bytesRead = input.read(readBuf)
-                if (bytesRead == -1) break
-
-                for (i in 0 until bytesRead) {
-                    val b = readBuf[i]
-                    buffer.write(b.toInt())
-
-                    val data = buffer.toByteArray()
-                    val size = data.size
-
-                    // Detect JPEG start
-                    if (!inJpeg && size >= 2 &&
-                        data[size - 2] == JPEG_SOI[0] &&
-                        data[size - 1] == JPEG_SOI[1]) {
-                        inJpeg = true
-                        buffer.reset()
-                        buffer.write(JPEG_SOI)
-                        continue
+                val responseCode = conn.responseCode
+                if (responseCode !in 200..299) {
+                    retryCount++
+                    if (retryCount >= maxRetries) {
+                        onError("HTTP $responseCode")
+                        return@withContext
                     }
+                    delay(1000)
+                    continue
+                }
 
-                    // Detect JPEG end
-                    if (inJpeg && size >= 2 &&
-                        data[size - 2] == JPEG_EOI[0] &&
-                        data[size - 1] == JPEG_EOI[1]) {
-                        inJpeg = false
-                        val jpegBytes = buffer.toByteArray()
-                        buffer.reset()
+                val input: InputStream = conn.inputStream
+                var prevByte = -1
+                var inJpeg = false
 
-                        val bitmap = BitmapFactory.decodeByteArray(
-                            jpegBytes, 0, jpegBytes.size
-                        )
-                        if (bitmap != null) {
-                            frameCount++
-                            onFrame(bitmap)
-                            // Throttle: process max 2 frames/sec for TFLite
-                            delay(500)
+                while (isActive) {
+                    val bytesRead = input.read(readBuf)
+                    if (bytesRead == -1) break
+
+                    for (i in 0 until bytesRead) {
+                        val curr = readBuf[i].toInt() and 0xFF
+
+                        if (!inJpeg) {
+                            if (prevByte == 0xFF && curr == 0xD8) {
+                                inJpeg = true
+                                frameBuffer.reset()
+                                frameBuffer.write(0xFF)
+                                frameBuffer.write(0xD8)
+                            }
+                        } else {
+                            frameBuffer.write(curr)
+
+                            if (prevByte == 0xFF && curr == 0xD9) {
+                                inJpeg = false
+                                val frameLength = frameBuffer.size()
+
+                                if (frameLength > 2) {
+                                    val data = frameBuffer.toByteArray()
+                                    val bitmap = BitmapFactory.decodeByteArray(data, 0, frameLength)
+
+                                    if (bitmap != null) {
+                                        retryCount = 0 // Reset retries on successful frame decode
+                                        frameReceivedInSession = true
+                                        onFrame(bitmap)
+
+                                        if (frameDelayMs > 0) {
+                                            delay(frameDelayMs)
+                                        }
+                                    }
+                                }
+                                frameBuffer.reset()
+                            }
                         }
+                        prevByte = curr
                     }
                 }
+            } catch (e: Exception) {
+                if (!isActive) break
+                retryCount++
+                if (retryCount >= maxRetries && !frameReceivedInSession) {
+                    onError(e.message ?: "Stream connection error")
+                    return@withContext
+                }
+                delay(1000)
+            } finally {
+                try {
+                    conn?.disconnect()
+                } catch (_: Exception) {}
             }
-            conn.disconnect()
-        } catch (e: Exception) {
-            onError(e.message ?: "Stream error")
         }
     }
 }

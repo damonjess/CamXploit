@@ -8,7 +8,7 @@ import java.net.URL
 
 /**
  * Probes a camera URL to determine what type of feed it actually serves.
- * Checks Content-Type, tries common MJPEG path variations, and scrapes HTML wrappers.
+ * Checks Content-Type, handles MJPEG streams and snapshots, and scrapes HTML wrappers if needed.
  */
 object CameraUrlProbe {
 
@@ -21,65 +21,92 @@ object CameraUrlProbe {
     )
 
     suspend fun probe(url: String): Result = withContext(Dispatchers.IO) {
-        // Step 1: HEAD request to check Content-Type
-        val headType = try {
-            val conn = URL(url).openConnection() as HttpURLConnection
-            conn.requestMethod = "HEAD"
-            conn.connectTimeout = 8000
-            conn.readTimeout = 8000
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0")
-            conn.instanceFollowRedirects = true
+        val lowerUrl = url.lowercase()
+
+        // Fast path 1: Check known MJPEG patterns in URL extension or path
+        val isKnownMjpegUrl = lowerUrl.endsWith(".mjpg") || lowerUrl.endsWith(".mjpeg") ||
+                lowerUrl.endsWith(".mjpq") || lowerUrl.contains("video.cgi") ||
+                lowerUrl.contains("videostream.cgi") || lowerUrl.contains("mjpg/video") ||
+                lowerUrl.contains("mjpeg/video") || lowerUrl.contains("nphmotionjpeg") ||
+                lowerUrl.contains("action=stream")
+
+        if (isKnownMjpegUrl) {
+            return@withContext Result(
+                url = url,
+                contentType = "multipart/x-mixed-replace",
+                isMjpeg = true,
+                isSnapshot = false,
+                isHtml = false
+            )
+        }
+
+        // Fast path 2: Check known Snapshot pattern
+        val isKnownSnapshotUrl = lowerUrl.endsWith(".jpg") || lowerUrl.endsWith(".jpeg") ||
+                lowerUrl.endsWith(".png") || lowerUrl.contains("snap.jpg") || lowerUrl.contains("snapshot.cgi")
+
+        if (isKnownSnapshotUrl && !lowerUrl.contains("mjpg") && !lowerUrl.contains("mjpeg")) {
+            return@withContext Result(
+                url = url,
+                contentType = "image/jpeg",
+                isMjpeg = false,
+                isSnapshot = true,
+                isHtml = false
+            )
+        }
+
+        // Step 1: Probe HTTP headers using GET (read headers without loading full body)
+        val contentType = try {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 5000
+                readTimeout = 5000
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                setRequestProperty("Accept", "multipart/x-mixed-replace, image/jpeg, text/html, */*")
+                instanceFollowRedirects = true
+            }
             val type = conn.contentType ?: ""
             conn.disconnect()
             type
         } catch (e: Exception) { "" }
 
-        val lower = headType.lowercase()
-        val isMjpeg = lower.contains("multipart") || lower.contains("mixed-replace")
-        val isSnapshot = lower.contains("image/jpeg") || lower.contains("image/jpg") || lower.contains("image/png")
-        val isHtml = lower.contains("text/html")
+        val typeLower = contentType.lowercase()
+        val isMjpeg = typeLower.contains("multipart") || typeLower.contains("mixed-replace") || typeLower.contains("mjpeg")
+        val isSnapshot = typeLower.contains("image/jpeg") || typeLower.contains("image/jpg") || typeLower.contains("image/png")
+        val isHtml = typeLower.contains("text/html")
 
-        // If it's already a clear stream or snapshot, we're done
         if (isMjpeg || isSnapshot) {
-            return@withContext Result(url, headType, isMjpeg, isSnapshot, isHtml)
+            return@withContext Result(url, contentType, isMjpeg, isSnapshot, isHtml)
         }
 
-        // Step 2: If HTML (or unknown), try to extract a direct feed from the page
-        if (isHtml || headType.isBlank()) {
+        // Step 2: If HTML wrapper page, extract direct image / video feed URL from HTML
+        if (isHtml || contentType.isBlank()) {
             val extracted = extractFromHtml(url)
             if (extracted != null && extracted != url) {
-                return@withContext probe(extracted) // Re-probe the extracted URL
+                val subLower = extracted.lowercase()
+                if (subLower.contains("mjpg") || subLower.contains("mjpeg") || subLower.contains("video")) {
+                    return@withContext Result(extracted, "multipart/x-mixed-replace", isMjpeg = true, isSnapshot = false, isHtml = false)
+                } else if (subLower.endsWith(".jpg") || subLower.contains("snap")) {
+                    return@withContext Result(extracted, "image/jpeg", isMjpeg = false, isSnapshot = true, isHtml = false)
+                }
             }
         }
 
-        // Step 3: Try common MJPEG path variations for cgi-bin/viewer/camera endpoints
-        val guessed = guessMjpegUrl(url)
-        if (guessed != null) {
-            val guessType = try {
-                val conn = URL(guessed).openConnection() as HttpURLConnection
-                conn.requestMethod = "HEAD"
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                val t = conn.contentType ?: ""
-                conn.disconnect()
-                t
-            } catch (e: Exception) { "" }
-
-            val gLower = guessType.lowercase()
-            if (gLower.contains("multipart") || gLower.contains("mixed-replace") || gLower.contains("image")) {
-                return@withContext Result(guessed, guessType, true, false, false)
-            }
-        }
-
-        // Step 4: Fallback — treat as HTML and let WebView handle it
-        Result(url, headType, false, isSnapshot, true)
+        // Fallback: Default to stream if URL looks like video feed, or treat as HTML web player
+        val fallbackIsMjpeg = lowerUrl.contains("video") || lowerUrl.contains("cam") || lowerUrl.contains("mjpg") || lowerUrl.contains("cgi")
+        Result(
+            url = url,
+            contentType = contentType,
+            isMjpeg = fallbackIsMjpeg,
+            isSnapshot = false,
+            isHtml = !fallbackIsMjpeg
+        )
     }
 
     private fun extractFromHtml(pageUrl: String): String? {
         return try {
             val doc = Jsoup.connect(pageUrl)
-                .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                .timeout(10000)
+                .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .timeout(6000)
                 .get()
 
             val candidates = mutableListOf<String>()
@@ -113,24 +140,6 @@ object CameraUrlProbe {
         } catch (e: Exception) {
             null
         }
-    }
-
-    private fun guessMjpegUrl(original: String): String? {
-        val guesses = listOf(
-            original.replace("viewer", "video.mjpg", ignoreCase = true),
-            original.replace("viewer", "mjpg/video.cgi", ignoreCase = true),
-            original.replace("camera", "video.mjpg", ignoreCase = true),
-            original.replace("camera", "mjpg/video.cgi", ignoreCase = true),
-            "$original?action=stream",
-            "$original&action=stream",
-            original.replace("cgi-bin/camera", "mjpg/video.cgi", ignoreCase = true),
-            original.replace("cgi-bin/viewer", "mjpg/video.cgi", ignoreCase = true),
-            original.replaceAfterLast("/", "video.mjpg"),
-            original.replaceAfterLast("/", "video.cgi"),
-            original.replaceAfterLast("/", "stream.mjpg"),
-            original.replaceAfterLast("/", "mjpg")
-        )
-        return guesses.firstOrNull { it != original }
     }
 
     private fun resolveUrl(base: String, relative: String): String {

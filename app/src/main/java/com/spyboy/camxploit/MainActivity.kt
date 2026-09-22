@@ -905,7 +905,7 @@ fun StreamTab(
                         AndroidView(
                             factory = { ctx ->
                                 ExoPlayer.Builder(ctx).build().apply {
-                                    setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).setDebugLoggingEnabled(true).createMediaSource(MediaItem.fromUri(auth)))
+                                    setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).setDebugLoggingEnabled(false).createMediaSource(MediaItem.fromUri(auth)))
                                     prepare()
                                     playWhenReady = true
                                     currentExoPlayer = this
@@ -1016,7 +1016,7 @@ fun MiniPlayer(url: String, user: String, pass: String) {
                 PlayerView(ctx).apply {
                     useController = false
                     player = ExoPlayer.Builder(ctx).build().apply {
-                        setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).createMediaSource(MediaItem.fromUri(auth)))
+                        setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).setDebugLoggingEnabled(false).createMediaSource(MediaItem.fromUri(auth)))
                         prepare()
                         play()
                     }
