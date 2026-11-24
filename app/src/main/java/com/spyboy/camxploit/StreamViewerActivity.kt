@@ -342,8 +342,10 @@ fun StreamPlayerScreen(
                 val declared = source.protocol.lowercase()
                 val needsLogin = result.responseCode == 401 || result.responseCode == 403
                 val effectiveProtocol = when {
-                    result.isSnapshot || isSnapshotUrl(result.url) -> "snapshot"
+                    // Trust the HTTP probe over the URL suffix. Cameras often expose
+                    // multipart MJPEG at image-looking paths such as faststream.jpg.
                     result.isMjpeg -> "mjpeg"
+                    result.isSnapshot || isSnapshotUrl(result.url) -> "snapshot"
                     declared == "rtsp" || declared == "rtmp" || declared == "onvif" -> declared
                     result.isHtml || result.contentType.startsWith("text/") -> "web"
                     declared.isNotBlank() -> declared

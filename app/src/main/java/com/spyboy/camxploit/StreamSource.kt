@@ -20,6 +20,7 @@ data class StreamSource(
     val brand: String? = null,
     val pageUrl: String = "",
     val streamUrl: String = "",
+    val candidateUrls: List<String> = emptyList(),
     val sourceLabel: String = "",
     val verification: String = "Unchecked",
     val contentType: String = "",
@@ -74,11 +75,12 @@ fun isSnapshotUrl(url: String): Boolean {
     val lower = url.lowercase()
     val path = lower.substringBefore('?').substringBefore('#')
 
-    // An explicit image extension wins even when a parent folder is called "stream".
+    // Stream markers win over an image-looking suffix: many cameras expose
+    // multipart MJPEG at endpoints such as /cgi-bin/faststream.jpg?stream=half.
+    if (isMjpegUrl(url)) return false
     if (path.endsWith(".jpg") || path.endsWith(".jpeg") || path.endsWith(".png") ||
         path.endsWith(".bmp")
     ) return true
-    if (isMjpegUrl(url)) return false
 
     if (lower.contains("snapshot") || lower.contains("action=snapshot")) return true
     if (lower.contains("snap.jpg") || lower.contains("current.jpg") || lower.contains("still.jpg")) return true
@@ -105,12 +107,18 @@ private fun isMjpegUrl(url: String): Boolean {
         lower.contains("video.cgi") ||
         lower.contains("nphmotionjpeg") ||
         lower.contains("axis-cgi/mjpg") ||
+        lower.contains("faststream") ||
         lower.contains("getvideo")
     ) return true
 
     val path = lower.substringBefore('?').substringBefore('#')
     if (path.endsWith(".html") || path.endsWith(".htm") || path.endsWith(".php") ||
         path.endsWith(".asp") || path.endsWith(".aspx") || path.endsWith(".jsp")
+    ) return false
+    // A plain image suffix is a snapshot unless one of the definitive stream
+    // markers above matched it.
+    if (path.endsWith(".jpg") || path.endsWith(".jpeg") || path.endsWith(".png") ||
+        path.endsWith(".bmp")
     ) return false
 
     return lower.contains("/video") || lower.contains("/stream") || lower.contains("?stream")

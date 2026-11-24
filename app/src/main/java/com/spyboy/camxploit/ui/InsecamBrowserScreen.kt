@@ -1,9 +1,12 @@
 package com.spyboy.camxploit.ui
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
+import android.widget.Toast
 import android.webkit.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -26,18 +29,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.spyboy.camxploit.StreamPreflight
+import com.spyboy.camxploit.StreamSource
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONTokener
 import java.net.URLEncoder
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (String, String) -> Unit) {
+fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (StreamSource) -> Unit) {
     val neonGreen = Color(0xFF39FF14)
+    val orange = Color(0xFFFFA500)
+    val neonRed = Color(0xFFFF5252)
     val darkSurface = Color(0xFF141414)
     val darkCard = Color(0xFF1E1E1E)
     
@@ -46,12 +61,25 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (String, String) -> U
     var isLoading by remember { mutableStateOf(true) }
     var webView by remember { mutableStateOf<WebView?>(null) }
     var detectedStreamUrl by remember { mutableStateOf<String?>(null) }
+    var detectedCandidates by remember { mutableStateOf<List<String>>(emptyList()) }
     var detectedTitle by remember { mutableStateOf("Live Feed") }
+    var isSniffing by remember { mutableStateOf(false) }
+    var isPreflighting by remember { mutableStateOf(false) }
+    var preflightResult by remember { mutableStateOf<StreamPreflight.Result?>(null) }
+    var preflightError by remember { mutableStateOf<String?>(null) }
+    var preflightJob by remember { mutableStateOf<Job?>(null) }
 
     var canGoBack by remember { mutableStateOf(false) }
     var canGoForward by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
+    val context = LocalContext.current
     val focusManager = LocalFocusManager.current
+    val density = LocalDensity.current
+    val navigationInset = WindowInsets.navigationBars.getBottom(density)
+    val bottomSafePadding = with(density) {
+        maxOf(navigationInset, 44.dp.roundToPx()).toDp()
+    }
 
     // Universal JS Sniffer script
     val snifferScript = """
@@ -86,33 +114,124 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (String, String) -> U
                 }
             }
 
-            // 4. Filter out common web assets
+            // 4. Filter out common web assets and duplicate URLs
+            var seen = {};
             var valid = candidates.filter(function(url) {
+                if (!url.match(/^https?:\/\//)) return false;
                 var l = url.toLowerCase();
-                return !l.includes('logo') && !l.includes('banner') && !l.includes('icon') && 
-                       !l.includes('favicon') && !l.includes('avatar') && !l.includes('button') &&
-                       !l.endsWith('.gif');
+                if (l.includes('logo') || l.includes('banner') || l.includes('icon') ||
+                    l.includes('favicon') || l.includes('avatar') || l.includes('button') ||
+                    l.endsWith('.gif')) return false;
+                if (seen[url]) return false;
+                seen[url] = true;
+                return true;
             });
 
-            return valid.length > 0 ? valid[0] : '';
+            return JSON.stringify(valid.slice(0, 4));
         })();
     """.trimIndent()
 
-    fun runSniffer(view: WebView?) {
-        view?.evaluateJavascript(snifferScript) { rawResult ->
-            val clean = rawResult?.trim('"')?.replace("\\\"", "\"")?.trim() ?: ""
-            if (clean.isNotBlank() && clean != "null" && clean != "undefined") {
-                detectedStreamUrl = clean
+    fun sourceFor(result: StreamPreflight.Result): StreamSource = StreamSource(
+        url = result.url,
+        title = detectedTitle,
+        protocol = result.protocol,
+        pageUrl = currentUrl,
+        sourceLabel = "Insecam browser",
+        verification = result.label,
+        contentType = result.contentType,
+        verifiedAt = System.currentTimeMillis(),
+        candidateUrls = detectedCandidates
+    )
+
+    fun launchVerified(result: StreamPreflight.Result) {
+        onStreamUrl(sourceFor(result))
+    }
+
+    fun preflightCandidates(urls: List<String>, launchOnSuccess: Boolean) {
+        if (urls.isEmpty() || isPreflighting) return
+        preflightJob?.cancel()
+        isPreflighting = true
+        preflightResult = null
+        preflightError = null
+        preflightJob = scope.launch {
+            try {
+                val results = StreamPreflight.verifyAll(urls)
+                val best = StreamPreflight.best(results)
+                if (best != null) {
+                    detectedStreamUrl = best.url
+                    preflightResult = best
+                    preflightError = null
+                    if (launchOnSuccess) {
+                        launchVerified(best)
+                    } else {
+                        Toast.makeText(context, best.label, Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    val detail = results.firstOrNull()?.detail ?: "No playable feed found"
+                    preflightError = detail
+                    if (launchOnSuccess) {
+                        Toast.makeText(context, "No playable feed: $detail", Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                preflightError = e.message ?: "Could not check the stream candidates"
+            } finally {
+                isPreflighting = false
+            }
+        }
+    }
+
+    fun runSniffer(view: WebView?, manual: Boolean = false) {
+        if (view == null) {
+            if (manual) Toast.makeText(context, "Page is not ready to scan", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (manual) {
+            isSniffing = true
+            Toast.makeText(context, "Scanning this page for stream URLs…", Toast.LENGTH_SHORT).show()
+        }
+        view.evaluateJavascript(snifferScript) { rawResult ->
+            isSniffing = false
+            val payload = rawResult?.let {
+                runCatching { JSONTokener(it).nextValue() as? String }.getOrNull()
+            } ?: ""
+            val candidates = runCatching {
+                val array = JSONArray(payload)
+                (0 until array.length()).mapNotNull { index ->
+                    array.optString(index).takeIf {
+                        it.startsWith("http://", true) || it.startsWith("https://", true)
+                    }
+                }
+            }.getOrDefault(emptyList()).distinct()
+
+            if (manual) {
+                preflightJob?.cancel()
+                isPreflighting = false
+                preflightResult = null
+                preflightError = null
+            }
+
+            if (candidates.isNotEmpty()) {
+                detectedCandidates = candidates
+                detectedStreamUrl = candidates.first()
                 detectedTitle = when {
                     currentUrl.contains("insecam.org/en/view/") -> {
                         val id = currentUrl.substringAfter("/en/view/").takeWhile { it.isDigit() }
                         "Insecam Camera #$id"
                     }
                     currentUrl.contains("opentopia.com") -> "Opentopia Stream"
-                    else -> view?.title?.ifBlank { "Detected Feed" } ?: "Detected Feed"
+                    else -> view.title?.ifBlank { "Detected Feed" } ?: "Detected Feed"
+                }
+                if (manual) {
+                    Toast.makeText(context, "Found ${candidates.size} stream candidate(s)", Toast.LENGTH_SHORT).show()
+                    preflightCandidates(candidates, launchOnSuccess = false)
                 }
             } else {
+                detectedCandidates = emptyList()
                 detectedStreamUrl = null
+                if (manual) {
+                    Toast.makeText(context, "No stream candidate found on this page", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -135,7 +254,7 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (String, String) -> U
             .fillMaxSize()
             .background(Color.Black)
             .statusBarsPadding()
-            .navigationBarsPadding()
+            .padding(bottom = bottomSafePadding)
     ) {
         // 1. TOP CONTROL BAR (Title & Preset Directory Chips)
         Column(
@@ -280,11 +399,41 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (String, String) -> U
             Spacer(Modifier.width(4.dp))
 
             // Manual Sniff Button
-            IconButton(
-                onClick = { runSniffer(webView) },
-                modifier = Modifier.size(32.dp)
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = neonGreen.copy(alpha = 0.11f),
+                border = BorderStroke(1.dp, neonGreen.copy(alpha = 0.4f))
             ) {
-                Icon(Icons.Default.Videocam, "Sniff Stream", tint = neonGreen, modifier = Modifier.size(18.dp))
+                Row(
+                    modifier = Modifier
+                        .height(32.dp)
+                        .clickable(enabled = !isSniffing && !isPreflighting) { runSniffer(webView, manual = true) }
+                        .padding(horizontal = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isSniffing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            color = neonGreen,
+                            strokeWidth = 1.5.dp
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Videocam,
+                            contentDescription = "Scan page for stream URLs",
+                            tint = neonGreen,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "SNIFF",
+                        color = neonGreen,
+                        fontSize = 7.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                }
             }
         }
 
@@ -303,6 +452,17 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (String, String) -> U
                         settings.displayZoomControls = false
 
                         webViewClient = object : WebViewClient() {
+                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                super.onPageStarted(view, url, favicon)
+                                isLoading = true
+                                detectedCandidates = emptyList()
+                                detectedStreamUrl = null
+                                preflightJob?.cancel()
+                                isPreflighting = false
+                                preflightResult = null
+                                preflightError = null
+                            }
+
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 isLoading = false
                                 url?.let {
@@ -340,12 +500,34 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (String, String) -> U
 
         // 4. FLOATING STREAM DETECTED ACTION BANNER
         detectedStreamUrl?.let { streamUrl ->
+            val verified = preflightResult
+            val error = preflightError
+            val bannerColor = when {
+                isPreflighting -> orange
+                error != null -> neonRed
+                verified?.protocol == "snapshot" -> orange
+                else -> neonGreen
+            }
+            val bannerTitle = when {
+                isPreflighting -> "CHECKING FEEDS…"
+                error != null -> "NO PLAYABLE FEED"
+                verified != null -> verified.label.uppercase()
+                detectedCandidates.size > 1 -> "STREAM CANDIDATES (${detectedCandidates.size})"
+                else -> "STREAM CANDIDATE"
+            }
+            val bannerDetail = when {
+                isPreflighting -> "Testing each URL for a real camera frame"
+                error != null -> error
+                verified != null -> "$detectedTitle · ${verified.detail}"
+                else -> detectedTitle
+            }
+            val selectedUrl = verified?.url ?: streamUrl
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF111111)),
                 shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(BorderStroke(1.dp, neonGreen), shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
+                    .border(BorderStroke(1.dp, bannerColor), shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
             ) {
                 Row(
                     modifier = Modifier
@@ -356,34 +538,72 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (String, String) -> U
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Videocam, null, tint = neonGreen, modifier = Modifier.size(14.dp))
+                            Icon(Icons.Default.Videocam, null, tint = bannerColor, modifier = Modifier.size(14.dp))
                             Spacer(Modifier.width(4.dp))
                             Text(
-                                "LIVE STREAM DETECTED",
+                                bannerTitle,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = neonGreen
+                                color = bannerColor
                             )
                         }
                         Text(
-                            detectedTitle,
+                            bannerDetail,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
                             color = Color.White,
-                            maxLines = 1
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = selectedUrl,
+                            fontSize = 7.5.sp,
+                            color = Color.Gray,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
 
                     Button(
-                        onClick = { onStreamUrl(streamUrl, detectedTitle) },
-                        colors = ButtonDefaults.buttonColors(containerColor = neonGreen),
+                        onClick = {
+                            if (verified?.isPlayable == true) {
+                                launchVerified(verified)
+                            } else {
+                                preflightCandidates(detectedCandidates, launchOnSuccess = true)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (error != null) neonRed else neonGreen,
+                            disabledContainerColor = neonGreen.copy(alpha = 0.45f)
+                        ),
                         shape = RoundedCornerShape(4.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        modifier = Modifier.height(32.dp)
+                        modifier = Modifier.height(32.dp),
+                        enabled = !isPreflighting && detectedCandidates.isNotEmpty()
                     ) {
-                        Icon(Icons.Default.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                        if (isPreflighting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                color = Color.Black,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                        }
                         Spacer(Modifier.width(4.dp))
-                        Text("LAUNCH PLAYER", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = when {
+                                isPreflighting -> "CHECKING"
+                                verified?.protocol == "snapshot" -> "LAUNCH SNAPSHOT"
+                                verified?.isPlayable == true -> "LAUNCH LIVE"
+                                error != null -> "RETRY CHECK"
+                                else -> "LAUNCH PLAYER"
+                            },
+                            color = Color.Black,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }
