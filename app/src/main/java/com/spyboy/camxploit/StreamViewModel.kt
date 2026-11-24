@@ -93,6 +93,10 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
                 _status.value = StreamStatus.Snapshot
                 _streamInfo.value = "Mode: Periodic Snapshot"
             }
+            "web" -> {
+                _status.value = StreamStatus.Web
+                _streamInfo.value = "Mode: Web Player Fallback"
+            }
             "onvif" -> {
                 val url = source.getAuthenticatedUrl()
                 if (url.startsWith("rtsp://")) {

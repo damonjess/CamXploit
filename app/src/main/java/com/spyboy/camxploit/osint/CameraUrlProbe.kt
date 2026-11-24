@@ -1,5 +1,6 @@
 package com.spyboy.camxploit.osint
 
+import com.spyboy.camxploit.isSnapshotUrl
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
@@ -17,7 +18,8 @@ object CameraUrlProbe {
         val contentType: String,
         val isMjpeg: Boolean,
         val isSnapshot: Boolean,
-        val isHtml: Boolean
+        val isHtml: Boolean,
+        val responseCode: Int = 0
     )
 
     suspend fun probe(url: String): Result = withContext(Dispatchers.IO) {
@@ -31,30 +33,36 @@ object CameraUrlProbe {
                 lowerUrl.contains("action=stream")
 
         if (isKnownMjpegUrl) {
+            val code = quickResponseCode(url)
+            val needsLogin = code == 401 || code == 403
             return@withContext Result(
                 url = url,
                 contentType = "multipart/x-mixed-replace",
-                isMjpeg = true,
+                isMjpeg = !needsLogin,
                 isSnapshot = false,
-                isHtml = false
+                isHtml = needsLogin,
+                responseCode = code
             )
         }
 
-        // Fast path 2: Check known Snapshot pattern
-        val isKnownSnapshotUrl = lowerUrl.endsWith(".jpg") || lowerUrl.endsWith(".jpeg") ||
-                lowerUrl.endsWith(".png") || lowerUrl.contains("snap.jpg") || lowerUrl.contains("snapshot.cgi")
+        // Fast path 2: snapshots are single images, not a multipart stream. Still read
+        // the status line so a 401/403 can be surfaced by the viewer immediately.
+        val isKnownSnapshotUrl = isSnapshotUrl(url)
 
-        if (isKnownSnapshotUrl && !lowerUrl.contains("mjpg") && !lowerUrl.contains("mjpeg")) {
+        if (isKnownSnapshotUrl) {
+            val code = quickResponseCode(url)
             return@withContext Result(
                 url = url,
                 contentType = "image/jpeg",
                 isMjpeg = false,
                 isSnapshot = true,
-                isHtml = false
+                isHtml = code == 401 || code == 403,
+                responseCode = code
             )
         }
 
         // Step 1: Probe HTTP headers using GET (read headers without loading full body)
+        var responseCode = 0
         val contentType = try {
             val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
@@ -64,6 +72,7 @@ object CameraUrlProbe {
                 setRequestProperty("Accept", "multipart/x-mixed-replace, image/jpeg, text/html, */*")
                 instanceFollowRedirects = true
             }
+            responseCode = conn.responseCode
             val type = conn.contentType ?: ""
             conn.disconnect()
             type
@@ -73,33 +82,55 @@ object CameraUrlProbe {
         val isMjpeg = typeLower.contains("multipart") || typeLower.contains("mixed-replace") || typeLower.contains("mjpeg")
         val isSnapshot = typeLower.contains("image/jpeg") || typeLower.contains("image/jpg") || typeLower.contains("image/png")
         val isHtml = typeLower.contains("text/html")
+        val isAuthError = responseCode == 401 || responseCode == 403
 
         if (isMjpeg || isSnapshot) {
-            return@withContext Result(url, contentType, isMjpeg, isSnapshot, isHtml)
+            return@withContext Result(url, contentType, isMjpeg, isSnapshot, isHtml, responseCode)
         }
 
         // Step 2: If HTML wrapper page, extract direct image / video feed URL from HTML
-        if (isHtml || contentType.isBlank()) {
+        if (!isAuthError && (isHtml || contentType.isBlank())) {
             val extracted = extractFromHtml(url)
             if (extracted != null && extracted != url) {
                 val subLower = extracted.lowercase()
                 if (subLower.contains("mjpg") || subLower.contains("mjpeg") || subLower.contains("video")) {
-                    return@withContext Result(extracted, "multipart/x-mixed-replace", isMjpeg = true, isSnapshot = false, isHtml = false)
+                    return@withContext Result(extracted, "multipart/x-mixed-replace", isMjpeg = true, isSnapshot = false, isHtml = false, responseCode = responseCode)
                 } else if (subLower.endsWith(".jpg") || subLower.contains("snap")) {
-                    return@withContext Result(extracted, "image/jpeg", isMjpeg = false, isSnapshot = true, isHtml = false)
+                    return@withContext Result(extracted, "image/jpeg", isMjpeg = false, isSnapshot = true, isHtml = false, responseCode = responseCode)
                 }
             }
         }
 
-        // Fallback: Default to stream if URL looks like video feed, or treat as HTML web player
-        val fallbackIsMjpeg = lowerUrl.contains("video") || lowerUrl.contains("cam") || lowerUrl.contains("mjpg") || lowerUrl.contains("cgi")
+        // Fallback: an HTML page (or a login challenge) is never an MJPEG feed.
+        val fallbackIsMjpeg = !isHtml && !isAuthError &&
+            (lowerUrl.contains("video") || lowerUrl.contains("stream") ||
+                lowerUrl.contains("mjpg") || lowerUrl.contains("mjpeg"))
         Result(
             url = url,
             contentType = contentType,
             isMjpeg = fallbackIsMjpeg,
             isSnapshot = false,
-            isHtml = !fallbackIsMjpeg
+            isHtml = isHtml || isAuthError || !fallbackIsMjpeg,
+            responseCode = responseCode
         )
+    }
+
+    /** Reads only the HTTP status line; never consumes the image body. */
+    private fun quickResponseCode(url: String): Int {
+        return try {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 3000
+                readTimeout = 3000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            }
+            val code = conn.responseCode
+            conn.disconnect()
+            code
+        } catch (e: Exception) {
+            0
+        }
     }
 
     private fun extractFromHtml(pageUrl: String): String? {

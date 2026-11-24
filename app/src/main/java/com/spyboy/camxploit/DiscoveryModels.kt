@@ -5,7 +5,7 @@ data class LanHost(
     val mac: String? = null,
     val vendor: String? = null,
     val hostname: String? = null,
-    val deviceType: String = "Unknown",
+    val deviceType: String = DeviceIdentifier.UNKNOWN,
     val isYourDevice: Boolean = false,
     val openPorts: List<Int> = emptyList(),
     val isCamera: Boolean = false,

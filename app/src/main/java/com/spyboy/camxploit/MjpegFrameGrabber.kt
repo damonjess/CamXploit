@@ -35,6 +35,8 @@ class MjpegFrameGrabber(
         val readBuf = ByteArray(8192)
         var retryCount = 0
         val maxRetries = 5
+        var emptySessions = 0
+        val firstFrameTimeoutMs = 10_000L
 
         while (isActive && retryCount < maxRetries) {
             var conn: HttpURLConnection? = null
@@ -43,7 +45,7 @@ class MjpegFrameGrabber(
             try {
                 conn = (URL(streamUrl).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 8_000
-                    readTimeout = 15_000
+                    readTimeout = 8_000
                     requestMethod = "GET"
                     setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                     setRequestProperty("Accept", "multipart/x-mixed-replace, image/jpeg, */*")
@@ -52,6 +54,10 @@ class MjpegFrameGrabber(
                 }
 
                 val responseCode = conn.responseCode
+                if (responseCode == 401 || responseCode == 403) {
+                    onError("HTTP $responseCode - this endpoint needs a login")
+                    return@withContext
+                }
                 if (responseCode !in 200..299) {
                     retryCount++
                     if (retryCount >= maxRetries) {
@@ -62,11 +68,24 @@ class MjpegFrameGrabber(
                     continue
                 }
 
+                // A login page, an XML error or a JSON answer is never a video feed.
+                val contentType = conn.contentType?.lowercase().orEmpty()
+                if (contentType.contains("text/html") || contentType.contains("text/xml") ||
+                    contentType.contains("application/json")) {
+                    onError("Not a video stream (${conn.contentType})")
+                    return@withContext
+                }
+
                 val input: InputStream = conn.inputStream
                 var prevByte = -1
                 var inJpeg = false
+                val sessionStartedAt = System.currentTimeMillis()
 
                 while (isActive) {
+                    // Bail out when a 2xx response never produces a frame.
+                    if (!frameReceivedInSession &&
+                        System.currentTimeMillis() - sessionStartedAt > firstFrameTimeoutMs) break
+
                     val bytesRead = input.read(readBuf)
                     if (bytesRead == -1) break
 
@@ -107,6 +126,32 @@ class MjpegFrameGrabber(
                         prevByte = curr
                     }
                 }
+
+                if (frameReceivedInSession) {
+                    emptySessions = 0
+                } else {
+                    emptySessions++
+                    if (emptySessions >= 2) {
+                        onError("No video frames received from $streamUrl")
+                        return@withContext
+                    }
+                    delay(500)
+                }
+            } catch (e: java.net.SocketTimeoutException) {
+                if (!isActive) break
+                if (!frameReceivedInSession) {
+                    emptySessions++
+                    if (emptySessions >= 2) {
+                        onError("Timed out waiting for a video frame from $streamUrl")
+                        return@withContext
+                    }
+                }
+                retryCount++
+                if (retryCount >= maxRetries) {
+                    onError("Stream timed out after $maxRetries attempts")
+                    return@withContext
+                }
+                delay(500)
             } catch (e: Exception) {
                 if (!isActive) break
                 retryCount++
@@ -120,6 +165,10 @@ class MjpegFrameGrabber(
                     conn?.disconnect()
                 } catch (_: Exception) {}
             }
+        }
+
+        if (isActive && retryCount >= maxRetries) {
+            onError("Stream unavailable after $maxRetries attempts")
         }
     }
 }

@@ -67,6 +67,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -617,7 +618,7 @@ fun CamGuardianApp() {
                         scrollState, 
                         { startReconScan(consoleIpInput) }, 
                         { url, title -> 
-                            val protocol = if (url.startsWith("rtsp://")) "rtsp" else "mjpeg"
+                            val protocol = protocolForUrl(url)
                             val source = StreamSource(url = url, title = title, protocol = protocol)
                             StreamViewerActivity.launch(context, source, consoleIpInput.ifBlank { "Unknown" }) 
                         }
@@ -629,7 +630,7 @@ fun CamGuardianApp() {
                         selectedUrl = selectedUrl,
                         onUrlSelected = { url -> 
                             selectedUrl = url
-                            val protocol = if (url.startsWith("rtsp://")) "rtsp" else "mjpeg"
+                            val protocol = protocolForUrl(url)
                             val source = StreamSource(url = url, protocol = protocol)
                             streamViewModel.startStream(source)
                         },
@@ -659,7 +660,7 @@ fun CamGuardianApp() {
                         { selectedTab = it }, 
                         { consoleIpInput = it; selectedTab = 0 }, 
                         { url -> 
-                            val protocol = if (url.startsWith("rtsp://")) "rtsp" else "mjpeg"
+                            val protocol = protocolForUrl(url)
                             val source = StreamSource(url = url, protocol = protocol)
                             StreamViewerActivity.launch(context, source, consoleIpInput.ifBlank { "Unknown" })
                         },
@@ -687,7 +688,7 @@ fun CamGuardianApp() {
                     selectedHostForDetail = null
                     selectedUrl = url
                     selectedTab = 3
-                    val protocol = if (url.startsWith("rtsp://")) "rtsp" else "mjpeg"
+                    val protocol = protocolForUrl(url)
                     val source = StreamSource(url = url, protocol = protocol)
                     StreamViewerActivity.launch(context, source, host.ip)
                 },
@@ -733,6 +734,31 @@ fun ConsoleTab(
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+
+    val detectedLinks = remember(terminalText) { CameraLinkVerifier.parse(terminalText) }
+    var linkResults by remember(detectedLinks) { mutableStateOf<List<CameraLinkVerifier.Result>?>(null) }
+    var verifyingLinks by remember(detectedLinks) { mutableStateOf(false) }
+    var showLinksSheet by remember { mutableStateOf(false) }
+    var showRejectedLinks by remember { mutableStateOf(false) }
+
+    LaunchedEffect(detectedLinks, isScanning) {
+        if (detectedLinks.isEmpty() || isScanning) {
+            linkResults = null
+            verifyingLinks = false
+            showLinksSheet = false
+            return@LaunchedEffect
+        }
+        verifyingLinks = true
+        linkResults = CameraLinkVerifier.verifyAll(detectedLinks)
+        verifyingLinks = false
+    }
+
+    val verifiedLinks = linkResults.orEmpty().filter {
+        it.verdict == CameraLinkVerifier.Verdict.LIVE || it.verdict == CameraLinkVerifier.Verdict.LOGIN
+    }
+    val rejectedLinks = linkResults.orEmpty().filter {
+        it.verdict == CameraLinkVerifier.Verdict.REJECTED || it.verdict == CameraLinkVerifier.Verdict.UNREACHABLE
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Box(Modifier.fillMaxWidth().border(1.dp, Color(0xFF1A1A1A), RoundedCornerShape(8.dp)).background(Color(0xFF080808)).padding(horizontal = 12.dp, vertical = 4.dp)) {
@@ -786,20 +812,317 @@ fun ConsoleTab(
             }
         }
         LaunchedEffect(scrollState.maxValue) { if (scrollState.value > scrollState.maxValue - 1000 || terminalText.length < 1000) scrollState.animateScrollTo(scrollState.maxValue) }
-        val detectedLinks = remember(terminalText) { if (terminalText.contains("===LINKS_START===")) terminalText.substringAfter("===LINKS_START===").substringBefore("===LINKS_END===").lines().filter { it.contains("|") } else emptyList() }
+
         if (detectedLinks.isNotEmpty()) {
-            Text(text = "🎯 Detected Links", color = Color.Cyan, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 8.dp))
-            Column(Modifier.fillMaxWidth().height(350.dp).verticalScroll(rememberScrollState())) { 
-                detectedLinks.forEach { line -> 
-                    val p = line.split("|")
-                    if (p.size >= 2) Card(Modifier.fillMaxWidth().padding(vertical = 4.dp).border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp)), colors = CardDefaults.cardColors(Color.Transparent)) { 
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { 
-                            Column(Modifier.weight(1f)) { Text(text = p[0].trim(), color = Color.Yellow, fontSize = 14.sp, fontWeight = FontWeight.Bold); Text(text = p[1].trim().take(50), color = Color.Gray, fontSize = 11.sp) }
-                            Button(onClick = { onStreamSelect(p[1].trim(), p[0].trim()) }, colors = ButtonDefaults.buttonColors(Color.Green)) { Text(text = "LIVE", color = Color.Black) } 
-                        } 
-                    } 
-                } 
+            val verifiedCount = verifiedLinks.size
+            val rejectedCount = rejectedLinks.size
+            val accent = if (verifiedCount > 0) Color.Green else Color(0xFFFFAA00)
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { showLinksSheet = true },
+                color = if (verifiedCount > 0) Color(0xFF071607) else Color(0xFF1A1005),
+                border = BorderStroke(1.dp, accent.copy(alpha = 0.45f)),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (verifiedCount > 0) Icons.Default.CheckCircle else Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "SCAN FINDINGS",
+                            color = Color.Cyan,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                        Text(
+                            text = when {
+                                verifyingLinks -> "Checking ${detectedLinks.size} detected links..."
+                                linkResults == null -> "Tap to inspect ${detectedLinks.size} detected links"
+                                verifiedCount == 0 -> "No verified feeds · $rejectedCount rejected"
+                                else -> "$verifiedCount verified · $rejectedCount rejected"
+                            },
+                            color = Color.Gray,
+                            fontSize = 11.sp
+                        )
+                    }
+                    if (verifyingLinks) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = Color.Cyan,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("VIEW", color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
+        }
+    }
+
+    if (showLinksSheet) {
+        ScanFindingsSheet(
+            detectedCount = detectedLinks.size,
+            verifying = verifyingLinks,
+            verified = verifiedLinks,
+            rejected = rejectedLinks,
+            showRejected = showRejectedLinks,
+            onToggleRejected = { showRejectedLinks = !showRejectedLinks },
+            onDismiss = { showLinksSheet = false },
+            onOpenLink = { result ->
+                showLinksSheet = false
+                onStreamSelect(result.link.url, result.link.type)
+            }
+        )
+    }
+}
+
+@Composable
+private fun ScanFindingsSheet(
+    detectedCount: Int,
+    verifying: Boolean,
+    verified: List<CameraLinkVerifier.Result>,
+    rejected: List<CameraLinkVerifier.Result>,
+    showRejected: Boolean,
+    onToggleRejected: () -> Unit,
+    onDismiss: () -> Unit,
+    onOpenLink: (CameraLinkVerifier.Result) -> Unit
+) {
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF0A0A0A),
+        scrimColor = Color.Black.copy(alpha = 0.65f),
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().navigationBarsPadding(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            item {
+                Text(
+                    "DETECTED LINKS",
+                    color = Color.Cyan,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 1.sp
+                )
+                Text(
+                    "Live HTTP check: HTML/login pages and redirects are excluded.",
+                    color = Color.Gray,
+                    fontSize = 10.sp
+                )
+            }
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FindingStat("DETECTED", detectedCount, Color.Gray, Modifier.weight(1f))
+                    FindingStat("VERIFIED", verified.size, Color.Green, Modifier.weight(1f))
+                    FindingStat("REJECTED", rejected.size, Color(0xFFFF5555), Modifier.weight(1f))
+                }
+            }
+            if (verifying) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(Modifier.size(20.dp), color = Color.Cyan, strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text("Verifying endpoints...", color = Color.Gray, fontSize = 12.sp)
+                    }
+                }
+            } else {
+                if (verified.isEmpty()) {
+                    item {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFF130D0D),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, Color(0xFF3A1A1A))
+                        ) {
+                            Column(Modifier.padding(14.dp)) {
+                                Text(
+                                    "No verified camera feeds",
+                                    color = Color(0xFFFFAA00),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "The scanner found HTTP 200 endpoints, but none returned image or MJPEG content. Raw findings are still in the terminal log.",
+                                    color = Color.Gray,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+                items(verified, key = { it.link.url }) { result ->
+                    VerifiedLinkCard(result, onOpenLink)
+                }
+                if (verified.isNotEmpty()) {
+                    item {
+                        TextButton(
+                            onClick = {
+                                clipboardManager.setText(AnnotatedString(verified.joinToString("\n") { it.link.url }))
+                                Toast.makeText(context, "Verified links copied", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("COPY VERIFIED URLS", color = Color.Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                if (rejected.isNotEmpty()) {
+                    item {
+                        TextButton(onClick = onToggleRejected, modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                if (showRejected) "HIDE ${rejected.size} REJECTED" else "SHOW ${rejected.size} REJECTED",
+                                color = Color(0xFFFFAA00),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                    if (showRejected) {
+                        items(rejected, key = { it.link.url }) { result ->
+                            RejectedLinkCard(result)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FindingStat(label: String, value: Int, color: Color, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        color = Color(0xFF111111),
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(1.dp, Color(0xFF222222))
+    ) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Text(label, color = Color.Gray, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+            Text(value.toString(), color = color, fontSize = 18.sp, fontWeight = FontWeight.Black)
+        }
+    }
+}
+
+@Composable
+private fun VerifiedLinkCard(
+    result: CameraLinkVerifier.Result,
+    onOpen: (CameraLinkVerifier.Result) -> Unit
+) {
+    val isLogin = result.verdict == CameraLinkVerifier.Verdict.LOGIN
+    val accent = if (isLogin) Color(0xFFFFAA00) else Color.Green
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0A140A)),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.35f))
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(result.link.type, color = accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        color = accent.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, accent.copy(alpha = 0.4f))
+                    ) {
+                        Text(
+                            if (isLogin) "LOGIN" else "VERIFIED",
+                            color = accent,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    result.link.url,
+                    color = Color.Gray,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    result.detail,
+                    color = Color(0xFF6A9A6A),
+                    fontSize = 10.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = { onOpen(result) },
+                colors = ButtonDefaults.buttonColors(accent),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(34.dp)
+            ) {
+                Text(if (isLogin) "AUTH" else "LIVE", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RejectedLinkCard(result: CameraLinkVerifier.Result) {
+    val unreachable = result.verdict == CameraLinkVerifier.Verdict.UNREACHABLE
+    val accent = if (unreachable) Color(0xFF8A8A8A) else Color(0xFFFF5555)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF120C0C)),
+        border = BorderStroke(1.dp, Color(0xFF3A1A1A))
+    ) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(result.link.type, color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (unreachable) "NO RESPONSE" else "REJECTED",
+                    color = accent,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(Modifier.height(3.dp))
+            Text(
+                result.link.url,
+                color = Color.Gray,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                result.detail,
+                color = Color(0xFF9A6A6A),
+                fontSize = 10.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -1049,155 +1372,584 @@ fun ArchiveTab(context: Context, selectedTab: Int, terminalText: String, targetI
 }
 
 @Composable
-fun LanScanTab(scanResults: List<LanHost>, isScanning: Boolean, progress: Float, networkSummary: NetworkDiscoveryHelper.NetworkSummary?, nmapMode: Boolean, onNmapModeChange: (Boolean) -> Unit, nmapOutput: String, isMonitorRunning: Boolean, onToggleMonitor: () -> Unit, onScanStart: () -> Unit, onTabSwitch: (Int) -> Unit, onIpSelected: (String) -> Unit, onViewStream: (String) -> Unit, onHostClick: (LanHost) -> Unit) {
+fun LanScanTab(
+    scanResults: List<LanHost>,
+    isScanning: Boolean,
+    progress: Float,
+    networkSummary: NetworkDiscoveryHelper.NetworkSummary?,
+    nmapMode: Boolean,
+    onNmapModeChange: (Boolean) -> Unit,
+    nmapOutput: String,
+    isMonitorRunning: Boolean,
+    onToggleMonitor: () -> Unit,
+    onScanStart: () -> Unit,
+    onTabSwitch: (Int) -> Unit,
+    onIpSelected: (String) -> Unit,
+    onViewStream: (String) -> Unit,
+    onHostClick: (LanHost) -> Unit
+) {
     LaunchedEffect(Unit) {
         if (scanResults.isEmpty() && !isScanning) {
             onScanStart()
         }
     }
-    Column(Modifier.fillMaxSize()) {
-        Text(text = "NETWORK AUDIT", color = Color.Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
-        networkSummary?.let { Card(Modifier.fillMaxWidth().padding(vertical = 8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)), border = BorderStroke(1.dp, Color(0xFF1A1A1A))) { Column(Modifier.padding(16.dp)) { Text(text = it.ssid, color = Color.White, fontWeight = FontWeight.Bold); Text("Local IP: ${it.localIp}", color = Color.Gray, fontFamily = FontFamily.Monospace, fontSize = 12.sp) } } }
-        
-        Card(Modifier.fillMaxWidth().padding(bottom = 12.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF080808)), border = BorderStroke(1.dp, if (isMonitorRunning) Color.Green.copy(0.3f) else Color(0xFF1A1A1A))) {
-            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Background Monitor", color = Color.White, fontWeight = FontWeight.Bold)
-                    Text(if (isMonitorRunning) "Service Active" else "Service Idle", color = if (isMonitorRunning) Color.Green else Color.Gray, fontSize = 11.sp)
-                }
-                Switch(checked = isMonitorRunning, onCheckedChange = { onToggleMonitor() }, colors = SwitchDefaults.colors(checkedThumbColor = Color.Green, checkedTrackColor = Color.Green.copy(0.3f)))
-            }
-        }
 
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
-            Text("DEVICES: ${scanResults.size}", color = Color.Green, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f))
-            Button(onClick = onScanStart, enabled = !isScanning, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B5E20)), shape = RoundedCornerShape(4.dp)) { 
+    val neon = Color(0xFF00FF88)
+    val cameraCount = scanResults.count { it.isCamera }
+    val percent = (progress.coerceIn(0f, 1f) * 100).toInt()
+    val statusLine = when {
+        isScanning -> "Scanning subnet - $percent%"
+        cameraCount > 0 -> "$cameraCount camera${if (cameraCount == 1) "" else "s"} - ${scanResults.size} host${if (scanResults.size == 1) "" else "s"}"
+        scanResults.isNotEmpty() -> "${scanResults.size} host${if (scanResults.size == 1) "" else "s"} online"
+        else -> "Ready to scan"
+    }
+
+    // One scroll container for the whole tab: header, network cards, controls and
+    // results all move together instead of leaving only a small list scrollable.
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(top = 4.dp, bottom = 12.dp)
+    ) {
+
+        // ---- Section header -------------------------------------------------
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(Modifier.width(3.dp).height(38.dp).background(neon, RoundedCornerShape(2.dp)))
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "NETWORK AUDIT",
+                        color = neon,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 1.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = statusLine,
+                        color = Color(0xFF8A8A8A),
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 if (isScanning) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
-                        color = Color(0xFF00FF88),
+                        color = neon,
                         strokeWidth = 2.dp
                     )
-                } else {
-                    Icon(Icons.Default.Search, null, Modifier.size(16.dp))
                 }
-                Spacer(Modifier.width(8.dp))
-                Text(if (isScanning) "SCANNING..." else "SCAN") 
             }
         }
-        if (isScanning) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), color = Color.Green, trackColor = Color.Transparent)
-        LazyColumn(Modifier.weight(1f)) { 
-            items(scanResults.sortedBy { it.ip }, key = { it.ip }) { host -> 
-                LanHostCard(host = host, onClick = { onHostClick(host) }) 
-            } 
+
+        // ---- Connected network ----------------------------------------------
+        item {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFF0B1210),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, neon.copy(alpha = 0.18f))
+            ) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Wifi, null, tint = neon, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text(
+                            text = "NETWORK",
+                            color = neon.copy(alpha = 0.9f),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.5.sp
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Box(Modifier.size(6.dp).background(neon, CircleShape))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    NetworkSummaryRow("SSID", networkSummary?.ssid?.takeIf { it.isNotBlank() } ?: "Unknown")
+                    NetworkSummaryRow("LOCAL IP", networkSummary?.localIp ?: "Unknown")
+                    NetworkSummaryRow("SUBNET", networkSummary?.subnet ?: "Unknown")
+                    NetworkSummaryRow("GATEWAY", networkSummary?.gateway ?: "Unknown")
+                }
+            }
+        }
+
+        // ---- Background monitor (visually distinct from the summary) --------
+        item {
+            val monitorAccent = Color(0xFFFFC107)
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = if (isMonitorRunning) Color(0xFF141006) else Color(0xFF0B0B0B),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(
+                    1.dp,
+                    if (isMonitorRunning) monitorAccent.copy(alpha = 0.35f) else Color(0xFF1E1E1E)
+                )
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier.size(36.dp).background(
+                            if (isMonitorRunning) monitorAccent.copy(alpha = 0.12f) else Color(0xFF141414),
+                            RoundedCornerShape(9.dp)
+                        ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.NotificationsActive,
+                            null,
+                            tint = if (isMonitorRunning) monitorAccent else Color(0xFF6A6A6A),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(11.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "Traffic Monitor",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (isMonitorRunning) "Background service active" else "Background service off",
+                            color = if (isMonitorRunning) monitorAccent.copy(alpha = 0.85f) else Color(0xFF7A7A7A),
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Switch(
+                        checked = isMonitorRunning,
+                        onCheckedChange = { onToggleMonitor() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.Black,
+                            checkedTrackColor = monitorAccent,
+                            checkedBorderColor = monitorAccent,
+                            uncheckedThumbColor = Color(0xFF8A8A8A),
+                            uncheckedTrackColor = Color(0xFF1E1E1E),
+                            uncheckedBorderColor = Color(0xFF333333)
+                        )
+                    )
+                }
+            }
+        }
+
+        // ---- Device count + scan action -------------------------------------
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(
+                            text = "DEVICES",
+                            color = Color(0xFF7A7A7A),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.5.sp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "${scanResults.size}",
+                            color = neon,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    if (isScanning) {
+                        Text(
+                            text = "$percent% complete",
+                            color = Color(0xFFFFC107),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                Button(
+                    onClick = { if (!isScanning) onScanStart() },
+                    modifier = Modifier.height(42.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = neon,
+                        contentColor = Color.Black
+                    )
+                ) {
+                    if (isScanning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            color = Color.Black,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(Icons.Default.Search, null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                    }
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        text = if (isScanning) "SCANNING" else "SCAN",
+                        color = Color.Black,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 0.8.sp
+                    )
+                }
+            }
+        }
+
+        if (isScanning) {
+            item {
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                    color = neon,
+                    trackColor = Color(0xFF14231A),
+                    strokeCap = StrokeCap.Round
+                )
+            }
+        }
+
+        if (scanResults.isEmpty()) {
+            item {
+                LanEmptyState(isScanning = isScanning, onScan = onScanStart)
+            }
+        }
+
+        items(scanResults.sortedBy { it.ip }, key = { it.ip }) { host ->
+            LanHostCard(host = host, onClick = { onHostClick(host) })
+        }
+    }
+}
+
+@Composable
+private fun NetworkSummaryRow(label: String, value: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = Color(0xFF6F7F78),
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            letterSpacing = 0.8.sp,
+            modifier = Modifier.width(74.dp)
+        )
+        Text(
+            text = value,
+            color = Color(0xFFE6FFF2),
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun LanEmptyState(isScanning: Boolean, onScan: () -> Unit) {
+    val neon = Color(0xFF00FF88)
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 30.dp, horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            Modifier.size(62.dp)
+                .background(if (isScanning) neon.copy(alpha = 0.10f) else Color(0xFF121212), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.Wifi,
+                null,
+                tint = if (isScanning) neon else Color(0xFF4A4A4A),
+                modifier = Modifier.size(30.dp)
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(
+            text = "No devices yet",
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(5.dp))
+        Text(
+            text = if (isScanning) {
+                "Scan in progress - devices will appear as they respond."
+            } else {
+                "Run a scan to find cameras, routers and other hosts on your network."
+            },
+            color = Color(0xFF7A7A7A),
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center
+        )
+        if (!isScanning) {
+            Spacer(Modifier.height(14.dp))
+            OutlinedButton(
+                onClick = onScan,
+                shape = RoundedCornerShape(9.dp),
+                border = BorderStroke(1.dp, neon.copy(alpha = 0.6f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = neon)
+            ) {
+                Icon(Icons.Default.Search, null, modifier = Modifier.size(15.dp))
+                Spacer(Modifier.width(7.dp))
+                Text("SCAN NETWORK", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+            }
         }
     }
 }
 
 @Composable
 fun LanHostCard(host: LanHost, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onClick() },
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
-        border = BorderStroke(1.dp, if (host.isYourDevice) Color.Green else Color(0xFF111111))
+    val neon = Color(0xFF00FF88)
+    val type = host.deviceType.uppercase(Locale.US)
+    val typeColor = lanTypeColor(type)
+    val title = lanDisplayName(host)
+    val subtitle = when {
+        host.isYourDevice -> Build.MODEL.takeIf { it.isNotBlank() }
+        !host.vendor.isNullOrBlank() && !host.vendor.equals(title, ignoreCase = true) -> host.vendor
+        !host.hostname.isNullOrBlank() && !host.hostname.equals(title, ignoreCase = true) -> host.hostname
+        else -> null
+    }?.takeIf { !it.equals(host.ip, ignoreCase = true) }
+    val mac = host.mac?.trim()?.takeIf { it.isNotEmpty() && !it.equals("Unknown", ignoreCase = true) }
+    val ports = host.openPorts.distinct()
+    val highlighted = host.isCamera || host.isYourDevice
+
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable { onClick() },
+        color = Color(0xFF0A0A0A),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(
+            1.dp,
+            if (highlighted) neon.copy(alpha = 0.28f) else Color(0xFF1A1A1A)
+        )
     ) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                if (host.isCamera) Icons.Default.Videocam else Icons.Default.Devices,
-                null,
-                tint = if (host.isCamera) Color(0xFF00FF88) else Color.Gray,
-                modifier = Modifier.size(32.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) { 
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+            Box(
+                Modifier.size(42.dp)
+                    .background(typeColor.copy(alpha = 0.10f), RoundedCornerShape(10.dp))
+                    .border(1.dp, typeColor.copy(alpha = 0.28f), RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = lanDeviceIcon(type),
+                    contentDescription = null,
+                    tint = typeColor,
+                    modifier = Modifier.size(21.dp)
+                )
+            }
+
+            Spacer(Modifier.width(12.dp))
+
+            Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    val primaryName = when {
-                        host.isYourDevice -> "This Device"
-                        host.vendor != null -> host.vendor
-                        host.hostname != null && host.hostname != host.ip -> host.hostname
-                        else -> "Network Device"
-                    }
-                    Text(text = primaryName, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        text = title,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
                     if (host.isYourDevice) {
-                        Spacer(Modifier.width(8.dp))
-                        Surface(
-                            color = Color(0xFF00FF88),
-                            shape = RoundedCornerShape(4.dp)
+                        Spacer(Modifier.width(6.dp))
+                        Box(
+                            Modifier.background(neon, RoundedCornerShape(4.dp))
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
                         ) {
                             Text(
-                                "YOU",
+                                text = "YOU",
                                 color = Color.Black,
-                                fontSize = 9.sp,
+                                fontSize = 8.sp,
                                 fontWeight = FontWeight.Black,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                letterSpacing = 0.5.sp
                             )
                         }
                     }
                 }
-                
-                val subtitle = when {
-                    host.isYourDevice -> android.os.Build.MODEL
-                    host.vendor != null && host.hostname != null && host.hostname != host.ip -> host.hostname
-                    host.mac != null && host.mac != "Unknown" -> "MAC: ${host.mac}"
-                    else -> host.ip
-                }
-                
-                Text(
-                    text = subtitle,
-                    color = if (host.isCamera) Color(0xFF00FF88) else Color.Gray,
-                    fontSize = 13.sp
-                )
 
+                if (subtitle != null) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = subtitle,
+                        color = if (host.isCamera) neon.copy(alpha = 0.75f) else Color(0xFF8A8A8A),
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Spacer(Modifier.height(4.dp))
                 Text(
                     text = host.ip,
-                    color = if (host.isCamera) Color(0xFF00FF88).copy(alpha = 0.7f) else Color.Gray,
+                    color = Color(0xFFA8A8A8),
                     fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 0.5.sp
                 )
-                
-                if (host.openPorts.isNotEmpty()) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.padding(top = 4.dp)
-                    ) {
-                        host.openPorts.take(4).forEach { port ->
-                            val label = when (port) {
-                                80 -> "HTTP"
-                                443 -> "HTTPS"
-                                554 -> "RTSP"
-                                8080 -> "WEB"
-                                else -> "$port"
-                            }
-                            AssistChip(
-                                onClick = {},
-                                label = { Text(label, fontSize = 9.sp) },
-                                colors = AssistChipDefaults.assistChipColors(
-                                    labelColor = Color(0xFF00FF88),
-                                    containerColor = Color(0xFF0D3B1E)
-                                ),
-                                border = null,
-                                modifier = Modifier.height(20.dp)
-                            )
-                        }
+
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    LanTypeTag(type)
+                    ports.take(3).forEach { port ->
+                        LanPortTag(lanPortLabel(port))
+                    }
+                    if (ports.size > 3) {
+                        Text(
+                            text = "+${ports.size - 3}",
+                            color = Color(0xFF5A5A5A),
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
                     }
                 }
+
+                if (mac != null) {
+                    Spacer(Modifier.height(4.dp))
+                    LanMacTag("MAC $mac")
+                }
             }
+
             if (host.streamUrl != null) {
-                Button(
-                    onClick = onClick,
-                    modifier = Modifier.height(28.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00FF88), contentColor = Color.Black)
-                ) {
-                    Text("LIVE", fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-            } else if (host.isCamera) {
-                TextButton(onClick = onClick, modifier = Modifier.height(28.dp)) {
-                    Text("UNLOCK", color = Color(0xFFFFAA00), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
+                Spacer(Modifier.width(8.dp))
+                LanActionTag("LIVE", neon)
             }
         }
+    }
+}
+
+/** One display name used by both the card and the detail sheet. */
+private fun lanDisplayName(host: LanHost): String {
+    if (host.isYourDevice) return "This Device"
+    return DeviceIdentifier.cleanName(host.hostname, host.ip)
+        ?: host.vendor?.takeIf { it.isNotBlank() }
+        ?: "Network Device"
+}
+
+private fun lanDeviceIcon(type: String) = when (type) {
+    DeviceIdentifier.CAMERA -> Icons.Default.Videocam
+    DeviceIdentifier.ROUTER -> Icons.Default.Router
+    DeviceIdentifier.PHONE -> Icons.Default.Smartphone
+    DeviceIdentifier.PRINTER -> Icons.Default.Print
+    DeviceIdentifier.NAS -> Icons.Default.Storage
+    DeviceIdentifier.TV -> Icons.Default.Tv
+    DeviceIdentifier.IOT -> Icons.Default.Sensors
+    DeviceIdentifier.COMPUTER -> Icons.Default.Computer
+    else -> Icons.Default.Devices
+}
+
+private fun lanTypeColor(type: String): Color = when (type) {
+    DeviceIdentifier.CAMERA -> Color(0xFF00FF88)
+    DeviceIdentifier.ROUTER -> Color(0xFF4FC3F7)
+    DeviceIdentifier.PHONE -> Color(0xFFCE93D8)
+    DeviceIdentifier.PRINTER -> Color(0xFFFFB74D)
+    DeviceIdentifier.NAS -> Color(0xFF81C784)
+    DeviceIdentifier.TV -> Color(0xFF64B5F6)
+    DeviceIdentifier.IOT -> Color(0xFFFFD54F)
+    DeviceIdentifier.COMPUTER -> Color(0xFF90A4AE)
+    else -> Color(0xFF7A7A7A)
+}
+
+private fun lanPortLabel(port: Int): String = when (port) {
+    80, 8000, 8080 -> "HTTP"
+    443, 8443 -> "HTTPS"
+    554, 8554 -> "RTSP"
+    21 -> "FTP"
+    22 -> "SSH"
+    23 -> "TELNET"
+    445 -> "SMB"
+    515, 631 -> "IPP"
+    9100 -> "PRINT"
+    8009 -> "CAST"
+    3389 -> "RDP"
+    37777 -> "TCP"
+    else -> "$port"
+}
+
+@Composable
+private fun LanPortTag(label: String) {
+    Box(
+        Modifier.background(Color(0xFF0F2418), RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp)
+    ) {
+        Text(
+            text = label,
+            color = Color(0xFF00FF88).copy(alpha = 0.85f),
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace
+        )
+    }
+}
+
+@Composable
+private fun LanMacTag(label: String) {
+    Box(
+        Modifier.background(Color(0xFF141414), RoundedCornerShape(4.dp))
+            .border(1.dp, Color(0xFF2A2A2A), RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp)
+    ) {
+        Text(
+            text = label,
+            color = Color(0xFFB8B8B8),
+            fontSize = 8.sp,
+            fontFamily = FontFamily.Monospace,
+            letterSpacing = 0.4.sp
+        )
+    }
+}
+
+@Composable
+private fun LanTypeTag(label: String) {
+    Box(
+        Modifier.background(Color(0xFF151515), RoundedCornerShape(4.dp))
+            .border(1.dp, Color(0xFF2A2A2A), RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp)
+    ) {
+        Text(
+            text = label,
+            color = Color(0xFFB0B0B0),
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            letterSpacing = 0.5.sp
+        )
+    }
+}
+
+@Composable
+private fun LanActionTag(label: String, color: Color) {
+    Surface(
+        color = color.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.45f))
+    ) {
+        Text(
+            text = label,
+            color = color,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 0.5.sp,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+        )
     }
 }
 
@@ -1341,6 +2093,8 @@ fun CameraDetailBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -1380,12 +2134,7 @@ fun CameraDetailBottomSheet(
 
             Spacer(Modifier.height(16.dp))
 
-            val primaryName = when {
-                host.isYourDevice -> "This Device"
-                host.vendor != null -> host.vendor
-                host.hostname != null && host.hostname != host.ip -> host.hostname
-                else -> "Network Device"
-            }
+            val primaryName = lanDisplayName(host)
             Text(
                 text = primaryName,
                 color = Color.White,
@@ -1393,21 +2142,34 @@ fun CameraDetailBottomSheet(
                 fontWeight = FontWeight.Bold
             )
             val subtitle = when {
-                host.vendor != null && host.hostname != null && host.hostname != host.ip -> host.hostname
-                host.mac != null && host.mac != "Unknown" -> "MAC: ${host.mac}"
-                else -> host.ip
-            }
-            Text(
-                text = subtitle,
-                color = Color.Gray,
-                fontSize = 14.sp
-            )
-            if (host.mac != null && host.mac != "Unknown") {
+                host.isYourDevice -> Build.MODEL.takeIf { it.isNotBlank() }
+                !host.vendor.isNullOrBlank() && !host.vendor.equals(primaryName, ignoreCase = true) -> host.vendor
+                !host.hostname.isNullOrBlank() && !host.hostname.equals(primaryName, ignoreCase = true) -> host.hostname
+                else -> null
+            }?.takeIf { !it.equals(host.ip, ignoreCase = true) }
+            if (subtitle != null) {
                 Text(
-                    text = "MAC: ${host.mac}",
-                    color = Color.DarkGray,
-                    fontSize = 11.sp,
+                    text = subtitle,
+                    color = Color.Gray,
+                    fontSize = 14.sp
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            val mac = host.mac?.trim()?.takeIf { it.isNotEmpty() && !it.equals("Unknown", ignoreCase = true) }
+            if (mac != null) {
+                Text(
+                    text = "MAC $mac",
+                    color = Color(0xFFB0B0B0),
+                    fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace
+                )
+            } else {
+                Text(
+                    text = "MAC unavailable - Android 10+ does not expose other devices' MAC addresses to apps.",
+                    color = Color(0xFF7A7A7A),
+                    fontSize = 10.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp)
                 )
             }
 

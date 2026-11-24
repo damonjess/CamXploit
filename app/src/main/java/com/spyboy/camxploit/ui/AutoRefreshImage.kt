@@ -36,10 +36,9 @@ fun AutoRefreshImage(
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var errorCount by remember { mutableStateOf(0) }
-    var tick by remember { mutableStateOf(0L) }
 
     LaunchedEffect(url) {
-        while (isActive && errorCount < 10) {
+        while (isActive && errorCount < 3) {
             try {
                 val cacheBuster = "t=${System.currentTimeMillis()}"
                 val fullUrl = if (url.contains("?")) "$url&$cacheBuster" else "$url?$cacheBuster"
@@ -62,15 +61,20 @@ fun AutoRefreshImage(
                     errorCount = 0
                 } else {
                     errorCount++
+                    if (errorCount >= 3 && isActive) {
+                        isLoading = false
+                        onError()
+                        break
+                    }
                 }
             } catch (e: Exception) {
                 errorCount++
-                if (errorCount >= 10 && isActive) {
+                if (errorCount >= 3 && isActive) {
+                    isLoading = false
                     onError()
                     break
                 }
             }
-            tick++
             delay(refreshMs)
         }
     }

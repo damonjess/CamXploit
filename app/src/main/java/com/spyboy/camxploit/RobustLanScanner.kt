@@ -107,7 +107,7 @@ class RobustLanScanner(private val context: Context) {
         portJobs.awaitAll()
 
         val mac = readArp(ip)
-        val hostname = resolveHostname(ip)
+        val resolvedHostname = resolveHostname(ip)
         
         val httpPort = when {
             80 in openPorts -> 80
@@ -115,17 +115,22 @@ class RobustLanScanner(private val context: Context) {
             else -> null
         }
         
-        val httpVendor = httpPort?.let { httpFingerprint(ip, it) }
+        val http = httpPort?.let { httpFingerprint(ip, it) }
+        val httpVendor = http?.first
+        val httpTitle = http?.second
         val rtspVendor = if (554 in openPorts) rtspFingerprint(ip, 554) else null
         val ftpVendor = if (21 in openPorts) ftpFingerprint(ip, 21) else null
+        // A page title ("TP-Link Archer AX55", "Synology DiskStation") tells the
+        // user far more than "Network Device".
+        val hostname = DeviceIdentifier.cleanName(resolvedHostname, ip) ?: httpTitle
         
-        val vendor = mac?.let { OuiVendorLookup.lookup(it) } 
-            ?: httpVendor
+        // Fallback chain: HTTP fingerprint -> hostname -> OUI -> reverse-DNS/SSDP-style hints.
+        val vendor = httpVendor
+            ?: DeviceIdentifier.vendorFromHostname(hostname)
+            ?: mac?.let { OuiVendorLookup.lookup(it) }
             ?: rtspVendor
             ?: ftpVendor
-            ?: guessVendorFromHostname(hostname)
-            ?: mac?.let { guessVendorFromMac(it) }
-        
+
         Device(
             ip = ip,
             mac = mac,
@@ -157,14 +162,7 @@ class RobustLanScanner(private val context: Context) {
                 Socket().use { socket ->
                     socket.connect(InetSocketAddress(ip, port), 1500)
                     socket.getInputStream().bufferedReader().use { reader ->
-                        val banner = reader.readLine()?.lowercase() ?: ""
-                        when {
-                            banner.contains("d-link") -> "D-Link"
-                            banner.contains("tp-link") -> "TP-Link"
-                            banner.contains("vs-ftp") || banner.contains("vsftpd") -> "Linux/NAS"
-                            banner.contains("filezilla") -> "FileZilla Server"
-                            else -> null
-                        }
+                        DeviceIdentifier.vendorFromText(reader.readLine())
                     }
                 }
             } catch (_: Exception) { null }
@@ -190,23 +188,13 @@ class RobustLanScanner(private val context: Context) {
                         if (sb.length > 2000) break 
                     }
                     
-                    val response = sb.toString().lowercase()
-                    when {
-                        response.contains("server: hikvision") || response.contains("hikvision") -> "Hikvision"
-                        response.contains("server: dahua") || response.contains("dahua") -> "Dahua"
-                        response.contains("server: axis") || response.contains("axis") -> "Axis"
-                        response.contains("server: d-link") || response.contains("dlink") -> "D-Link"
-                        response.contains("server: reolink") || response.contains("reolink") -> "Reolink"
-                        response.contains("server: foscam") || response.contains("foscam") -> "Foscam"
-                        response.contains("live555") -> "Common IP Camera"
-                        else -> null
-                    }
+                    DeviceIdentifier.vendorFromText(sb.toString())
                 }
             } catch (_: Exception) { null }
         }
     }
 
-    private suspend fun httpFingerprint(ip: String, port: Int): String? {
+    private suspend fun httpFingerprint(ip: String, port: Int): Pair<String?, String?> {
         return try {
             withContext(Dispatchers.IO) {
                 withTimeout(1500) {
@@ -229,81 +217,12 @@ class RobustLanScanner(private val context: Context) {
 
                     conn.disconnect()
 
-                    when {
-                        server?.contains("hikvision") == true -> "Hikvision"
-                        server?.contains("dahua") == true -> "Dahua"
-                        server?.contains("netgear") == true -> "NETGEAR"
-                        server?.contains("router") == true -> "Router"
-                        title?.contains("camera") == true -> "IP Camera"
-                        title?.contains("d-link") == true -> "D-Link"
-                        else -> null
-                    }
+                    val vendor = DeviceIdentifier.vendorFromHttp(title, server)
+                    vendor to DeviceIdentifier.cleanName(title, ip)
                 }
             }
         } catch (_: Exception) {
-            null
-        }
-    }
-
-    fun guessVendorFromHostname(hostname: String?): String? {
-        if (hostname.isNullOrBlank()) return null
-        val h = hostname.lowercase()
-        return when {
-            h.contains("hikvision") || h.contains("ds-") -> "Hikvision"
-            h.contains("dahua") || h.contains("ipc-") -> "Dahua"
-            h.contains("axis") -> "Axis Communications"
-            h.contains("foscam") -> "Foscam"
-            h.contains("tp-link") || h.contains("tplink") -> "TP-Link"
-            h.contains("netgear") -> "NETGEAR"
-            h.contains("vodafone") -> "Vodafone"
-            h.contains("samsung") -> "Samsung"
-            h.contains("xiaomi") || h.contains("mi-") -> "Xiaomi"
-            h.contains("google") || h.contains("nest") -> "Google"
-            h.contains("amazon") || h.contains("echo") || h.contains("fire") -> "Amazon"
-            h.contains("apple") || h.contains("iphone") || h.contains("ipad") -> "Apple"
-            h.contains("dlink") || h.contains("d-link") || h.contains("dcs-") -> "D-Link"
-            h.contains("ubiquiti") || h.contains("unifi") -> "Ubiquiti"
-            h.contains("reolink") -> "Reolink"
-            h.contains("amcrest") -> "Amcrest"
-            h.contains("wyze") -> "Wyze"
-            h.contains("ring") -> "Ring"
-            h.contains("arlo") -> "Arlo"
-            h.contains("ezviz") -> "EZVIZ"
-            h.contains(" lorex") -> "Lorex"
-            h.contains("swann") -> "Swann"
-            h.contains("annke") -> "Annke"
-            h.contains("zosi") -> "ZOSI"
-            h.contains("icsee") || h.contains("xmeye") || h.contains("xmei") -> "XMEye / iCSee"
-            h.contains("mysimplelink") -> "Texas Instruments (IoT)"
-            h.contains("int6400") -> "Atheros Powerline"
-            h.contains("raspberry") -> "Raspberry Pi"
-            h.contains("synology") -> "Synology NAS"
-            h.contains("qnap") -> "QNAP NAS"
-            h.contains("western-digital") || h.contains("wd-") -> "Western Digital"
-            h.contains("sonos") -> "Sonos"
-            h.contains("roku") -> "Roku"
-            h.contains("chromecast") -> "Chromecast"
-            h.contains("philips-hue") || h.contains("hue-bridge") -> "Philips Hue"
-            h.contains("esp32") || h.contains("espressif") -> "Espressif (IoT)"
-            h.contains("shelly") -> "Shelly IoT"
-            h.contains("wemo") -> "Belkin Wemo"
-            else -> null
-        }
-    }
-
-    private fun guessVendorFromMac(mac: String): String? {
-        val clean = mac.replace(":", "").replace("-", "").uppercase()
-        return when {
-            clean.startsWith("6C198F") || clean.startsWith("000F3D") || 
-            clean.startsWith("C0A0BB") || clean.startsWith("F07D68") -> "D-Link"
-            clean.startsWith("000C41") -> "Cisco-Linksys"
-            clean.startsWith("00E0FC") || clean.startsWith("00C0CA") -> "Hikvision"
-            clean.startsWith("BC1485") || clean.startsWith("BC7ABF") -> "Samsung"
-            clean.startsWith("00000C") -> "Cisco"
-            clean.startsWith("B0C4E7") -> "Samsung"
-            clean.startsWith("001132") -> "Synology"
-            clean.startsWith("001D63") -> "QNAP"
-            else -> null
+            null to null
         }
     }
 

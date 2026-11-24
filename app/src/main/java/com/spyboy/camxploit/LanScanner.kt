@@ -129,28 +129,4 @@ class LanScanner(private val context: Context) {
         return arpMap
     }
 
-    fun guessDeviceType(vendor: String?, hostname: String, openPorts: List<Int>): String {
-        val v = vendor?.lowercase() ?: ""
-        val h = hostname.lowercase()
-        
-        return when {
-            v.contains("apple") || v.contains("samsung") || v.contains("huawei") || v.contains("google") -> "Phone"
-            v.contains("microsoft") || v.contains("dell") || v.contains("hp") || v.contains("lenovo") || v.contains("asus") -> "Computer"
-            v.contains("hikvision") || v.contains("dahua") || v.contains("axis") || v.contains("reolink") || 
-                    v.contains("amcrest") || v.contains("foscam") || v.contains("vstarcam") || 
-                    openPorts.contains(554) || openPorts.contains(8000) || openPorts.contains(37777) ||
-                    h.contains("p2p device") -> "Camera"
-            v.contains("tp-link") || v.contains("d-link") || v.contains("netgear") || v.contains("cisco") || 
-                    v.contains("ubiquiti") || v.contains("linksys") || v.contains("asus") || v.contains("belkin") -> "Router"
-            v.contains("amazon") || v.contains("echo") || h.contains("google home") || v.contains("sonos") || h.contains("nest") -> "Smart Speaker"
-            v.contains("sony") || v.contains("lg") || v.contains("panasonic") || v.contains("vizio") || h.contains("tv") || h.contains("roku") -> "TV"
-            v.contains("synology") || v.contains("qnap") || v.contains("western digital") || openPorts.contains(445) -> "Storage"
-            v.contains("raspberry pi") || v.contains("arduino") || v.contains("espressif") -> "IoT Controller"
-            v.contains("atheros") || h.contains("int6400") -> "Powerline"
-            h.contains("iphone") || h.contains("android") || h.contains("pixel") -> "Phone"
-            h.contains("macbook") || h.contains("laptop") || h.contains("desktop") -> "Computer"
-            h.contains("printer") || v.contains("canon") || v.contains("epson") || v.contains("brother") || v.contains("hp") -> "Printer"
-            else -> "Unknown"
-        }
-    }
 }

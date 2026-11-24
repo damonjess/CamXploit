@@ -63,10 +63,10 @@ class DiscoveryCoordinator(private val context: Context) {
                             RobustLanScanner.Device(
                                 ip = ip,
                                 mac = null,
-                                hostname = info,
+                                hostname = DeviceIdentifier.cleanName(info, ip),
                                 openPorts = emptyList(),
-                                source = "ssdp",
-                                vendor = scanner.guessVendorFromHostname(info)
+                                source = DeviceIdentifier.ssdpHint(server = info)?.let { "ssdp:$it" } ?: "ssdp",
+                                vendor = DeviceIdentifier.vendorFromText(info)
                             )
                         )
                     })
@@ -86,10 +86,10 @@ class DiscoveryCoordinator(private val context: Context) {
                                     RobustLanScanner.Device(
                                         ip = ip!!,
                                         mac = null,
-                                        hostname = info,
+                                        hostname = DeviceIdentifier.cleanName(info, ip),
                                         openPorts = emptyList(),
-                                        source = "mdns",
-                                        vendor = scanner.guessVendorFromHostname(info)
+                                        source = "mdns:$type",
+                                        vendor = DeviceIdentifier.vendorFromText(info)
                                     )
                                 )
                             }
@@ -108,10 +108,10 @@ class DiscoveryCoordinator(private val context: Context) {
                             RobustLanScanner.Device(
                                 ip = ip,
                                 mac = null,
-                                hostname = info,
+                                hostname = DeviceIdentifier.cleanName(info, ip),
                                 openPorts = emptyList(),
                                 source = "p2p",
-                                vendor = null
+                                vendor = DeviceIdentifier.vendorFromText(info)
                             )
                         )
                     }
@@ -163,8 +163,9 @@ class DiscoveryCoordinator(private val context: Context) {
         val existing = deviceMap[dev.ip]
         
         // Recalculate vendor if we have new info
-        val currentVendor = dev.vendor ?: (arpMac?.let { OuiVendorLookup.lookup(it) })
-            ?: scanner.guessVendorFromHostname(dev.hostname)
+        val currentVendor = dev.vendor
+            ?: DeviceIdentifier.vendorFromHostname(dev.hostname)
+            ?: arpMac?.let { OuiVendorLookup.lookup(it) }
 
         val merged = if (existing != null) {
             val finalMac = arpMac ?: existing.mac

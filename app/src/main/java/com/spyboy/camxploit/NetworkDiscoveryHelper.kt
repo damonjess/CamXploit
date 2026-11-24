@@ -25,7 +25,8 @@ class NetworkDiscoveryHelper(private val context: Context) {
         val localIp: String,
         val gateway: String,
         val dns: String,
-        val publicIp: String = "Detecting..."
+        val publicIp: String = "Detecting...",
+        val subnet: String = "Unknown"
     )
 
     fun getNetworkSummary(): NetworkSummary {
@@ -38,11 +39,37 @@ class NetworkDiscoveryHelper(private val context: Context) {
             wifiManager.connectionInfo.ssid.removeSurrounding("\"")
         } else "Not a WiFi Network"
 
-        val localIp = linkProperties?.linkAddresses?.firstOrNull { it.address is java.net.Inet4Address }?.address?.hostAddress ?: "Unknown"
-        val gateway = linkProperties?.routes?.firstOrNull { it.isDefaultRoute }?.gateway?.hostAddress ?: "Unknown"
+        val ipv4 = linkProperties?.linkAddresses?.firstOrNull { it.address is java.net.Inet4Address }
+        val localIp = ipv4?.address?.hostAddress ?: "Unknown"
+        val subnet = subnetOf(ipv4)
+        // Prefer the IPv4 default gateway; dual-stack networks also expose an IPv6
+        // link-local route, which is not useful in the IPv4 subnet summary.
+        val defaultRoutes = linkProperties?.routes.orEmpty().filter { it.isDefaultRoute }
+        val gateway = defaultRoutes.mapNotNull { it.gateway }
+            .firstOrNull { it is java.net.Inet4Address }
+            ?.hostAddress
+            ?: defaultRoutes.mapNotNull { it.gateway }.firstOrNull()?.hostAddress
+            ?: "Unknown"
         val dns = linkProperties?.dnsServers?.joinToString(", ") { it.hostAddress ?: "" } ?: "Unknown"
 
-        return NetworkSummary(ssid, localIp, gateway, dns)
+        return NetworkSummary(
+            ssid = ssid,
+            localIp = localIp,
+            gateway = gateway,
+            dns = dns,
+            subnet = subnet
+        )
+    }
+
+    /** Formats the active IPv4 network as e.g. 192.168.1.0/24. */
+    private fun subnetOf(linkAddress: android.net.LinkAddress?): String {
+        val address = linkAddress?.address as? java.net.Inet4Address ?: return "Unknown"
+        val prefix = linkAddress.prefixLength.coerceIn(0, 32)
+        val value = address.address.fold(0L) { acc, byte -> (acc shl 8) or (byte.toLong() and 0xFF) }
+        val mask = if (prefix == 0) 0L else (0xFFFFFFFFL shl (32 - prefix)) and 0xFFFFFFFFL
+        val network = value and mask
+        return "${(network shr 24) and 0xFF}.${(network shr 16) and 0xFF}." +
+            "${(network shr 8) and 0xFF}.${network and 0xFF}/$prefix"
     }
 
     suspend fun getPublicIp(): String = withContext(Dispatchers.IO) {

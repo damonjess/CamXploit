@@ -21,18 +21,22 @@ class LanViewModel(application: Application) : AndroidViewModel(application) {
         .map { devices ->
             val localIp = lanScanner.getLocalIpAndSubnet()?.first
             devices.map { dev ->
-                val mac = lanScanner.normalizeMac(dev.mac) ?: "Unknown"
-                val vendor = dev.vendor ?: lanScanner.getVendor(mac)
-                val deviceType = lanScanner.guessDeviceType(vendor, dev.hostname ?: "Unknown", dev.openPorts)
-                
-                val isCam = dev.source.contains("ssdp") || 
-                             dev.openPorts.any { it in listOf(554, 8554, 8899, 37777, 34567) }
+                // MAC is best-effort: Android 10+ hides other devices' ARP entries.
+                val mac = lanScanner.normalizeMac(dev.mac)
+                val name = dev.hostname
+                // dev.vendor already carries the HTTP fingerprint; then hostname, then OUI.
+                val vendor = dev.vendor
+                    ?: DeviceIdentifier.vendorFromHostname(name)
+                    ?: OuiVendorLookup.lookup(mac)
+                val hint = "${dev.source} ${name ?: ""}"
+                val deviceType = DeviceIdentifier.deviceType(vendor, name, dev.openPorts, hint)
+                val isCam = DeviceIdentifier.isCamera(vendor, name, dev.openPorts, hint)
 
                 LanHost(
                     ip = dev.ip,
                     mac = mac,
                     vendor = vendor,
-                    hostname = dev.hostname,
+                    hostname = name,
                     isCamera = isCam,
                     deviceType = deviceType,
                     isYourDevice = dev.ip == localIp,

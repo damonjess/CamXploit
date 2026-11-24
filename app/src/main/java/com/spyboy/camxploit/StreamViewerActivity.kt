@@ -299,6 +299,8 @@ fun StreamPlayerScreen(
     var resolvedUrl by remember { mutableStateOf(source?.url ?: "") }
     var isScraping by remember { mutableStateOf(false) }
     var probeResult by remember { mutableStateOf<CameraUrlProbe.Result?>(null) }
+    var errorMessage by remember { mutableStateOf("Failed to load stream.\nThe camera may be offline.") }
+    var playbackProtocol by remember { mutableStateOf(source?.protocol?.lowercase() ?: "") }
 
     val rawUrl = source?.url ?: ""
     val title = source?.title ?: targetIp
@@ -332,19 +334,28 @@ fun StreamPlayerScreen(
             isScraping = false
             isLoading = false
 
-            // Use one effective protocol for both playback state and renderer selection.
-            // A declared MJPEG source is retained when the probe is inconclusive, but an
-            // explicit snapshot response always takes precedence.
+            // Resolve one effective protocol for both playback state and renderer
+            // selection: snapshot -> confirmed MJPEG -> declared protocol -> web.
+            // An HTML response is never handed to the MJPEG player, even when the link
+            // was declared "mjpeg": that is what left the viewer spinning forever.
             if (source != null) {
-                val declaredMjpeg = source.protocol.equals("mjpeg", ignoreCase = true)
+                val declared = source.protocol.lowercase()
+                val needsLogin = result.responseCode == 401 || result.responseCode == 403
                 val effectiveProtocol = when {
-                    result.isMjpeg || (declaredMjpeg && !result.isSnapshot) -> "mjpeg"
-                    result.isSnapshot -> "snapshot"
-                    else -> source.protocol
+                    result.isSnapshot || isSnapshotUrl(result.url) -> "snapshot"
+                    result.isMjpeg -> "mjpeg"
+                    declared == "rtsp" || declared == "rtmp" || declared == "onvif" -> declared
+                    result.isHtml || result.contentType.startsWith("text/") -> "web"
+                    declared.isNotBlank() -> declared
+                    else -> "web"
                 }
+                playbackProtocol = effectiveProtocol
                 val effectiveSource = source.copy(url = result.url, protocol = effectiveProtocol)
 
-                if (effectiveProtocol.equals("mjpeg", ignoreCase = true)) {
+                if (needsLogin) {
+                    errorMessage = "HTTP ${result.responseCode} - this endpoint needs a login.\nTry Test Creds from the LAN tab."
+                    hasError = true
+                } else if (effectiveProtocol == "mjpeg") {
                     viewModel.prepareMjpegPlayback(effectiveSource)
                 } else {
                     viewModel.startStream(effectiveSource)
@@ -382,8 +393,14 @@ fun StreamPlayerScreen(
                 BottomControls(
                     isRecording = isRecording,
                     onRetry = {
+                        // Clear the error state before re-probing, otherwise the error
+                        // message would stay on screen even after a successful retry.
+                        val useNativeMjpeg = playbackProtocol == "mjpeg"
+                        hasError = false
+                        errorMessage = "Failed to load stream.\nThe camera may be offline."
                         probeResult = null
-                        onRetry()
+                        playbackProtocol = source?.protocol?.lowercase() ?: ""
+                        if (!useNativeMjpeg) onRetry()
                     },
                     onSnapshot = { onSnapshot(it) },
                     onPip = onPip,
@@ -427,17 +444,20 @@ fun StreamPlayerScreen(
                     hasError -> {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
-                                "Failed to load stream.\nThe camera may be offline.",
+                                text = errorMessage,
                                 color = Color.Red,
                                 fontSize = 14.sp,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                                 modifier = Modifier.padding(16.dp)
                             )
                             Button(onClick = {
-                                val useNativeMjpeg = source?.protocol.equals("mjpeg", ignoreCase = true) || probeResult?.isMjpeg == true
+                                // FastMjpegPlayer reconnects when it re-enters composition; do not
+                                // also start the ViewModel MJPEG decoder for the same URL.
+                                val useNativeMjpeg = playbackProtocol == "mjpeg"
                                 hasError = false
+                                errorMessage = "Failed to load stream.\nThe camera may be offline."
                                 probeResult = null
-                                // The native player reconnects when it re-enters composition. Avoid
-                                // restarting the ViewModel MJPEG decoder in parallel.
+                                playbackProtocol = source?.protocol?.lowercase() ?: ""
                                 if (!useNativeMjpeg) onRetry()
                             }) {
                                 Text("Retry")
@@ -445,39 +465,35 @@ fun StreamPlayerScreen(
                         }
                     }
                     else -> {
-                        val result = probeResult
-                        val lowerUrl = resolvedUrl.lowercase()
-                        val isMjpegUrl = result?.isMjpeg == true ||
-                                source?.protocol.equals("mjpeg", ignoreCase = true) ||
-                                lowerUrl.contains(".mjpg") || lowerUrl.contains(".mjpeg") ||
-                                lowerUrl.contains(".mjpq") || lowerUrl.contains("video.cgi") ||
-                                lowerUrl.contains("videostream") || lowerUrl.contains("mjpg") ||
-                                lowerUrl.contains("mjpeg") || lowerUrl.contains("nphmotionjpeg") ||
-                                lowerUrl.contains("action=stream")
-                        
-                        when {
-                            // True MJPEG stream → native decoder
-                            isMjpegUrl && result?.isSnapshot != true -> {
-                                FastMjpegPlayer(
-                                    url = resolvedUrl,
-                                    modifier = Modifier.fillMaxSize(),
-                                    onFrame = viewModel::onMjpegFrame,
-                                    onError = { hasError = true }
-                                )
-                            }
-
-                            // Snapshot JPEG → auto-refresh every 1.5s
-                            result?.isSnapshot == true -> {
+                        when (playbackProtocol) {
+                            // Single JPEG → periodic snapshot refresh
+                            "snapshot" -> {
                                 AutoRefreshImage(
                                     url = resolvedUrl,
                                     modifier = Modifier.fillMaxSize(),
                                     refreshMs = 1500,
-                                    onError = { hasError = true }
+                                    onError = {
+                                        hasError = true
+                                        errorMessage = "No snapshot returned by this URL.\nIt may need a login, or the path may be wrong."
+                                    }
                                 )
                             }
-                            
+
+                            // True MJPEG stream → native decoder
+                            "mjpeg" -> {
+                                FastMjpegPlayer(
+                                    url = resolvedUrl,
+                                    modifier = Modifier.fillMaxSize(),
+                                    onFrame = viewModel::onMjpegFrame,
+                                    onError = {
+                                        hasError = true
+                                        errorMessage = "Not an MJPEG stream.\nNo video frames were received."
+                                    }
+                                )
+                            }
+
                             // RTSP / RTMP feeds
-                            lowerUrl.startsWith("rtsp://") || lowerUrl.startsWith("rtmp://") -> {
+                            "rtsp", "rtmp", "onvif" -> {
                                 AndroidView(
                                     factory = { ctx ->
                                         PlayerView(ctx).apply {
@@ -490,7 +506,7 @@ fun StreamPlayerScreen(
                                 )
                             }
 
-                            // HTML wrapper or unknown → WebView fallback
+                            // HTML page → WebView instead of the MJPEG grabber
                             else -> {
                                 WebPlayer(
                                     url = resolvedUrl,
@@ -501,8 +517,8 @@ fun StreamPlayerScreen(
                         }
                     }
                 }
-                
-                if (isLoading && !isScraping && rawUrl.isNotBlank() && probeResult != null) {
+
+                if (isLoading && !isScraping && !hasError && rawUrl.isNotBlank() && probeResult != null) {
                     CircularProgressIndicator(color = neonCyan)
                 }
             }
