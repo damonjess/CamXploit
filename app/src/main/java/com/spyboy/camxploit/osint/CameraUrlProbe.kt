@@ -19,7 +19,8 @@ object CameraUrlProbe {
         val isMjpeg: Boolean,
         val isSnapshot: Boolean,
         val isHtml: Boolean,
-        val responseCode: Int = 0
+        val responseCode: Int = 0,
+        val isHls: Boolean = false
     )
 
     suspend fun probe(url: String): Result = withContext(Dispatchers.IO) {
@@ -83,6 +84,16 @@ object CameraUrlProbe {
         val isSnapshot = typeLower.contains("image/jpeg") || typeLower.contains("image/jpg") || typeLower.contains("image/png")
         val isHtml = typeLower.contains("text/html")
         val isAuthError = responseCode == 401 || responseCode == 403
+        val isHls = typeLower.contains("mpegurl") || typeLower.contains("m3u8") ||
+            lowerUrl.substringBefore('?').endsWith(".m3u8")
+
+        if (isHls) {
+            return@withContext Result(
+                url, contentType,
+                isMjpeg = false, isSnapshot = false, isHtml = false,
+                responseCode = responseCode, isHls = true
+            )
+        }
 
         if (isMjpeg || isSnapshot) {
             return@withContext Result(url, contentType, isMjpeg, isSnapshot, isHtml, responseCode)
@@ -110,7 +121,7 @@ object CameraUrlProbe {
             contentType = contentType,
             isMjpeg = fallbackIsMjpeg,
             isSnapshot = false,
-            isHtml = isHtml || isAuthError || !fallbackIsMjpeg,
+            isHtml = isHtml || isAuthError || (!fallbackIsMjpeg && !isHls),
             responseCode = responseCode
         )
     }

@@ -21,6 +21,7 @@ data class StreamSource(
     val pageUrl: String = "",
     val streamUrl: String = "",
     val candidateUrls: List<String> = emptyList(),
+    val streamCandidates: List<StreamCandidate> = emptyList(),
     val sourceLabel: String = "",
     val verification: String = "Unchecked",
     val contentType: String = "",
@@ -45,6 +46,16 @@ data class StreamSource(
     fun bestPlaybackUrl(): String = getAuthenticatedUrl()
     fun bestThumbnailUrl(): String = thumbnailUrl ?: ""
 }
+
+/** One verified URL in a browser-discovered feed playlist. */
+@Parcelize
+data class StreamCandidate(
+    val url: String,
+    val protocol: String = "http",
+    val contentType: String = "",
+    val verification: String = "",
+    val title: String = ""
+) : Parcelable
 
 /**
  * Picks the playback protocol for a scanned URL.

@@ -6,7 +6,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.common.util.UnstableApi
 import kotlinx.coroutines.*
@@ -88,6 +90,7 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
 
         when (source.protocol.lowercase()) {
             "rtsp", "rtmp" -> startRtspStream(source)
+            "hls" -> startHlsStream(source)
             "mjpeg" -> startMjpegStream(source.getAuthenticatedUrl())
             "snapshot" -> {
                 _status.value = StreamStatus.Snapshot
@@ -127,6 +130,16 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         }
+    }
+
+    private fun startHlsStream(source: StreamSource) {
+        val player = getPlayer()
+        val hlsSource = HlsMediaSource.Factory(DefaultHttpDataSource.Factory())
+            .setAllowChunklessPreparation(true)
+            .createMediaSource(MediaItem.fromUri(source.getAuthenticatedUrl()))
+        player.setMediaSource(hlsSource)
+        player.prepare()
+        player.playWhenReady = true
     }
 
     private fun startRtspStream(source: StreamSource) {

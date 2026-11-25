@@ -33,9 +33,11 @@ fun AutoRefreshImage(
     refreshMs: Long = 1500,
     onError: () -> Unit = {}
 ) {
-    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
-    var errorCount by remember { mutableStateOf(0) }
+    // Keyed by URL so switching to another snapshot feed starts clean instead of
+    // inheriting the previous feed's frame and failure count.
+    var bitmap by remember(url) { mutableStateOf<Bitmap?>(null) }
+    var isLoading by remember(url) { mutableStateOf(true) }
+    var errorCount by remember(url) { mutableStateOf(0) }
 
     LaunchedEffect(url) {
         while (isActive && errorCount < 3) {

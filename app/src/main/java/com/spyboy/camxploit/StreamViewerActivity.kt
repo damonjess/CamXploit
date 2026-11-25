@@ -12,8 +12,13 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.util.Rational
+import android.view.GestureDetector
+import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.PixelCopy
+import android.view.ScaleGestureDetector
 import android.view.SurfaceView
+import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -30,6 +35,8 @@ import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -39,11 +46,18 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -66,6 +80,29 @@ private val neonCyan = Color(0xFF00FFFF)
 private val neonGreen = Color(0xFF39FF14)
 private val neonRed = Color(0xFFFF0033)
 private val orange = Color(0xFFFFA500)
+
+private const val DEFAULT_STREAM_ERROR = "Failed to load stream.\nThe camera may be offline."
+
+/**
+ * Builds the ordered list of verified feeds the player can move through.
+ * The selected feed is always first; browser alternates follow, MJPEG before
+ * snapshots so a dead stream can fall forward to another live camera.
+ */
+private fun buildFeedPlaylist(source: StreamSource?): List<StreamCandidate> {
+    if (source == null) return emptyList()
+    val current = StreamCandidate(
+        url = source.url,
+        protocol = source.protocol,
+        contentType = source.contentType,
+        verification = source.verification,
+        title = source.title
+    )
+    val alternates = source.streamCandidates.ifEmpty {
+        source.candidateUrls.map { StreamCandidate(url = it, protocol = "") }
+    }
+    val ordered = listOf(current) + alternates.filter { it.url != source.url }
+    return ordered.distinctBy { it.url }
+}
 
 fun guessMjpegFromSnapshot(snapshotUrl: String): String? {
     val replacements = listOf(
@@ -142,7 +179,6 @@ class StreamViewerActivity : ComponentActivity() {
                     isRecording = isRecording,
                     recordingDuration = recordingDuration,
                     onBack = { finish() },
-                    onRetry = { streamSource?.let { viewModel.startStream(it) } },
                     onSnapshot = { view -> takeSnapshot(view) },
                     onPip = { enterPipMode() },
                     onRecord = { viewModel.toggleRecording() }
@@ -201,6 +237,20 @@ class StreamViewerActivity : ComponentActivity() {
 
         // For ExoPlayer, we find the PlayerView in the hierarchy
         val playerView = findViewByType(view, PlayerView::class.java)
+
+        // The zoomable RTSP player uses a TextureView so its picture can be
+        // scaled; read that frame directly instead of using PixelCopy.
+        val textureView = playerView?.videoSurfaceView as? TextureView
+        if (textureView != null) {
+            val bitmap = textureView.bitmap
+            if (bitmap != null) {
+                saveSnapshotToArchive(bitmap)
+            } else {
+                Toast.makeText(this, "No frame available", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
         val surfaceView = playerView?.videoSurfaceView as? SurfaceView
         
         if (surfaceView == null) {
@@ -287,82 +337,130 @@ fun StreamPlayerScreen(
     isRecording: Boolean,
     recordingDuration: Long,
     onBack: () -> Unit,
-    onRetry: () -> Unit,
     onSnapshot: (View) -> Unit,
     onPip: () -> Unit,
     onRecord: () -> Unit,
     viewModel: StreamViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val context = LocalContext.current
+    var activeSource by remember(source) { mutableStateOf(source) }
+    val feedPlaylist = remember(source) { buildFeedPlaylist(source) }
+    var feedIndex by remember(source) { mutableIntStateOf(0) }
+    var feedToken by remember(source) { mutableIntStateOf(0) }
+
     var isLoading by remember { mutableStateOf(true) }
     var hasError by remember { mutableStateOf(false) }
-    var resolvedUrl by remember { mutableStateOf(source?.url ?: "") }
+    var resolvedUrl by remember { mutableStateOf(activeSource?.url ?: "") }
     var isScraping by remember { mutableStateOf(false) }
     var probeResult by remember { mutableStateOf<CameraUrlProbe.Result?>(null) }
-    var errorMessage by remember { mutableStateOf("Failed to load stream.\nThe camera may be offline.") }
-    var playbackProtocol by remember { mutableStateOf(source?.protocol?.lowercase() ?: "") }
+    var errorMessage by remember { mutableStateOf(DEFAULT_STREAM_ERROR) }
+    var playbackProtocol by remember { mutableStateOf(activeSource?.protocol?.lowercase() ?: "") }
 
-    val rawUrl = source?.url ?: ""
-    val title = source?.title ?: targetIp
+    val rawUrl = activeSource?.url ?: ""
+    val title = activeSource?.title ?: targetIp
+    val hasNextFeed = feedIndex < feedPlaylist.size - 1
 
-    val isWrapper = rawUrl.contains("insecam.org", ignoreCase = true) ||
-                    rawUrl.contains("opentopia.com", ignoreCase = true)
+    fun playNextFeed() {
+        val next = feedPlaylist.getOrNull(feedIndex + 1) ?: return
+        val current = activeSource ?: return
+        feedIndex += 1
+        feedToken += 1
+        hasError = false
+        errorMessage = DEFAULT_STREAM_ERROR
+        activeSource = current.copy(
+            url = next.url,
+            title = next.title.ifBlank { current.title },
+            protocol = next.protocol.ifBlank { "http" },
+            contentType = next.contentType,
+            verification = next.verification.ifBlank { "Unchecked" },
+            candidateUrls = current.candidateUrls,
+            streamCandidates = feedPlaylist
+        )
+    }
 
-    // Probe the URL to determine what kind of feed it actually is
-    if (!isScraping && probeResult == null && rawUrl.isNotBlank()) {
+    fun retryPlayback() {
+        hasError = false
+        errorMessage = DEFAULT_STREAM_ERROR
+        feedToken += 1
+    }
+
+    // Probe the URL to determine what kind of feed it actually is. The token lets
+    // Retry and Next Feed re-run this for the same URL.
+    LaunchedEffect(rawUrl, feedToken) {
+        val currentSource = activeSource ?: return@LaunchedEffect
+        if (rawUrl.isBlank()) return@LaunchedEffect
+
         isScraping = true
-        LaunchedEffect(rawUrl) {
-            val result = withContext(Dispatchers.IO) {
-                when {
-                    isWrapper -> {
-                        val direct = if (rawUrl.contains("insecam")) {
-                            InsecamScraper.scrapePage(rawUrl).streamUrl
-                        } else {
-                            OpentopiaScraper.scrapeDetailPage(rawUrl)?.first
-                        }
-                        if (!direct.isNullOrBlank() && direct != rawUrl) {
-                            CameraUrlProbe.probe(direct)
-                        } else {
-                            CameraUrlProbe.probe(rawUrl)
-                        }
+        isLoading = false
+        hasError = false
+        probeResult = null
+        errorMessage = DEFAULT_STREAM_ERROR
+        resolvedUrl = rawUrl
+        playbackProtocol = currentSource.protocol.lowercase()
+
+        val isWrapper = rawUrl.contains("insecam.org", ignoreCase = true) ||
+                        rawUrl.contains("opentopia.com", ignoreCase = true)
+
+        val result = withContext(Dispatchers.IO) {
+            when {
+                isWrapper -> {
+                    val direct = if (rawUrl.contains("insecam")) {
+                        InsecamScraper.scrapePage(rawUrl).streamUrl
+                    } else {
+                        OpentopiaScraper.scrapeDetailPage(rawUrl)?.first
                     }
-                    else -> CameraUrlProbe.probe(rawUrl)
+                    if (!direct.isNullOrBlank() && direct != rawUrl) {
+                        CameraUrlProbe.probe(direct)
+                    } else {
+                        CameraUrlProbe.probe(rawUrl)
+                    }
                 }
+                else -> CameraUrlProbe.probe(rawUrl)
             }
-            probeResult = result
-            resolvedUrl = result.url
-            isScraping = false
-            isLoading = false
+        }
+        probeResult = result
+        resolvedUrl = result.url
+        isScraping = false
+        isLoading = false
 
-            // Resolve one effective protocol for both playback state and renderer
-            // selection: snapshot -> confirmed MJPEG -> declared protocol -> web.
-            // An HTML response is never handed to the MJPEG player, even when the link
-            // was declared "mjpeg": that is what left the viewer spinning forever.
-            if (source != null) {
-                val declared = source.protocol.lowercase()
-                val needsLogin = result.responseCode == 401 || result.responseCode == 403
-                val effectiveProtocol = when {
-                    // Trust the HTTP probe over the URL suffix. Cameras often expose
-                    // multipart MJPEG at image-looking paths such as faststream.jpg.
-                    result.isMjpeg -> "mjpeg"
-                    result.isSnapshot || isSnapshotUrl(result.url) -> "snapshot"
-                    declared == "rtsp" || declared == "rtmp" || declared == "onvif" -> declared
-                    result.isHtml || result.contentType.startsWith("text/") -> "web"
-                    declared.isNotBlank() -> declared
-                    else -> "web"
-                }
-                playbackProtocol = effectiveProtocol
-                val effectiveSource = source.copy(url = result.url, protocol = effectiveProtocol)
+        // Resolve one effective protocol for both playback state and renderer
+        // selection: snapshot -> confirmed MJPEG -> declared protocol -> web.
+        // An HTML response is never handed to the MJPEG player, even when the link
+        // was declared "mjpeg": that is what left the viewer spinning forever.
+        val declared = currentSource.protocol.lowercase()
+        val needsLogin = result.responseCode == 401 || result.responseCode == 403
+        val effectiveProtocol = when {
+            // Trust the HTTP probe over the URL suffix. Cameras often expose
+            // multipart MJPEG at image-looking paths such as faststream.jpg.
+            result.isMjpeg -> "mjpeg"
+            result.isSnapshot || isSnapshotUrl(result.url) -> "snapshot"
+            result.isHls || declared == "hls" -> "hls"
+            declared == "rtsp" || declared == "rtmp" || declared == "onvif" -> declared
+            result.isHtml || result.contentType.startsWith("text/") -> "web"
+            declared.isNotBlank() -> declared
+            else -> "web"
+        }
+        playbackProtocol = effectiveProtocol
+        val effectiveSource = currentSource.copy(
+            url = result.url,
+            protocol = effectiveProtocol,
+            contentType = result.contentType.ifBlank { currentSource.contentType }
+        )
 
-                if (needsLogin) {
-                    errorMessage = "HTTP ${result.responseCode} - this endpoint needs a login.\nTry Test Creds from the LAN tab."
-                    hasError = true
-                } else if (effectiveProtocol == "mjpeg") {
-                    viewModel.prepareMjpegPlayback(effectiveSource)
-                } else {
-                    viewModel.startStream(effectiveSource)
-                }
-            }
+        if (needsLogin) {
+            errorMessage = "HTTP ${result.responseCode} - this endpoint needs a login.\nTry Test Creds from the LAN tab."
+            hasError = true
+        } else if (effectiveProtocol == "mjpeg") {
+            viewModel.prepareMjpegPlayback(effectiveSource)
+        } else {
+            viewModel.startStream(effectiveSource)
+        }
+    }
+
+    LaunchedEffect(status) {
+        if (status is StreamStatus.Error) {
+            hasError = true
+            errorMessage = "Playback stopped.\n${status.message}"
         }
     }
 
@@ -372,7 +470,16 @@ fun StreamPlayerScreen(
                 title = {
                     Column {
                         Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        Text(resolvedUrl, color = Color.Gray, fontSize = 10.sp, maxLines = 1)
+                        Text(
+                            text = if (feedPlaylist.size > 1) {
+                                "FEED ${feedIndex + 1}/${feedPlaylist.size} · $resolvedUrl"
+                            } else {
+                                resolvedUrl
+                            },
+                            color = Color.Gray,
+                            fontSize = 10.sp,
+                            maxLines = 1
+                        )
                     }
                 },
                 navigationIcon = {
@@ -381,7 +488,11 @@ fun StreamPlayerScreen(
                     }
                 },
                 actions = {
-                    StatusIndicator(status, isRecording, recordingDuration)
+                    // The probe/player can fail without the ViewModel status changing
+                    // (for example a snapshot feed that stops answering), so never show
+                    // LIVE while the error screen is up.
+                    val displayStatus = if (hasError) StreamStatus.Error(errorMessage) else status
+                    StatusIndicator(displayStatus, isRecording, recordingDuration)
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0D0D0D)),
                 modifier = Modifier.statusBarsPadding()
@@ -394,16 +505,7 @@ fun StreamPlayerScreen(
             ) {
                 BottomControls(
                     isRecording = isRecording,
-                    onRetry = {
-                        // Clear the error state before re-probing, otherwise the error
-                        // message would stay on screen even after a successful retry.
-                        val useNativeMjpeg = playbackProtocol == "mjpeg"
-                        hasError = false
-                        errorMessage = "Failed to load stream.\nThe camera may be offline."
-                        probeResult = null
-                        playbackProtocol = source?.protocol?.lowercase() ?: ""
-                        if (!useNativeMjpeg) onRetry()
-                    },
+                    onRetry = { retryPlayback() },
                     onSnapshot = { onSnapshot(it) },
                     onPip = onPip,
                     onRecord = onRecord
@@ -452,17 +554,15 @@ fun StreamPlayerScreen(
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                                 modifier = Modifier.padding(16.dp)
                             )
-                            Button(onClick = {
-                                // FastMjpegPlayer reconnects when it re-enters composition; do not
-                                // also start the ViewModel MJPEG decoder for the same URL.
-                                val useNativeMjpeg = playbackProtocol == "mjpeg"
-                                hasError = false
-                                errorMessage = "Failed to load stream.\nThe camera may be offline."
-                                probeResult = null
-                                playbackProtocol = source?.protocol?.lowercase() ?: ""
-                                if (!useNativeMjpeg) onRetry()
-                            }) {
-                                Text("Retry")
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { retryPlayback() }) {
+                                    Text("RETRY")
+                                }
+                                if (hasNextFeed) {
+                                    OutlinedButton(onClick = { playNextFeed() }) {
+                                        Text("NEXT FEED ${feedIndex + 2}/${feedPlaylist.size}")
+                                    }
+                                }
                             }
                         }
                     }
@@ -470,40 +570,45 @@ fun StreamPlayerScreen(
                         when (playbackProtocol) {
                             // Single JPEG → periodic snapshot refresh
                             "snapshot" -> {
-                                AutoRefreshImage(
-                                    url = resolvedUrl,
-                                    modifier = Modifier.fillMaxSize(),
-                                    refreshMs = 1500,
-                                    onError = {
-                                        hasError = true
-                                        errorMessage = "No snapshot returned by this URL.\nIt may need a login, or the path may be wrong."
-                                    }
-                                )
+                                ZoomableFeed(
+                                    resetKey = resolvedUrl,
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    AutoRefreshImage(
+                                        url = resolvedUrl,
+                                        modifier = Modifier.fillMaxSize(),
+                                        refreshMs = 1500,
+                                        onError = {
+                                            hasError = true
+                                            errorMessage = "No snapshot returned by this URL.\nIt may need a login, or the path may be wrong."
+                                        }
+                                    )
+                                }
                             }
 
                             // True MJPEG stream → native decoder
                             "mjpeg" -> {
-                                FastMjpegPlayer(
-                                    url = resolvedUrl,
-                                    modifier = Modifier.fillMaxSize(),
-                                    onFrame = viewModel::onMjpegFrame,
-                                    onError = {
-                                        hasError = true
-                                        errorMessage = "Not an MJPEG stream.\nNo video frames were received."
-                                    }
-                                )
+                                ZoomableFeed(
+                                    resetKey = resolvedUrl,
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    FastMjpegPlayer(
+                                        url = resolvedUrl,
+                                        modifier = Modifier.fillMaxSize(),
+                                        onFrame = viewModel::onMjpegFrame,
+                                        onError = {
+                                            hasError = true
+                                            errorMessage = "Not an MJPEG stream.\nNo video frames were received."
+                                        }
+                                    )
+                                }
                             }
 
-                            // RTSP / RTMP feeds
-                            "rtsp", "rtmp", "onvif" -> {
-                                AndroidView(
-                                    factory = { ctx ->
-                                        PlayerView(ctx).apply {
-                                            player = viewModel.getPlayer()
-                                            useController = true
-                                            setBackgroundColor(0xFF000000.toInt())
-                                        }
-                                    },
+                            // RTSP / RTMP / HLS feeds
+                            "rtsp", "rtmp", "onvif", "hls" -> {
+                                ZoomableRtspPlayer(
+                                    player = viewModel.getPlayer(),
+                                    resetKey = resolvedUrl,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
@@ -541,6 +646,188 @@ fun StreamPlayerScreen(
             }
         }
     }
+}
+
+/** Shared zoom anchoring/clamping math for the native and RTSP renderers. */
+private fun calculateZoomedOffset(
+    currentScale: Float,
+    newScale: Float,
+    currentOffset: Offset,
+    centroid: Offset,
+    pan: Offset,
+    viewSize: IntSize
+): Offset {
+    val factor = newScale / currentScale
+    val centerX = viewSize.width / 2f
+    val centerY = viewSize.height / 2f
+    val maxX = viewSize.width * (newScale - 1f) / 2f
+    val maxY = viewSize.height * (newScale - 1f) / 2f
+    val anchoredX = (centroid.x - centerX) * (1f - factor) + currentOffset.x * factor
+    val anchoredY = (centroid.y - centerY) * (1f - factor) + currentOffset.y * factor
+    return Offset(
+        (anchoredX + pan.x).coerceIn(-maxX, maxX),
+        (anchoredY + pan.y).coerceIn(-maxY, maxY)
+    )
+}
+
+/**
+ * Pinch-to-zoom and pan for the native camera renderers. Zoom stays between
+ * 1x and 5x, panning is clamped so the feed cannot be dragged off-screen, and
+ * a double tap returns to the fitted view. Switching URLs resets the zoom.
+ */
+@Composable
+private fun ZoomableFeed(
+    resetKey: Any?,
+    modifier: Modifier = Modifier,
+    content: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit
+) {
+    var scale by remember(resetKey) { mutableFloatStateOf(1f) }
+    var offset by remember(resetKey) { mutableStateOf(Offset.Zero) }
+    var viewSize by remember { mutableStateOf(IntSize.Zero) }
+
+    Box(
+        modifier = modifier
+            .clipToBounds()
+            .onSizeChanged { viewSize = it }
+            .pointerInput(resetKey, viewSize) {
+                detectTransformGestures { centroid, pan, zoom, _ ->
+                    val newScale = (scale * zoom).coerceIn(1f, 5f)
+                    if (newScale == 1f) {
+                        scale = 1f
+                        offset = Offset.Zero
+                        return@detectTransformGestures
+                    }
+
+                    // Keep the point under the fingers anchored while scaling
+                    // around the layer's centre origin.
+                    offset = calculateZoomedOffset(
+                        currentScale = scale,
+                        newScale = newScale,
+                        currentOffset = offset,
+                        centroid = centroid,
+                        pan = pan,
+                        viewSize = viewSize
+                    )
+                    scale = newScale
+                }
+            }
+            .pointerInput(resetKey) {
+                detectTapGestures(onDoubleTap = {
+                    scale = 1f
+                    offset = Offset.Zero
+                })
+            }
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offset.x
+                    translationY = offset.y
+                }
+        ) {
+            content()
+        }
+    }
+}
+
+/**
+ * RTSP/RTMP renderer with pinch-to-zoom. The PlayerView uses a TextureView so
+ * scaling works, and pointerInteropFilter lets two-finger gestures reach this
+ * layer while single-finger taps still go to the Media3 controller.
+ */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+private fun ZoomableRtspPlayer(
+    player: Player,
+    resetKey: Any?,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var scale by remember(resetKey) { mutableFloatStateOf(1f) }
+    var offset by remember(resetKey) { mutableStateOf(Offset.Zero) }
+    var viewSize by remember { mutableStateOf(IntSize.Zero) }
+    var lastFocus by remember(resetKey) { mutableStateOf(Offset.Zero) }
+    var gestureActive by remember { mutableStateOf(false) }
+
+    val scaleDetector = remember(resetKey) {
+        ScaleGestureDetector(
+            context,
+            object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+                    lastFocus = Offset(detector.focusX, detector.focusY)
+                    return true
+                }
+
+                override fun onScale(detector: ScaleGestureDetector): Boolean {
+                    val focus = Offset(detector.focusX, detector.focusY)
+                    val newScale = (scale * detector.scaleFactor).coerceIn(1f, 5f)
+                    if (newScale == 1f) {
+                        scale = 1f
+                        offset = Offset.Zero
+                    } else {
+                        offset = calculateZoomedOffset(
+                            currentScale = scale,
+                            newScale = newScale,
+                            currentOffset = offset,
+                            centroid = focus,
+                            pan = focus - lastFocus,
+                            viewSize = viewSize
+                        )
+                        scale = newScale
+                    }
+                    lastFocus = focus
+                    return true
+                }
+            }
+        )
+    }
+
+    val tapDetector = remember(resetKey) {
+        GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                scale = 1f
+                offset = Offset.Zero
+                return true
+            }
+        })
+    }
+
+    AndroidView(
+        factory = { ctx ->
+            (LayoutInflater.from(ctx).inflate(R.layout.view_zoomable_player, null) as PlayerView).apply {
+                this.player = player
+                useController = true
+                setBackgroundColor(0xFF000000.toInt())
+            }
+        },
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { viewSize = it }
+            .pointerInteropFilter { event ->
+                scaleDetector.onTouchEvent(event)
+                tapDetector.onTouchEvent(event)
+
+                if (event.pointerCount > 1 || scaleDetector.isInProgress) {
+                    gestureActive = true
+                }
+                val consume = gestureActive
+                if (event.actionMasked == MotionEvent.ACTION_UP ||
+                    event.actionMasked == MotionEvent.ACTION_CANCEL
+                ) {
+                    gestureActive = false
+                }
+                consume
+            }
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                translationX = offset.x
+                translationY = offset.y
+            }
+    )
 }
 
 @Composable
