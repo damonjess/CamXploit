@@ -7,7 +7,6 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
-import java.net.InetAddress
 
 class CameraMonitorService : Service() {
 
@@ -45,22 +44,33 @@ class CameraMonitorService : Service() {
             while (isActive) {
                 // 1. Check status of existing cameras
                 val cameras = cameraDao.getCameraList()
-                updateForegroundNotification(cameras.size)
+                updateForegroundNotification(cameras.size, cameras.count { it.isOnline })
 
                 for (camera in cameras) {
-                    val isReachable = try {
-                        java.net.InetAddress.getByName(camera.ip).isReachable(1000)
-                    } catch (e: Exception) {
-                        false
+                    val check = runCatching { FeedHealth.check(camera) }
+                        .getOrElse { FeedCheck(false, "Unavailable") }
+                    val now = System.currentTimeMillis()
+
+                    if (camera.isOnline != check.online) {
+                        val status = if (check.online) "back online" else "went offline"
+                        sendNotification(
+                            "Camera Status Change",
+                            "${camera.nickname} (${camera.sourceLabel.ifBlank { camera.ip }}) $status"
+                        )
                     }
 
-                    if (camera.isOnline != isReachable) {
-                        val status = if (isReachable) "back online" else "went offline"
-                        sendNotification("Camera Status Change", "Camera ${camera.ip} (${camera.nickname}) $status")
-                        
-                        val updatedCamera = camera.copy(isOnline = isReachable, lastSeen = System.currentTimeMillis())
-                        cameraDao.updateCamera(updatedCamera)
-                    }
+                    cameraDao.updateCamera(
+                        camera.copy(
+                            isOnline = check.online,
+                            lastSeen = if (check.online) now else camera.lastSeen,
+                            lastVerified = now,
+                            verification = check.verification,
+                            contentType = check.contentType.ifBlank { camera.contentType },
+                            streamUrl = check.resolvedUrl.ifBlank { camera.streamUrl }
+                        )
+                    )
+                    // Public feeds are rate-limited; leave a small gap between probes.
+                    delay(400)
                 }
                 
                 // 2. Start a new discovery cycle
@@ -123,9 +133,12 @@ class CameraMonitorService : Service() {
         }
     }
 
-    private fun updateForegroundNotification(count: Int) {
+    private fun updateForegroundNotification(count: Int, online: Int) {
         val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(NOTIFICATION_ID, createNotification("Monitoring $count cameras"))
+        notificationManager.notify(
+            NOTIFICATION_ID,
+            createNotification("Monitoring $count cameras · $online online")
+        )
     }
 
     private fun sendNotification(title: String, message: String) {

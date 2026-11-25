@@ -81,7 +81,8 @@ object CameraUrlProbe {
 
         val typeLower = contentType.lowercase()
         val isMjpeg = typeLower.contains("multipart") || typeLower.contains("mixed-replace") || typeLower.contains("mjpeg")
-        val isSnapshot = typeLower.contains("image/jpeg") || typeLower.contains("image/jpg") || typeLower.contains("image/png")
+        val isSnapshot = typeLower.contains("image/jpeg") || typeLower.contains("image/jpg") ||
+            typeLower.contains("image/png") || typeLower.contains("image/webp")
         val isHtml = typeLower.contains("text/html")
         val isAuthError = responseCode == 401 || responseCode == 403
         val isHls = typeLower.contains("mpegurl") || typeLower.contains("m3u8") ||

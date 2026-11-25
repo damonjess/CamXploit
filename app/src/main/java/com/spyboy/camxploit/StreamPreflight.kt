@@ -2,6 +2,7 @@ package com.spyboy.camxploit
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.webkit.CookieManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -51,7 +52,7 @@ object StreamPreflight {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     private const val ACCEPT =
-        "multipart/x-mixed-replace, image/jpeg, image/*, */*;q=0.1"
+        "multipart/x-mixed-replace, image/jpeg, image/webp, image/*, */*;q=0.1"
 
     /**
      * Checks every candidate, in parallel with a small concurrency limit, and
@@ -96,12 +97,18 @@ object StreamPreflight {
                 setRequestProperty("User-Agent", USER_AGENT)
                 setRequestProperty("Accept", ACCEPT)
                 setRequestProperty("Cache-Control", "no-cache")
+                runCatching { CookieManager.getInstance().getCookie(rawUrl) }
+                    .getOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { setRequestProperty("Cookie", it) }
             }
 
             val code = connection.responseCode
             val rawType = connection.contentType.orEmpty()
             val type = rawType.substringBefore(';').trim().lowercase(Locale.US)
             val finalUrl = connection.url.toString()
+            val isWebp = type.contains("image/webp") ||
+                finalUrl.substringBefore('?').lowercase(Locale.US).endsWith(".webp")
 
             fun fail(label: String, detail: String): Result = Result(
                 url = finalUrl,
@@ -128,7 +135,11 @@ object StreamPreflight {
                     } catch (_: SocketTimeoutException) {
                         null
                     }
-                    if (manifest?.contains("#EXTM3U") == true) {
+                    val isPlaylist = manifest?.contains("#EXTM3U") == true
+                    val hasContent = manifest?.let {
+                        it.contains("#EXTINF") || it.contains("#EXT-X-STREAM-INF")
+                    } == true
+                    if (isPlaylist && hasContent) {
                         Result(
                             url = finalUrl,
                             protocol = "hls",
@@ -142,40 +153,58 @@ object StreamPreflight {
                             candidateUrl = rawUrl
                         )
                     } else {
-                        fail("No playlist", "No HLS manifest received")
+                        fail(
+                            if (isPlaylist) "Empty playlist" else "No playlist",
+                            if (isPlaylist) "HLS playlist has no segments" else "No HLS manifest received"
+                        )
                     }
                 }
                 else -> {
                     val frame = try {
-                        readFirstJpeg(connection.inputStream)
+                        if (isWebp) {
+                            readImageBody(connection.inputStream)
+                        } else {
+                            readFirstJpeg(connection.inputStream)
+                        }
                     } catch (_: SocketTimeoutException) {
                         null
                     }
 
                     if (frame == null) {
-                        fail("No frame", "No JPEG frame within ${READ_TIMEOUT_MS / 1000}s")
-                    } else {
-                        val protocol = when {
-                            type.contains("multipart") || type.contains("mixed-replace") ||
-                                type.contains("mjpeg") -> "mjpeg"
-                            type.startsWith("image/") -> "snapshot"
-                            looksLikeMjpeg(finalUrl) -> "mjpeg"
-                            else -> "snapshot"
-                        }
-                        val live = protocol == "mjpeg"
-                        Result(
-                            url = finalUrl,
-                            protocol = protocol,
-                            contentType = rawType,
-                            label = if (live) "Verified live" else "Snapshot",
-                            detail = if (live) "Live MJPEG frame received" else "Snapshot image received",
-                            responseCode = code,
-                            isPlayable = true,
-                            candidateIndex = index,
-                            candidateCount = total,
-                            candidateUrl = rawUrl,
-                            thumbnail = decodeThumbnail(frame)
+                        fail(
+                            "No frame",
+                            if (isWebp) "No WebP snapshot within ${READ_TIMEOUT_MS / 1000}s"
+                            else "No JPEG frame within ${READ_TIMEOUT_MS / 1000}s"
                         )
+                    } else {
+                        val thumbnail = decodeThumbnail(frame)
+                        if (isWebp && thumbnail == null) {
+                            fail("No frame", "The WebP snapshot could not be decoded")
+                        } else {
+                            val protocol = when {
+                                type.contains("multipart") || type.contains("mixed-replace") ||
+                                    type.contains("mjpeg") -> "mjpeg"
+                                type.startsWith("image/") -> "snapshot"
+                                looksLikeMjpeg(finalUrl) -> "mjpeg"
+                                else -> "snapshot"
+                            }
+                            val live = protocol == "mjpeg"
+                            Result(
+                                url = finalUrl,
+                                protocol = protocol,
+                                contentType = rawType,
+                                label = if (live) "Verified live" else "Snapshot",
+                                detail = if (live) "Live MJPEG frame received"
+                                else if (isWebp) "WebP snapshot image received"
+                                else "Snapshot image received",
+                                responseCode = code,
+                                isPlayable = true,
+                                candidateIndex = index,
+                                candidateCount = total,
+                                candidateUrl = rawUrl,
+                                thumbnail = thumbnail
+                            )
+                        }
                     }
                 }
             }
@@ -247,6 +276,30 @@ object StreamPreflight {
             }
         }
         return null
+    }
+
+    /** Reads a complete single-image body (WebP or a JPEG served as image/webp). */
+    private fun readImageBody(input: InputStream): ByteArray? {
+        val out = ByteArrayOutputStream(64 * 1024)
+        val buffer = ByteArray(8192)
+        var total = 0
+        while (total < MAX_FRAME_BYTES) {
+            val read = input.read(buffer)
+            if (read <= 0) break
+            out.write(buffer, 0, read)
+            total += read
+        }
+        val data = out.toByteArray()
+        if (data.size < 12) return null
+        val isWebp = data[0].toInt() == 'R'.code && data[1].toInt() == 'I'.code &&
+            data[2].toInt() == 'F'.code && data[3].toInt() == 'F'.code &&
+            data[8].toInt() == 'W'.code && data[9].toInt() == 'E'.code &&
+            data[10].toInt() == 'B'.code && data[11].toInt() == 'P'.code
+        val isJpeg = (data[0].toInt() and 0xFF) == 0xFF &&
+            (data[1].toInt() and 0xFF) == 0xD8
+        val isPng = (data[0].toInt() and 0xFF) == 0x89 && data[1].toInt() == 'P'.code &&
+            data[2].toInt() == 'N'.code && data[3].toInt() == 'G'.code
+        return if (isWebp || isJpeg || isPng) data else null
     }
 
     /** Reads the short text body of an HLS manifest. */

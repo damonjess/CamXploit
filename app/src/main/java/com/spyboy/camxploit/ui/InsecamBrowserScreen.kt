@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -44,11 +45,21 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.spyboy.camxploit.FeedLibrary
 import com.spyboy.camxploit.StreamCandidate
 import com.spyboy.camxploit.StreamPreflight
 import com.spyboy.camxploit.StreamSource
+import com.spyboy.camxploit.osint.SkylineResolver
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONTokener
 import java.net.URLEncoder
@@ -69,6 +80,9 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (StreamSource) -> Uni
     var detectedStreamUrl by remember { mutableStateOf<String?>(null) }
     var detectedCandidates by remember { mutableStateOf<List<String>>(emptyList()) }
     var detectedTitle by remember { mutableStateOf("Live Feed") }
+    var candidateTitles by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var candidatePageUrls by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var candidateThumbnails by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var isSniffing by remember { mutableStateOf(false) }
     var checkedOnce by remember { mutableStateOf(false) }
     var isChecking by remember { mutableStateOf(false) }
@@ -76,6 +90,11 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (StreamSource) -> Uni
     var checkJob by remember { mutableStateOf<Job?>(null) }
     var checkToken by remember { mutableStateOf(0) }
     var showFeedPicker by remember { mutableStateOf(false) }
+    // Network-level capture catches manifests and MJPEG endpoints the DOM/JS
+    // sniffer cannot see, including cross-origin player requests.
+    val interceptedMedia = remember {
+        java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    }
 
     var canGoBack by remember { mutableStateOf(false) }
     var canGoForward by remember { mutableStateOf(false) }
@@ -162,13 +181,39 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (StreamSource) -> Uni
                 var l = url.toLowerCase();
                 if (l.includes('logo') || l.includes('banner') || l.includes('icon') ||
                     l.includes('favicon') || l.includes('avatar') || l.includes('button') ||
-                    l.endsWith('.gif') || l.endsWith('.webp') || l.endsWith('.svg')) return false;
+                    l.endsWith('.gif') || l.endsWith('.svg')) return false;
+                // Keep real WebP snapshot endpoints, but not directory card art.
+                if (l.endsWith('.webp') && !(l.includes('snapshot') || l.includes('current') ||
+                    l.includes('still') || l.includes('snap.'))) return false;
                 if (seen[url]) return false;
                 seen[url] = true;
                 return true;
             });
 
             return JSON.stringify(valid);
+        })();
+    """.trimIndent()
+
+    // SkylineWebcams directory pages only carry .webp preview images; their live
+    // manifests sit on the individual camera pages. Collect those camera pages so
+    // SNIFF can resolve the real HLS feeds instead of giving up.
+    val skylineCamsScript = """
+        (function() {
+            var out = [];
+            var seen = {};
+            if (location.hostname.indexOf('skylinewebcams.com') < 0) return JSON.stringify(out);
+            var links = document.querySelectorAll('a[href]');
+            for (var i = 0; i < links.length && out.length < 20; i++) {
+                var a = links[i];
+                var href = a.href || '';
+                if (!/^https?:\/\/(?:www\.)?skylinewebcams\.com\/[a-z]{2}\/webcam\/(?:[^\/?#]+\/){3,}[^\/?#]+\.html/i.test(href)) continue;
+                if (seen[href]) continue;
+                seen[href] = true;
+                var img = a.querySelector('img');
+                var name = (img && img.alt ? img.alt : (a.textContent || '')).replace(/\s+/g, ' ').trim();
+                out.push({ u: href, n: name.slice(0, 80) });
+            }
+            return JSON.stringify(out);
         })();
     """.trimIndent()
 
@@ -189,23 +234,45 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (StreamSource) -> Uni
                 protocol = it.protocol,
                 contentType = it.contentType,
                 verification = it.label,
-                title = detectedTitle
+                title = candidateTitles[it.candidateUrl]?.ifBlank { null }
+                    ?: candidateTitles[it.url]?.ifBlank { null }
+                    ?: detectedTitle,
+                pageUrl = candidatePageUrls[it.url] ?: candidatePageUrls[it.candidateUrl].orEmpty()
             )
         }
     }
 
     fun sourceFor(result: StreamPreflight.Result): StreamSource = StreamSource(
         url = result.url,
-        title = detectedTitle,
+        title = candidateTitles[result.candidateUrl]?.ifBlank { null }
+            ?: candidateTitles[result.url]?.ifBlank { null }
+            ?: detectedTitle,
         protocol = result.protocol,
-        pageUrl = currentUrl,
-        sourceLabel = "Insecam browser",
+        thumbnailUrl = candidateThumbnails[result.url] ?: candidateThumbnails[result.candidateUrl],
+        pageUrl = candidatePageUrls[result.url]
+            ?: candidatePageUrls[result.candidateUrl]
+            ?: currentUrl,
+        streamUrl = result.url,
+        sourceLabel = "OSINT browser",
         verification = result.label,
         contentType = result.contentType,
         verifiedAt = System.currentTimeMillis(),
         candidateUrls = detectedCandidates,
         streamCandidates = playlistFor(result)
     )
+
+    fun saveFeed(result: StreamPreflight.Result) {
+        val source = sourceFor(result)
+        scope.launch {
+            runCatching { FeedLibrary.save(context, source, result.thumbnail) }
+                .onSuccess {
+                    Toast.makeText(context, "Saved to feed library", Toast.LENGTH_SHORT).show()
+                }
+                .onFailure {
+                    Toast.makeText(context, "Could not save feed", Toast.LENGTH_SHORT).show()
+                }
+        }
+    }
 
     fun launchVerified(result: StreamPreflight.Result) {
         showFeedPicker = false
@@ -261,6 +328,121 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (StreamSource) -> Uni
         }
     }
 
+    fun publishCandidates(candidates: List<String>, view: WebView?, manual: Boolean) {
+        detectedCandidates = candidates
+        detectedStreamUrl = candidates.first()
+        candidateTitles = emptyMap()
+        candidatePageUrls = emptyMap()
+        candidateThumbnails = emptyMap()
+        detectedTitle = when {
+            currentUrl.contains("insecam.org/en/view/") -> {
+                val id = currentUrl.substringAfter("/en/view/").takeWhile { it.isDigit() }
+                "Insecam Camera #$id"
+            }
+            currentUrl.contains("opentopia.com") -> "Opentopia Stream"
+            else -> view?.title?.ifBlank { "Detected Feed" } ?: "Detected Feed"
+        }
+        if (manual) {
+            resetChecks()
+            Toast.makeText(context, "Found ${candidates.size} stream candidate(s)", Toast.LENGTH_SHORT).show()
+            showFeedPicker = true
+            checkCandidates(candidates)
+        }
+    }
+
+    fun resolveSkylineFeeds(view: WebView?, fallback: List<String>) {
+        if (view == null) return
+        isSniffing = true
+        val pageAtStart = currentUrl
+        Toast.makeText(context, "Skyline directory - resolving the live cameras\u2026", Toast.LENGTH_SHORT).show()
+        view.evaluateJavascript(skylineCamsScript) { rawResult ->
+            val payload = rawResult?.let {
+                runCatching { JSONTokener(it).nextValue() as? String }.getOrNull()
+            } ?: ""
+            val cams = runCatching {
+                val array = JSONArray(payload)
+                (0 until array.length()).mapNotNull { index ->
+                    val obj = array.optJSONObject(index) ?: return@mapNotNull null
+                    val page = obj.optString("u").trim()
+                    if (!page.startsWith("http://", true) && !page.startsWith("https://", true)) null
+                    else SkylineResolver.CamLink(page, obj.optString("n").trim())
+                }
+            }.getOrDefault(emptyList()).distinctBy { it.pageUrl }
+
+            scope.launch {
+                // The WebView only holds the cards currently rendered, so read the
+                // category page as HTML too and merge in every camera it lists.
+                val allCams = withContext(Dispatchers.IO) {
+                    val fromPage = SkylineResolver.listingCams(pageAtStart)
+                    (cams + fromPage).distinctBy { it.pageUrl }.take(SkylineResolver.MAX_CAMS)
+                }
+
+                if (allCams.isEmpty()) {
+                    isSniffing = false
+                    if (pageAtStart != currentUrl) return@launch
+                    if (fallback.isNotEmpty()) {
+                        publishCandidates(fallback, view, manual = true)
+                    } else {
+                        resetChecks()
+                        showFeedPicker = false
+                        Toast.makeText(
+                            context,
+                            "No Skyline camera links found on this page",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    return@launch
+                }
+
+                val feeds = withContext(Dispatchers.IO) {
+                    coroutineScope {
+                        // Skyline rate-limits bursts of camera-page requests (HTTP 429),
+                        // so fetch a couple at a time and leave a small gap between them.
+                        val gate = Semaphore(2)
+                        allCams.map { cam ->
+                            async {
+                                gate.withPermit {
+                                    delay(350)
+                                    SkylineResolver.feedFor(cam)
+                                }
+                            }
+                        }.awaitAll().filterNotNull()
+                    }
+                }.distinctBy { it.url }
+
+                isSniffing = false
+                if (pageAtStart != currentUrl) return@launch
+
+                if (feeds.isNotEmpty()) {
+                    candidateTitles = feeds.associate { it.url to it.title }
+                    candidatePageUrls = feeds.associate { it.url to it.pageUrl }
+                    candidateThumbnails = feeds.mapNotNull { feed ->
+                        feed.thumbnailUrl.takeIf { it.isNotBlank() }?.let { feed.url to it }
+                    }.toMap()
+                    detectedCandidates = feeds.map { it.url }
+                    detectedStreamUrl = feeds.first().url
+                    detectedTitle = feeds.first().title.ifBlank { "Skyline camera" }
+                    resetChecks()
+                    Toast.makeText(context, "Found ${feeds.size} live Skyline feed(s)", Toast.LENGTH_SHORT).show()
+                    showFeedPicker = true
+                    checkCandidates(detectedCandidates)
+                } else if (fallback.isNotEmpty()) {
+                    publishCandidates(fallback, view, manual = true)
+                } else {
+                    detectedCandidates = emptyList()
+                    detectedStreamUrl = null
+                    resetChecks()
+                    showFeedPicker = false
+                    Toast.makeText(
+                        context,
+                        "No live feed found for the Skyline cameras on this page",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
     fun runSniffer(view: WebView?, manual: Boolean = false) {
         if (view == null) {
             if (manual) Toast.makeText(context, "Page is not ready to scan", Toast.LENGTH_SHORT).show()
@@ -275,39 +457,38 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (StreamSource) -> Uni
             val payload = rawResult?.let {
                 runCatching { JSONTokener(it).nextValue() as? String }.getOrNull()
             } ?: ""
-            val candidates = runCatching {
+            val jsCandidates = runCatching {
                 val array = JSONArray(payload)
                 (0 until array.length()).mapNotNull { index ->
                     array.optString(index).takeIf {
                         it.startsWith("http://", true) || it.startsWith("https://", true)
                     }
                 }
-            }.getOrDefault(emptyList()).distinct()
+            }.getOrDefault(emptyList())
+            // Merge DOM/JS results with media requests seen by the WebView client.
+            val networkCandidates = synchronized(interceptedMedia) { interceptedMedia.toList() }
+            val candidates = (jsCandidates + networkCandidates)
+                .filter { it.startsWith("http://", true) || it.startsWith("https://", true) }
+                .distinct()
 
-            if (candidates.isNotEmpty()) {
-                detectedCandidates = candidates
-                detectedStreamUrl = candidates.first()
-                detectedTitle = when {
-                    currentUrl.contains("insecam.org/en/view/") -> {
-                        val id = currentUrl.substringAfter("/en/view/").takeWhile { it.isDigit() }
-                        "Insecam Camera #$id"
-                    }
-                    currentUrl.contains("opentopia.com") -> "Opentopia Stream"
-                    else -> view.title?.ifBlank { "Detected Feed" } ?: "Detected Feed"
-                }
-                if (manual) {
+            val isSkylinePage = currentUrl.contains("skylinewebcams.com", true)
+            val hasSkylineManifest = candidates.any { it.contains("hd-auth.skylinewebcams.com", true) }
+            when {
+                manual && isSkylinePage && !hasSkylineManifest ->
+                    resolveSkylineFeeds(view, candidates)
+                candidates.isNotEmpty() ->
+                    publishCandidates(candidates, view, manual)
+                else -> {
+                    detectedCandidates = emptyList()
+                    detectedStreamUrl = null
+                    candidateTitles = emptyMap()
+                    candidatePageUrls = emptyMap()
+                    candidateThumbnails = emptyMap()
                     resetChecks()
-                    Toast.makeText(context, "Found ${candidates.size} stream candidate(s)", Toast.LENGTH_SHORT).show()
-                    showFeedPicker = true
-                    checkCandidates(candidates)
-                }
-            } else {
-                detectedCandidates = emptyList()
-                detectedStreamUrl = null
-                resetChecks()
-                showFeedPicker = false
-                if (manual) {
-                    Toast.makeText(context, "No stream candidate found on this page", Toast.LENGTH_SHORT).show()
+                    showFeedPicker = false
+                    if (manual) {
+                        Toast.makeText(context, "No stream candidate found on this page", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
@@ -533,10 +714,24 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (StreamSource) -> Uni
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                 super.onPageStarted(view, url, favicon)
                                 isLoading = true
+                                synchronized(interceptedMedia) { interceptedMedia.clear() }
                                 detectedCandidates = emptyList()
                                 detectedStreamUrl = null
+                                candidateTitles = emptyMap()
+                                candidatePageUrls = emptyMap()
+                                candidateThumbnails = emptyMap()
                                 resetChecks()
                                 showFeedPicker = false
+                            }
+
+                            override fun shouldInterceptRequest(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): WebResourceResponse? {
+                                request?.url?.toString()?.let { url ->
+                                    if (isNetworkMediaUrl(url)) interceptedMedia.add(url)
+                                }
+                                return null
                             }
 
                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -691,13 +886,27 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (StreamSource) -> Uni
     if (showFeedPicker && detectedCandidates.isNotEmpty()) {
         FeedPickerSheet(
             candidates = detectedCandidates,
+            labels = candidateTitles,
             checks = candidateChecks,
             isChecking = isChecking,
             onDismiss = { showFeedPicker = false },
             onLaunch = { result -> launchVerified(result) },
+            onSave = { result -> saveFeed(result) },
             onRecheck = { checkCandidates(detectedCandidates, restart = true) }
         )
     }
+}
+
+private fun isNetworkMediaUrl(url: String): Boolean {
+    val lower = url.lowercase()
+    if (lower.contains(".m3u8") || lower.contains(".mpd")) return true
+    return lower.startsWith("http") && (
+        lower.contains("mjpg") ||
+            lower.contains("mjpeg") ||
+            lower.contains("action=stream") ||
+            lower.contains("videostream") ||
+            lower.contains("getvideo")
+        )
 }
 
 private sealed class CandidateCheck {
@@ -709,10 +918,12 @@ private sealed class CandidateCheck {
 @Composable
 private fun FeedPickerSheet(
     candidates: List<String>,
+    labels: Map<String, String>,
     checks: Map<String, CandidateCheck>,
     isChecking: Boolean,
     onDismiss: () -> Unit,
     onLaunch: (StreamPreflight.Result) -> Unit,
+    onSave: (StreamPreflight.Result) -> Unit,
     onRecheck: () -> Unit
 ) {
     val neonGreen = Color(0xFF39FF14)
@@ -790,11 +1001,13 @@ private fun FeedPickerSheet(
                 items(candidates, key = { it }) { url ->
                     FeedCandidateRow(
                         url = url,
+                        label = labels[url].orEmpty(),
                         check = checks[url],
                         neonGreen = neonGreen,
                         orange = orange,
                         neonRed = neonRed,
-                        onLaunch = onLaunch
+                        onLaunch = onLaunch,
+                        onSave = onSave
                     )
                 }
             }
@@ -805,11 +1018,13 @@ private fun FeedPickerSheet(
 @Composable
 private fun FeedCandidateRow(
     url: String,
+    label: String,
     check: CandidateCheck?,
     neonGreen: Color,
     orange: Color,
     neonRed: Color,
-    onLaunch: (StreamPreflight.Result) -> Unit
+    onLaunch: (StreamPreflight.Result) -> Unit,
+    onSave: (StreamPreflight.Result) -> Unit
 ) {
     val result = (check as? CandidateCheck.Done)?.result
     val isCheckingThis = check is CandidateCheck.Checking
@@ -880,6 +1095,16 @@ private fun FeedCandidateRow(
             }
             Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
+                if (label.isNotBlank()) {
+                    Text(
+                        text = label,
+                        color = Color.White,
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Text(
                     text = statusLabel,
                     color = statusColor,
@@ -905,13 +1130,26 @@ private fun FeedCandidateRow(
                 )
             }
             if (playable) {
-                Spacer(Modifier.width(6.dp))
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = "Launch feed",
-                    tint = statusColor,
-                    modifier = Modifier.size(22.dp)
-                )
+                Spacer(Modifier.width(2.dp))
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    IconButton(
+                        onClick = { result?.let(onSave) },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.BookmarkAdd,
+                            contentDescription = "Save to feed library",
+                            tint = neonGreen,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = "Launch feed",
+                        tint = statusColor,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             }
         }
     }

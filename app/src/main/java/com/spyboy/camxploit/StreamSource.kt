@@ -54,7 +54,8 @@ data class StreamCandidate(
     val protocol: String = "http",
     val contentType: String = "",
     val verification: String = "",
-    val title: String = ""
+    val title: String = "",
+    val pageUrl: String = ""
 ) : Parcelable
 
 /**
@@ -90,7 +91,7 @@ fun isSnapshotUrl(url: String): Boolean {
     // multipart MJPEG at endpoints such as /cgi-bin/faststream.jpg?stream=half.
     if (isMjpegUrl(url)) return false
     if (path.endsWith(".jpg") || path.endsWith(".jpeg") || path.endsWith(".png") ||
-        path.endsWith(".bmp")
+        path.endsWith(".bmp") || path.endsWith(".webp")
     ) return true
 
     if (lower.contains("snapshot") || lower.contains("action=snapshot")) return true
@@ -129,7 +130,7 @@ private fun isMjpegUrl(url: String): Boolean {
     // A plain image suffix is a snapshot unless one of the definitive stream
     // markers above matched it.
     if (path.endsWith(".jpg") || path.endsWith(".jpeg") || path.endsWith(".png") ||
-        path.endsWith(".bmp")
+        path.endsWith(".bmp") || path.endsWith(".webp")
     ) return false
 
     return lower.contains("/video") || lower.contains("/stream") || lower.contains("?stream")

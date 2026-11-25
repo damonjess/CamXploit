@@ -340,15 +340,7 @@ class OsintViewModel(app: Application) : AndroidViewModel(app) {
 
     fun saveCamera(source: StreamSource) {
         viewModelScope.launch {
-            val cameraDao = com.spyboy.camxploit.CameraDatabase.getDatabase(getApplication()).cameraDao()
-            val savedCam = com.spyboy.camxploit.SavedCamera(
-                nickname = source.title,
-                ip = source.location,
-                streamUrl = source.url,
-                streamType = source.protocol.uppercase(),
-                brand = source.brand ?: "Public"
-            )
-            cameraDao.insertCamera(savedCam)
+            com.spyboy.camxploit.FeedLibrary.save(getApplication(), source)
         }
     }
 

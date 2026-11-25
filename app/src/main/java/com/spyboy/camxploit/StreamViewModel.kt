@@ -112,7 +112,7 @@ class StreamViewModel(application: Application) : AndroidViewModel(application) 
                 val lower = source.url.lowercase()
                 val cleanUrl = lower.substringBefore("?")
                 val isSnapshot = cleanUrl.endsWith(".jpg") || cleanUrl.endsWith(".jpeg") || 
-                                cleanUrl.endsWith(".png") || lower.contains("snapshot") ||
+                                cleanUrl.endsWith(".png") || cleanUrl.endsWith(".webp") || lower.contains("snapshot") ||
                                 lower.contains("current") || lower.contains("still") ||
                                 lower.contains("snap.jpg")
 

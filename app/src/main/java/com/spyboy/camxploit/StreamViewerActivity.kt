@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -63,13 +64,16 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.ui.PlayerView
 import com.spyboy.camxploit.osint.InsecamScraper
 import com.spyboy.camxploit.osint.OpentopiaScraper
 import com.spyboy.camxploit.osint.CameraUrlProbe
+import com.spyboy.camxploit.osint.SkylineResolver
 import com.spyboy.camxploit.ui.AutoRefreshImage
 import com.spyboy.camxploit.ui.FastMjpegPlayer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -95,7 +99,8 @@ private fun buildFeedPlaylist(source: StreamSource?): List<StreamCandidate> {
         protocol = source.protocol,
         contentType = source.contentType,
         verification = source.verification,
-        title = source.title
+        title = source.title,
+        pageUrl = source.pageUrl
     )
     val alternates = source.streamCandidates.ifEmpty {
         source.candidateUrls.map { StreamCandidate(url = it, protocol = "") }
@@ -181,7 +186,26 @@ class StreamViewerActivity : ComponentActivity() {
                     onBack = { finish() },
                     onSnapshot = { view -> takeSnapshot(view) },
                     onPip = { enterPipMode() },
-                    onRecord = { viewModel.toggleRecording() }
+                    onRecord = { viewModel.toggleRecording() },
+                    onSave = { source ->
+                        lifecycleScope.launch {
+                            runCatching {
+                                FeedLibrary.save(this@StreamViewerActivity, source)
+                            }.onSuccess {
+                                Toast.makeText(
+                                    this@StreamViewerActivity,
+                                    "Saved to feed library",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }.onFailure {
+                                Toast.makeText(
+                                    this@StreamViewerActivity,
+                                    "Could not save feed",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }
                 )
 
                 if (showAuthDialog) {
@@ -340,6 +364,7 @@ fun StreamPlayerScreen(
     onSnapshot: (View) -> Unit,
     onPip: () -> Unit,
     onRecord: () -> Unit,
+    onSave: (StreamSource) -> Unit,
     viewModel: StreamViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val context = LocalContext.current
@@ -373,6 +398,7 @@ fun StreamPlayerScreen(
             protocol = next.protocol.ifBlank { "http" },
             contentType = next.contentType,
             verification = next.verification.ifBlank { "Unchecked" },
+            pageUrl = next.pageUrl.ifBlank { current.pageUrl },
             candidateUrls = current.candidateUrls,
             streamCandidates = feedPlaylist
         )
@@ -395,33 +421,41 @@ fun StreamPlayerScreen(
         hasError = false
         probeResult = null
         errorMessage = DEFAULT_STREAM_ERROR
-        resolvedUrl = rawUrl
         playbackProtocol = currentSource.protocol.lowercase()
 
-        val isWrapper = rawUrl.contains("insecam.org", ignoreCase = true) ||
-                        rawUrl.contains("opentopia.com", ignoreCase = true)
+        // Skyline tokens are short-lived and the page is the source of truth.
+        // Refresh before probing a saved feed so the player never opens an old,
+        // empty playlist that would stall inside Media3's HLS parser.
+        var effectiveUrl = rawUrl
+        if (currentSource.pageUrl.contains("skylinewebcams.com", ignoreCase = true)) {
+            val fresh = withContext(Dispatchers.IO) {
+                runCatching { SkylineResolver.freshManifest(currentSource.pageUrl) }.getOrNull()
+            }
+            if (!fresh.isNullOrBlank()) effectiveUrl = fresh
+        }
+        resolvedUrl = effectiveUrl
+
+        val isWrapper = effectiveUrl.contains("insecam.org", ignoreCase = true) ||
+                        effectiveUrl.contains("opentopia.com", ignoreCase = true)
 
         val result = withContext(Dispatchers.IO) {
             when {
                 isWrapper -> {
-                    val direct = if (rawUrl.contains("insecam")) {
-                        InsecamScraper.scrapePage(rawUrl).streamUrl
+                    val direct = if (effectiveUrl.contains("insecam")) {
+                        InsecamScraper.scrapePage(effectiveUrl).streamUrl
                     } else {
-                        OpentopiaScraper.scrapeDetailPage(rawUrl)?.first
+                        OpentopiaScraper.scrapeDetailPage(effectiveUrl)?.first
                     }
-                    if (!direct.isNullOrBlank() && direct != rawUrl) {
+                    if (!direct.isNullOrBlank() && direct != effectiveUrl) {
                         CameraUrlProbe.probe(direct)
                     } else {
-                        CameraUrlProbe.probe(rawUrl)
+                        CameraUrlProbe.probe(effectiveUrl)
                     }
                 }
-                else -> CameraUrlProbe.probe(rawUrl)
+                else -> CameraUrlProbe.probe(effectiveUrl)
             }
         }
         probeResult = result
-        resolvedUrl = result.url
-        isScraping = false
-        isLoading = false
 
         // Resolve one effective protocol for both playback state and renderer
         // selection: snapshot -> confirmed MJPEG -> declared protocol -> web.
@@ -429,12 +463,25 @@ fun StreamPlayerScreen(
         // was declared "mjpeg": that is what left the viewer spinning forever.
         val declared = currentSource.protocol.lowercase()
         val needsLogin = result.responseCode == 401 || result.responseCode == 403
+        val shouldCheckHls = result.isHls || declared == "hls" ||
+            result.url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+        val hlsCheck = if (shouldCheckHls) {
+            withContext(Dispatchers.IO) {
+                StreamPreflight.verifyAll(listOf(result.url)).firstOrNull()
+            }
+        } else {
+            null
+        }
+        resolvedUrl = hlsCheck?.url ?: result.url
+        isScraping = false
+        isLoading = false
+
         val effectiveProtocol = when {
             // Trust the HTTP probe over the URL suffix. Cameras often expose
             // multipart MJPEG at image-looking paths such as faststream.jpg.
             result.isMjpeg -> "mjpeg"
             result.isSnapshot || isSnapshotUrl(result.url) -> "snapshot"
-            result.isHls || declared == "hls" -> "hls"
+            hlsCheck != null -> "hls"
             declared == "rtsp" || declared == "rtmp" || declared == "onvif" -> declared
             result.isHtml || result.contentType.startsWith("text/") -> "web"
             declared.isNotBlank() -> declared
@@ -442,13 +489,17 @@ fun StreamPlayerScreen(
         }
         playbackProtocol = effectiveProtocol
         val effectiveSource = currentSource.copy(
-            url = result.url,
+            url = hlsCheck?.url ?: result.url,
             protocol = effectiveProtocol,
-            contentType = result.contentType.ifBlank { currentSource.contentType }
+            contentType = (hlsCheck?.contentType ?: result.contentType)
+                .ifBlank { currentSource.contentType }
         )
 
         if (needsLogin) {
             errorMessage = "HTTP ${result.responseCode} - this endpoint needs a login.\nTry Test Creds from the LAN tab."
+            hasError = true
+        } else if (hlsCheck != null && !hlsCheck.isPlayable) {
+            errorMessage = "HLS feed is not ready.\n${hlsCheck.detail}\nUse RETRY to refresh the token."
             hasError = true
         } else if (effectiveProtocol == "mjpeg") {
             viewModel.prepareMjpegPlayback(effectiveSource)
@@ -492,6 +543,16 @@ fun StreamPlayerScreen(
                     // (for example a snapshot feed that stops answering), so never show
                     // LIVE while the error screen is up.
                     val displayStatus = if (hasError) StreamStatus.Error(errorMessage) else status
+                    IconButton(
+                        onClick = { activeSource?.let(onSave) },
+                        enabled = activeSource != null
+                    ) {
+                        Icon(
+                            Icons.Default.BookmarkAdd,
+                            contentDescription = "Save to feed library",
+                            tint = if (activeSource != null) neonGreen else Color.DarkGray
+                        )
+                    }
                     StatusIndicator(displayStatus, isRecording, recordingDuration)
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0D0D0D)),

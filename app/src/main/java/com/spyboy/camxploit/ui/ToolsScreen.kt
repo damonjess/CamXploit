@@ -39,7 +39,11 @@ fun ToolsScreen() {
     ) {
         // ── HEADER ──
         Text("TOOLS", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = cyan)
-        Text("OFFLINE CRYPTO & DECODER", fontSize = 12.sp, color = Color.Gray)
+        Text("ONVIF, OFFLINE CRYPTO & DECODER", fontSize = 12.sp, color = Color.Gray)
+        Spacer(Modifier.height(16.dp))
+
+        // ONVIF discovery, profiles, snapshots, and PTZ
+        OnvifToolsCard()
         Spacer(Modifier.height(20.dp))
 
         // ═══════════════════════════════════════════════════════════════

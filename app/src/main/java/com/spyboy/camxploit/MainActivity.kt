@@ -87,6 +87,7 @@ import com.spyboy.camxploit.ui.GlobalOsintSheet
 import com.spyboy.camxploit.ui.OsintScreen
 import com.spyboy.camxploit.ui.SentinelScreen
 import com.spyboy.camxploit.ui.SentinelViewModel
+import com.spyboy.camxploit.ui.SavedFeedLibrary
 import com.spyboy.camxploit.ui.ToolsScreen
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
@@ -667,7 +668,10 @@ fun CamGuardianApp() {
                         onHostClick = { selectedHostForDetail = it }
                     )
                     5 -> StormBreakerScreen(stormViewModel, consoleIpInput)
-                    6 -> SavedCamerasTab({ cam -> StreamViewerActivity.launch(context, cam.toStreamSource(), cam.ip) }, { consoleIpInput = it; selectedTab = 0 })
+                    6 -> SavedFeedLibrary(
+                        onPlay = { cam -> StreamViewerActivity.launch(context, cam.toStreamSource(), cam.ip) },
+                        onOpenConsole = { cam -> consoleIpInput = cam.ip; selectedTab = 0 }
+                    )
                     7 -> ToolsScreen()
                     8 -> SentinelScreen(viewModel = sentinelViewModel)
                 }
@@ -2035,13 +2039,7 @@ fun saveJsonReport(context: Context, content: String, ip: String) { try { val js
 
 
 fun extractCredentials(text: String): Pair<String, String> { val u = Regex("""User:\s*(\S+)""").find(text)?.groupValues?.get(1) ?: "admin"; val p = Regex("""Pass:\s*(\S+)""").find(text)?.groupValues?.get(1) ?: "admin"; return u to p }
-fun buildAuthUrl(u: String, user: String, pass: String): String { if (user.isBlank() || pass.isBlank() || u.contains("@")) return u; return try { if (u.startsWith("rtsp://")) u.replace("rtsp://", "rtsp://$user:$pass@") else if (u.startsWith("http://")) u.replace("http://", "http://$user:$pass@") else u } catch (e: Exception) { u } }
-
-@Composable
-fun SavedCamerasTab(onPlay: (SavedCamera) -> Unit, onIpSelected: (String) -> Unit) {
-    val context = LocalContext.current; val cameras by CameraDatabase.getDatabase(context).cameraDao().getAllCameras().collectAsState(initial = emptyList())
-    LazyColumn(Modifier.fillMaxSize()) { items(cameras) { cam -> Card(Modifier.fillMaxWidth().padding(6.dp).clickable { onIpSelected(cam.ip) }) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(cam.nickname, fontWeight = FontWeight.Bold); Text(cam.ip, fontSize = 12.sp) }; IconButton(onClick = { onPlay(cam) }) { Icon(Icons.Default.PlayArrow, null) } } } } }
-}
+fun buildAuthUrl(u: String, user: String, pass: String): String { if (user.isBlank() || pass.isBlank() || u.contains("@")) return u; return try { if (u.startsWith("rtsp://")) u.replace("rtsp://", "rtsp://$user:$pass@") else if (u.startsWith("https://")) u.replace("https://", "https://$user:$pass@") else if (u.startsWith("http://")) u.replace("http://", "http://$user:$pass@") else u } catch (e: Exception) { u } }
 
 @Composable
 fun GoogleDorksDialog(ip: String, onDismiss: () -> Unit, onOpenBrowser: (String) -> Unit) {
