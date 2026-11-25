@@ -473,8 +473,12 @@ fun InsecamBrowserScreen(onClose: () -> Unit, onStreamUrl: (StreamSource) -> Uni
 
             val isSkylinePage = currentUrl.contains("skylinewebcams.com", true)
             val hasSkylineManifest = candidates.any { it.contains("hd-auth.skylinewebcams.com", true) }
+            val isSkylineDirectory = isSkylinePage && SkylineResolver.isDirectoryPage(currentUrl)
             when {
-                manual && isSkylinePage && !hasSkylineManifest ->
+                // A country/region page can autoplay one camera and expose its
+                // manifest through network capture. That single request must not
+                // short-circuit the resolver for every camera on the page.
+                manual && isSkylinePage && (isSkylineDirectory || !hasSkylineManifest) ->
                     resolveSkylineFeeds(view, candidates)
                 candidates.isNotEmpty() ->
                     publishCandidates(candidates, view, manual)

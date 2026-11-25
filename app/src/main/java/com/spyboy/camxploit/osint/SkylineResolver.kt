@@ -22,7 +22,18 @@ object SkylineResolver {
         val thumbnailUrl: String = ""
     )
 
-    const val MAX_CAMS = 20
+    const val MAX_CAMS = 40
+
+    /** True for country/region pages, false for an individual camera page. */
+    fun isDirectoryPage(url: String): Boolean {
+        val path = url.substringBefore('?').substringBefore('#')
+        val afterWebcam = path.substringAfter("/webcam/", "")
+        if (afterWebcam.isBlank()) return true
+        val segments = afterWebcam.removeSuffix(".html")
+            .split('/')
+            .filter { it.isNotBlank() }
+        return segments.size < 4
+    }
 
     private val manifestToken = Regex("""livee?\.m3u8\?a=([A-Za-z0-9]+)""")
     private val camLink = Regex(
@@ -74,8 +85,17 @@ object SkylineResolver {
     suspend fun freshManifest(pageUrl: String): String? =
         feedFor(CamLink(pageUrl, ""))?.url
 
-    /** Fetches a Skyline page with browser headers and the WebView's cookies. */
-    private fun readPage(pageUrl: String): String? {
+    /**
+     * Skyline serves a public page with per-camera player tokens. Fetch it
+     * first without the WebView cookie jar: a logged-in page can carry a sticky
+     * "current camera" token on every page, which made all directory feeds look
+     * identical. Retry with cookies only if the public request fails.
+     */
+    private fun readPage(pageUrl: String): String? =
+        readPageAttempt(pageUrl, includeCookies = false)
+            ?: readPageAttempt(pageUrl, includeCookies = true)
+
+    private fun readPageAttempt(pageUrl: String, includeCookies: Boolean): String? {
         for (attempt in 0..2) {
             var connection: HttpURLConnection? = null
             try {
@@ -91,10 +111,12 @@ object SkylineResolver {
                             "(KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
                     )
                     setRequestProperty("Accept", "text/html,application/xhtml+xml")
-                    runCatching { CookieManager.getInstance().getCookie(pageUrl) }
-                        .getOrNull()
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { setRequestProperty("Cookie", it) }
+                    if (includeCookies) {
+                        runCatching { CookieManager.getInstance().getCookie(pageUrl) }
+                            .getOrNull()
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { setRequestProperty("Cookie", it) }
+                    }
                 }
                 val code = connection.responseCode
                 if (code == 429) {
