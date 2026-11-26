@@ -125,10 +125,13 @@ fun NmapTab(
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(nmapOutput.lines().size) {
-        val lines = nmapOutput.lines()
-        if (lines.isNotEmpty()) {
-            listState.animateScrollToItem(lines.size - 1)
+    // nmapOutput always ends with a newline; without trimming, that final empty
+    // entry renders as a blank row and eats a line of the output area each update.
+    val outputLines = remember(nmapOutput) { nmapOutput.trimEnd('\n').lines() }
+
+    LaunchedEffect(outputLines.size) {
+        if (outputLines.isNotEmpty()) {
+            listState.animateScrollToItem(outputLines.size - 1)
         }
     }
 
@@ -156,23 +159,41 @@ fun NmapTab(
 
         Spacer(Modifier.height(12.dp))
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("QUICK", "SERVICE", "SUBNET").forEach { type ->
+        // Single compact row: five modes in two rows used to steal the height the
+        // output area needs most.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("QUICK", "SERVICE", "SUBNET", "DEEP", "VULN").forEach { type ->
+                val intrusive = type == "DEEP" || type == "VULN"
                 Button(
                     onClick = { scanType = type },
                     modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (scanType == type) Color(0xFF1B5E20) else Color(0xFF111111)
+                        containerColor = if (scanType == type) {
+                            if (intrusive) Color(0xFF7F1D1D) else Color(0xFF1B5E20)
+                        } else Color(0xFF111111)
                     ),
                     shape = RoundedCornerShape(4.dp),
-                    border = BorderStroke(1.dp, if (scanType == type) Color.Green else Color(0xFF333333))
+                    border = BorderStroke(
+                        1.dp,
+                        when {
+                            scanType != type -> Color(0xFF333333)
+                            intrusive -> Color(0xFFFF6B6B)
+                            else -> Color.Green
+                        }
+                    )
                 ) {
-                    Text(type, color = if (scanType == type) Color.White else Color.Gray, fontSize = 10.sp)
+                    Text(
+                        type,
+                        color = if (scanType == type) Color.White else Color.Gray,
+                        fontSize = 9.sp,
+                        maxLines = 1
+                    )
                 }
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(8.dp))
 
         Surface(
             modifier = Modifier.fillMaxWidth().weight(1f).border(1.dp, Color(0xFF1A1A1A), RoundedCornerShape(4.dp)),
@@ -181,10 +202,10 @@ fun NmapTab(
             Box {
                 SelectionContainer {
                     LazyColumn(
-                        Modifier.fillMaxSize().padding(10.dp),
+                        Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
                         state = listState
                     ) {
-                        items(nmapOutput.lines()) { line ->
+                        items(outputLines) { line ->
                             NmapAnnotatedText(line)
                         }
                     }
@@ -199,8 +220,9 @@ fun NmapTab(
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(8.dp))
 
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(
             onClick = {
                 if (nmapIp.isBlank()) {
@@ -214,9 +236,11 @@ fun NmapTab(
 
                 nmapIsScanning = true
                 val displayCmd = when(scanType) {
-                    "QUICK" -> "nmap -T4 --open -F"
-                    "SERVICE" -> "nmap -p 80,443,554,8080,8000... -T4 --open -F"
+                    "QUICK" -> "nmap -Pn -T4 --open -F"
+                    "SERVICE" -> "nmap -Pn -p 80,443,554,8000... -T4 --open"
                     "SUBNET" -> "nmap -sn"
+                    "DEEP" -> "nmap -Pn -A -T4 --open"
+                    "VULN" -> "nmap -Pn -p 80,443,554,8000... --script vuln -T4"
                     else -> "nmap"
                 }
                 nmapOutput = "> $displayCmd $nmapIp...\n"
@@ -227,6 +251,8 @@ fun NmapTab(
                             "QUICK" -> quickScan(context, nmapIp, { nmapOutput += it + "\n" }, { nmapIsScanning = false })
                             "SERVICE" -> cameraScan(context, nmapIp, { nmapOutput += it + "\n" }, { nmapIsScanning = false })
                             "SUBNET" -> subnetScan(context, nmapIp, { nmapOutput += it + "\n" }, { nmapIsScanning = false })
+                            "DEEP" -> aggressiveScan(context, nmapIp, { nmapOutput += it + "\n" }, { nmapIsScanning = false })
+                            "VULN" -> vulnScan(context, nmapIp, { nmapOutput += it + "\n" }, { nmapIsScanning = false })
                             else -> nmapIsScanning = false
                         }
                     } catch (e: Exception) {
@@ -235,7 +261,8 @@ fun NmapTab(
                     }
                 }
             },
-            modifier = Modifier.fillMaxWidth().height(50.dp),
+            modifier = Modifier.weight(1f).height(50.dp),
+            contentPadding = PaddingValues(horizontal = 8.dp),
             colors = ButtonDefaults.buttonColors(Color(0xFF003300)),
             enabled = !nmapIsScanning,
             shape = RoundedCornerShape(4.dp),
@@ -243,10 +270,14 @@ fun NmapTab(
         ) {
             Icon(if (nmapIsScanning) Icons.Default.Refresh else Icons.Default.Search, null, tint = Color.Green)
             Spacer(Modifier.width(8.dp))
-            Text(if (nmapIsScanning) "SCANNING..." else "START AUDIT", color = Color.Green, fontWeight = FontWeight.Bold)
+            Text(
+                if (nmapIsScanning) "SCANNING..." else "START AUDIT",
+                color = Color.Green,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp,
+                maxLines = 1
+            )
         }
-
-        Spacer(Modifier.height(8.dp))
 
         Button(
             onClick = {
@@ -258,13 +289,21 @@ fun NmapTab(
                     Toast.makeText(context, "No target IP found in results", Toast.LENGTH_SHORT).show()
                 }
             },
-            modifier = Modifier.fillMaxWidth().height(45.dp),
+            modifier = Modifier.weight(1f).height(50.dp),
+            contentPadding = PaddingValues(horizontal = 8.dp),
             colors = ButtonDefaults.buttonColors(Color(0xFF1B5E20)),
             shape = RoundedCornerShape(4.dp)
         ) {
             Icon(Icons.AutoMirrored.Filled.Send, null, tint = Color.White, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(8.dp))
-            Text("SEND TO CONSOLE", color = Color.White, fontWeight = FontWeight.Bold)
+            Text(
+                "SEND",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp,
+                maxLines = 1
+            )
+        }
         }
     }
 }
@@ -294,7 +333,7 @@ fun NmapAnnotatedText(line: String) {
                 }
             }
             else -> {
-                withStyle(style = SpanStyle(color = Color.Gray, fontFamily = FontFamily.Monospace)) {
+                withStyle(style = SpanStyle(color = Color(0xFFCFCFCF), fontFamily = FontFamily.Monospace)) {
                     append(line)
                 }
             }
@@ -302,9 +341,9 @@ fun NmapAnnotatedText(line: String) {
     }
     Text(
         text = annotatedString,
-        fontSize = 11.sp,
-        lineHeight = 14.sp,
-        modifier = Modifier.padding(vertical = 1.dp)
+        fontSize = 14.sp,
+        lineHeight = 19.sp,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
     )
 }
 
@@ -565,7 +604,8 @@ fun CamGuardianApp() {
                         Icons.Default.Bolt to "STORM",
                         Icons.Default.Bookmarks to "SAVED",
                         Icons.Default.Build to "TOOLS",
-                        Icons.Default.Shield to "SENTINEL"
+                        Icons.Default.Shield to "SENTINEL",
+                        Icons.Default.Search to "NMAP"
                     )
                     tabs.forEachIndexed { index, (icon, label) ->
                         Tab(
@@ -625,6 +665,12 @@ fun CamGuardianApp() {
                         }
                     )
                     1 -> OsintScreen(viewModel = osintViewModel)
+                    9 -> NmapTab(
+                        context = context,
+                        lastIp = consoleIpInput.takeIf { it.isNotBlank() },
+                        onTabSwitch = { selectedTab = it },
+                        onIpSelected = { consoleIpInput = it }
+                    )
                     2 -> ArchiveTab(context, selectedTab, terminalText, consoleIpInput) { viewingFile = it }
                     3 -> StreamTab(
                         terminalText = terminalText,
@@ -1147,6 +1193,7 @@ fun StreamTab(
     var currentExoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
     var currentWebView by remember { mutableStateOf<WebView?>(null) }
     var currentTextureView by remember { mutableStateOf<TextureView?>(null) }
+    var manualUrl by remember { mutableStateOf("") }
 
     DisposableEffect(selectedUrl) { onDispose { currentExoPlayer?.release(); currentExoPlayer = null } }
 
@@ -1176,6 +1223,42 @@ fun StreamTab(
                     Spacer(Modifier.width(4.dp))
                     Text(text = "REC ${String.format("%02d:%02d", recordingDuration / 60, recordingDuration % 60)}", color = Color.Red, fontSize = 12.sp)
                 }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // A feed that was not discovered by a scan still needs a way in: paste the
+        // URL (with credentials for cameras that demand them) and load it.
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = manualUrl,
+                onValueChange = { manualUrl = it },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                placeholder = {
+                    Text("rtsp://admin:code@IP:554/...", color = Color.DarkGray, fontSize = 11.sp)
+                },
+                textStyle = TextStyle(color = Color.White, fontSize = 11.sp, fontFamily = FontFamily.Monospace),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color.Green,
+                    unfocusedBorderColor = Color(0xFF333333),
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    cursorColor = Color.Green
+                ),
+                shape = RoundedCornerShape(4.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = { if (manualUrl.isNotBlank()) onUrlSelected(manualUrl.trim()) },
+                enabled = manualUrl.isNotBlank(),
+                modifier = Modifier.height(52.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF003300)),
+                shape = RoundedCornerShape(4.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp)
+            ) {
+                Text("LOAD", color = Color.Green, fontWeight = FontWeight.Bold, fontSize = 11.sp)
             }
         }
 
@@ -1327,7 +1410,7 @@ fun StreamTab(
                     Spacer(Modifier.height(12.dp))
                     Text("NO ACTIVE STREAM FEED", color = Color.Gray, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(4.dp))
-                    Text("Run target scan in CONSOLE or LAN tab to discover streams", color = Color.DarkGray, fontSize = 11.sp)
+                    Text("Paste a URL above, or scan to discover streams", color = Color.DarkGray, fontSize = 11.sp)
                 }
             }
         }
@@ -2038,7 +2121,9 @@ fun generateDetailedPdfReport(context: Context, terminalText: String, targetIp: 
 fun saveJsonReport(context: Context, content: String, ip: String) { try { val json = JSONObject().apply { put("target", ip); put("log", content) }; saveContentToFile(context, json.toString(), "Report_$ip", "json") } catch (e: Exception) {} }
 
 
-fun extractCredentials(text: String): Pair<String, String> { val u = Regex("""User:\s*(\S+)""").find(text)?.groupValues?.get(1) ?: "admin"; val p = Regex("""Pass:\s*(\S+)""").find(text)?.groupValues?.get(1) ?: "admin"; return u to p }
+// Empty when the scan log has no credentials: inventing admin/admin made every
+// stream attempt fail with a guessed login instead of the URL's own credentials.
+fun extractCredentials(text: String): Pair<String, String> { val u = Regex("""User:\s*(\S+)""").find(text)?.groupValues?.get(1) ?: ""; val p = Regex("""Pass:\s*(\S+)""").find(text)?.groupValues?.get(1) ?: ""; return u to p }
 fun buildAuthUrl(u: String, user: String, pass: String): String { if (user.isBlank() || pass.isBlank() || u.contains("@")) return u; return try { if (u.startsWith("rtsp://")) u.replace("rtsp://", "rtsp://$user:$pass@") else if (u.startsWith("https://")) u.replace("https://", "https://$user:$pass@") else if (u.startsWith("http://")) u.replace("http://", "http://$user:$pass@") else u } catch (e: Exception) { u } }
 
 @Composable

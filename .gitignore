@@ -39,3 +39,6 @@ gradle/gradle-daemon-jvm.properties
 # Temporary / Debug Files
 log.txt
 view.xml
+
+# Bundled nmap runtime dependencies (required build inputs, not build output)
+!app/src/main/jniLibs/**/*.so

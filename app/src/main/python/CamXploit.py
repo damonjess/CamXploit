@@ -449,7 +449,140 @@ def analyze_tls(ip, port):
     except Exception as e:
         print(f"       {ERR} TLS Analysis Failed: {str(e)}")
 
-def directory_enumeration(ip, port, proto, brand, auth=None):
+import hashlib
+
+# Signatures that prove a 200 response really is the sensitive resource.
+# Embedded web servers commonly answer 200 with the same login page for every
+# path, which used to be reported as "EXPOSED".
+EXPOSURE_SIGNATURES = {
+    "/system.ini?loginuse&loginpas": r"login(use|pas)\s*=",
+    "/proc/kmsg": r"<\d+>|Linux version|kernel",
+    "/var/log/messages": r"<\d+>|kernel|syslog",
+    "/tmp/log": r"\d{4}-\d{2}-\d{2}|\b[A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2}",
+    "/etc/passwd": r"(?m)^[A-Za-z_][\w.-]*:[^:\r\n]*:\d+:\d+:",
+    "/etc/shadow": r"(?m)^[A-Za-z_][\w.-]*:\$",
+    "/.env": r"(?m)^[A-Za-z_][A-Za-z0-9_]*\s*=",
+    "/.git/config": r"\[core\]",
+    "/.svn/entries": r"(?m)^\d+\s*$",
+    "/.htaccess": r"RewriteRule|AuthType|Order\s+(deny|allow)",
+    "/phpinfo.php": r"PHP Version",
+    "/info.php": r"PHP Version",
+    "/config.xml": r"<\?xml|<config",
+    "/users.xml": r"<user|<username|<account",
+    "/accounts.xml": r"<user|<username|<account",
+    "/passwords.txt": r"\S+\s*:\s*\S+",
+    "/ISAPI/System/deviceInfo": r"<DeviceInfo",
+    "/ISAPI/Security/users": r"<User",
+    "/System/configurationFile": r"<config|<Configuration",
+    "/cgi-bin/magicBox.cgi?action=getSystemInfo": r"\w+\s*=",
+    "/axis-cgi/admin/param.cgi?action=list": r"root\.\w+=",
+    "/etc/config/image_config": r"\w+\s*=",
+    "/etc/config/network_config": r"\w+\s*=",
+    "/shell?ls": r"(?m)^(bin|etc|usr|var|tmp)\b",
+    "/onvif/device_service": r"Envelope|DeviceService",
+    "/onvif/Media": r"Envelope|Media",
+    "/onvif/PTZ": r"Envelope|PTZ",
+}
+
+LOGIN_MARKERS = (
+    'type="password"', "type='password'", 'name="password"', "name='password'",
+    'name="passwd"', 'name="pwd"', ">login<", ">log in<", "sign in", "signin",
+    "authentication required",
+)
+
+
+def body_fingerprint(body):
+    """Collapse volatile tokens so 'same page, new session id' compares equal."""
+    if not body:
+        return ""
+    t = re.sub(r'(?i)(session|sessionid|token|nonce|csrf|rand)[a-z0-9_-]*\s*[=:]\s*["\']?[^"\'&;\s<>]+', r"\1=", body)
+    t = re.sub(r"\b\d{6,}\b", "0", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return hashlib.sha256(t.encode("utf-8", "ignore")).hexdigest()
+
+
+def is_real_exposure(path, body, content_type, baseline_hash, baseline_len):
+    """Only report a 200 when the payload itself proves the resource is exposed."""
+    if not body:
+        return False
+
+    ctype = (content_type or "").lower()
+
+    # Byte-for-byte the same page as "/" -> the server answers 200 for everything.
+    if baseline_hash and body_fingerprint(body) == baseline_hash:
+        return False
+
+    # A login/portal page is not an exposure, whatever path produced it.
+    low = body.lower()
+    if "html" in ctype and any(m in low for m in LOGIN_MARKERS):
+        return False
+
+    sig = EXPOSURE_SIGNATURES.get(path)
+    if sig:
+        # A signature match is the evidence; no length floor needed.
+        return re.search(sig, body, re.I | re.M) is not None
+
+    # Unrecognised path: only substantive non-HTML payloads count.
+    if len(body) < 128:
+        return False
+    if "html" in ctype or not ctype:
+        return False
+    return abs(len(body) - baseline_len) > 32
+
+
+def rtsp_describe(ip, port, user=None, pwd=None):
+    """Single DESCRIBE probe. Returns (is_200, response_text)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1.5)
+            if s.connect_ex((ip, port)) != 0:
+                return False, ""
+            if user:
+                auth_str = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+                msg = (f"DESCRIBE rtsp://{ip}:{port}/ RTSP/1.0\r\nCSeq: 1\r\n"
+                       f"Authorization: Basic {auth_str}\r\n\r\n")
+            else:
+                msg = f"DESCRIBE rtsp://{ip}:{port}/ RTSP/1.0\r\nCSeq: 1\r\n\r\n"
+            s.sendall(msg.encode())
+            response = s.recv(1024).decode(errors="ignore")
+            return ("RTSP/1.0 200" in response), response
+    except:
+        return False, ""
+
+
+def credential_accepted(resp, baseline, anonymous=False):
+    """True only when the response shows access was actually granted."""
+    if resp is None or resp.status_code != 200:
+        return False
+
+    body = resp.text or ""
+    if any(x in (resp.url or "").lower() for x in ("login", "signin", "sign-in", "/auth", "denied")):
+        return False
+    if str(resp.headers.get("WWW-Authenticate") or "").lower().startswith("basic"):
+        return False
+
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+    low = body.lower()
+    if "html" in ctype or not ctype:
+        if any(m in low for m in LOGIN_MARKERS):
+            return False
+        if len(body.strip()) < 64:
+            return False
+
+    if anonymous:
+        return True
+    if baseline is None:
+        return False
+
+    _, b_hash, _, _ = baseline
+    # Identical to the deliberately-wrong login => the credentials changed nothing,
+    # whatever status the device reported for that baseline.
+    if b_hash and body_fingerprint(body) == b_hash:
+        return False
+    return True
+
+
+def directory_enumeration(ip, port, proto, brand, auth=None, baseline_hash=None, baseline_len=0):
     """Targeted directory enumeration for sensitive paths."""
     print(f"    [{RADR}] Running Targeted Directory Enumeration...")
     sensitive_paths = [
@@ -468,7 +601,8 @@ def directory_enumeration(ip, port, proto, brand, auth=None):
         try:
             url = f"{proto}://{ip}:{port}{path}"
             r = make_request(url, auth=auth, timeout=2, verify=False)
-            if r.status_code == 200:
+            if r.status_code == 200 and is_real_exposure(
+                    path, r.text, r.headers.get("Content-Type"), baseline_hash, baseline_len):
                 return url
         except: pass
         return None
@@ -1575,6 +1709,16 @@ def scan_single_target(target_ip, specific_port=None):
             # If the port analysis failed, skip deep fingerprinting
             if p not in open_ports: continue
 
+            # Catch-all baseline: anything identical to the root page is just the
+            # server answering 200 for every path, not an exposure.
+            baseline_hash, baseline_len = "", 0
+            try:
+                root_page = make_request(f"{proto}://{target_ip}:{p}/", timeout=3, verify=False)
+                baseline_hash = body_fingerprint(root_page.text)
+                baseline_len = len(root_page.text or "")
+            except:
+                pass
+
             found_any = False
 
             def check_path(path):
@@ -1582,7 +1726,7 @@ def scan_single_target(target_ip, specific_port=None):
                     url = f"{proto}://{target_ip}:{p}{path}"
                     r = make_request(url, timeout=3, verify=False)
                     if r.status_code == 200:
-                        return url, r.text
+                        return url, path, r.text, r.headers.get("Content-Type")
                 except: pass
                 return None
 
@@ -1590,28 +1734,33 @@ def scan_single_target(target_ip, specific_port=None):
                 futures = {executor.submit(check_path, path): path for path in FINGERPRINT_PATHS}
                 for future in as_completed(futures):
                     res = future.result()
-                    if res:
-                        url, text = res
-                        print(f"    {OPEN} Found Sensitive Data/Config: {url}")
-                        found_any = True
+                    if not res:
+                        continue
 
-                        info = parse_firmware_data(text, brand)
-                        if info["model"] != "Unknown" or info["firmware"] != "Unknown":
-                            print(f"       {PLD} Extracted Intel:")
-                            print(f"         - Model: {info['model']}")
-                            print(f"         - Firmware: {info['firmware']}")
-                            print(f"         - Build: {info['build']}")
+                    url, req_path, text, ctype = res
+                    if not is_real_exposure(req_path, text, ctype, baseline_hash, baseline_len):
+                        continue
 
-                        path = futures[future]
-                        if "axis" in path: brand = "Axis"
-                        elif "hikvision" in path: brand = "Hikvision"
+                    print(f"    {OPEN} Found Sensitive Data/Config: {url}")
+                    found_any = True
 
-                        if any(x in path.lower() for x in ["config", "log", "shell", "kmsg"]):
-                            print(f"       {FIRE} CRITICAL: Exposed system component detected!")
+                    info = parse_firmware_data(text, brand)
+                    if info["model"] != "Unknown" or info["firmware"] != "Unknown":
+                        print(f"       {PLD} Extracted Intel:")
+                        print(f"         - Model: {info['model']}")
+                        print(f"         - Firmware: {info['firmware']}")
+                        print(f"         - Build: {info['build']}")
+
+                    if "axis" in req_path: brand = "Axis"
+                    elif "hikvision" in req_path: brand = "Hikvision"
+
+                    if any(x in req_path.lower() for x in ["config", "log", "shell", "kmsg"]):
+                        print(f"       {FIRE} CRITICAL: Exposed system component detected!")
 
             # Run directory enumeration
             auth_info = (success_cred[0], success_cred[1]) if success_cred else None
-            directory_enumeration(target_ip, p, proto, brand, auth=auth_info)
+            directory_enumeration(target_ip, p, proto, brand, auth=auth_info,
+                                  baseline_hash=baseline_hash, baseline_len=baseline_len)
 
             if not found_any:
                 print(f"    {INFO} Port {p}: No firmware data exposed.")
@@ -1642,7 +1791,49 @@ def scan_single_target(target_ip, specific_port=None):
                 print(f"  {ALRT} Management Service {svc} is EXPOSED on port {port}!")
 
         print(f"\n  [{KEY}] Testing Credentials on {target_ip}:")
-        success_cred = None
+
+        # --- Authentication baselines ---------------------------------------
+        # Without these, a camera whose web UI answers 200 to everything looks
+        # "cracked" for every candidate. A credential is only reported when the
+        # response differs from both the anonymous and the wrong-login response.
+        web_url = None
+        http_baseline = None
+        web_anonymous = False
+        rtsp_ports = [rp for rp in open_ports if rp in [554, 8554, 10554]]
+        rtsp_anonymous = False
+
+        if web_ports:
+            wp = web_ports[0]
+            web_url = f"http{'s' if wp in [443, 8443] else ''}://{target_ip}:{wp}/"
+
+            try:
+                anon = make_request(web_url, timeout=2, verify=False)
+                web_anonymous = credential_accepted(anon, None, anonymous=True)
+            except:
+                web_anonymous = False
+
+            if web_anonymous:
+                print(f"    {FIRE} CRITICAL: web interface served WITHOUT authentication @ {web_url}")
+                success_cred = ("", "", web_url)
+
+            try:
+                bad = make_request(web_url, auth=("camxploit_probe", "camxploit_probe"), timeout=2, verify=False)
+                http_baseline = (bad.status_code, body_fingerprint(bad.text),
+                                 len(bad.text or ""), (bad.url or web_url).lower())
+            except:
+                http_baseline = None
+
+            if not web_anonymous and http_baseline is None:
+                print(f"    {INFO} No stable HTTP baseline - skipping HTTP credential test (avoids false positives).")
+
+        for rp in rtsp_ports:
+            ok, _ = rtsp_describe(target_ip, rp)
+            if ok:
+                rtsp_anonymous = True
+                print(f"    {FIRE} CRITICAL: RTSP stream served WITHOUT authentication @ rtsp://{target_ip}:{rp}/")
+                if not success_cred:
+                    success_cred = ("", "", f"rtsp://{target_ip}:{rp}/")
+                break
 
         # 1. Prioritize Brand Credentials
         test_creds = []
@@ -1668,48 +1859,26 @@ def scan_single_target(target_ip, specific_port=None):
             if idx % 2 == 0 or idx == total_creds:
                 print(f"    {PLD} Progress: Testing {idx}/{total_creds} default credentials...")
 
-            # Test HTTP
-            if web_ports:
-                p = web_ports[0]
-                url = f"http{'s' if p in [443, 8443] else ''}://{target_ip}:{p}/"
-                # Try with and without auth if user/pwd are empty
+            # Test HTTP (only against a device that actually challenges clients)
+            if web_url and not web_anonymous and http_baseline is not None:
                 try:
-                    r = make_request(url, auth=(user, pwd) if user or pwd else None, timeout=2, verify=False)
-                    if r.status_code == 200 and "login" not in r.url.lower():
-                        success_cred = (user, pwd, url)
-                        if user == "" and pwd == "":
-                            print(f"    {FIRE} CRITICAL: UNPASSWORDED HTTP ACCESS DETECTED!")
-                        else:
-                            print(f"    {FIRE} CRACKED (HTTP): {user}:{pwd} @ {url}")
+                    r = make_request(web_url, auth=(user, pwd), timeout=2, verify=False)
+                    if credential_accepted(r, http_baseline):
+                        success_cred = (user, pwd, web_url)
+                        print(f"    {FIRE} CRACKED (HTTP): {user}:{pwd} @ {web_url}")
                         break
                 except: pass
 
-            # Test RTSP Basic Auth
-            rtsp_ports = [p for p in open_ports if p in [554, 8554, 10554]]
-            for rp in rtsp_ports:
-                if success_cred: break
-                try:
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                        s.settimeout(1.5)
-                        if s.connect_ex((target_ip, rp)) == 0:
-                            if user == "" and pwd == "":
-                                # Try unauthenticated DESCRIBE
-                                msg = f"DESCRIBE rtsp://{target_ip}:{rp}/ RTSP/1.0\r\nCSeq: 1\r\n\r\n"
-                            else:
-                                auth_str = base64.b64encode(f"{user}:{pwd}".encode()).decode()
-                                msg = f"DESCRIBE rtsp://{target_ip}:{rp}/ RTSP/1.0\r\nCSeq: 1\r\nAuthorization: Basic {auth_str}\r\n\r\n"
-
-                            s.sendall(msg.encode())
-                            response = s.recv(1024).decode(errors="ignore")
-                            if "RTSP/1.0 200" in response:
-                                success_cred = (user, pwd, f"rtsp://{target_ip}:{rp}/")
-                                if user == "" and pwd == "":
-                                    print(f"    {FIRE} CRITICAL: UNPASSWORDED RTSP STREAM DETECTED!")
-                                else:
-                                    print(f"    {FIRE} CRACKED (RTSP): {user}:{pwd} @ rtsp://{target_ip}:{rp}")
-                                    print(f"       {ALRT} SECURITY NOTE: RTSP Basic Auth is UNENCRYPTED. Credentials can be sniffed via Wireshark/Tcpdump.")
-                                break
-                except: pass
+            # Test RTSP Basic Auth (skipped when the stream is already open to anyone)
+            if not rtsp_anonymous:
+                for rp in rtsp_ports:
+                    if success_cred: break
+                    ok, _ = rtsp_describe(target_ip, rp, user, pwd)
+                    if ok:
+                        success_cred = (user, pwd, f"rtsp://{target_ip}:{rp}/")
+                        print(f"    {FIRE} CRACKED (RTSP): {user}:{pwd} @ rtsp://{target_ip}:{rp}")
+                        print(f"       {ALRT} SECURITY NOTE: RTSP Basic Auth is UNENCRYPTED. Credentials can be sniffed via Wireshark/Tcpdump.")
+                        break
 
         print(f"\n  [{STRM}] Live Stream & Snapshot Discovery:")
 

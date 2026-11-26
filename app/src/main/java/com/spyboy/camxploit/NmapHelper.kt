@@ -76,6 +76,10 @@ private fun copyAssetFolder(context: Context, assetPath: String, targetDir: File
     }
 }
 
+/** Ports worth checking on an IP camera: web, RTSP, vendor SDK and discovery ports. */
+private const val CAMERA_PORTS =
+    "80,443,554,8080,8000,8443,8554,9000,9010,37777,37778,34567,3702,10554"
+
 fun findNmap(context: Context): String {
     // Priority 1: Native Lib Dir (libnmap.so) - Correct way for Android 10+
     val nativeLibNmap = File(context.applicationInfo.nativeLibraryDir, "libnmap.so")
@@ -126,10 +130,18 @@ fun runNmap(
             
             // Add -n to disable reverse DNS lookup (fixes /etc/resolv.conf error on Android)
             // and --system-dns as a fallback.
-            val optimizedArgs = if (!finalArgs.contains("-n")) {
+            var optimizedArgs = if (!finalArgs.contains("-n")) {
                 "-n --system-dns $finalArgs"
             } else {
                 "--system-dns $finalArgs"
+            }
+
+            // A camera that stops answering ping probes (rate limiting after a few
+            // scans) must not be reported as "host seems down". -sn is exempt: with
+            // -Pn it would list every address in a subnet as up.
+            val argTokens = optimizedArgs.split("\\s+".toRegex())
+            if ("-Pn" !in argTokens && "-sn" !in argTokens) {
+                optimizedArgs = "-Pn $optimizedArgs"
             }
 
             val command = mutableListOf<String>().apply {
@@ -148,6 +160,9 @@ fun runNmap(
             process.inputStream
                 .bufferedReader()
                 .forEachLine { line ->
+                    // PCRE2 match-limit warnings come from nmap's own service probes
+                    // and say nothing about the target; keep them out of the panel.
+                    if (line.startsWith("Warning: PCRE2 error")) return@forEachLine
                     CoroutineScope(Dispatchers.Main).launch { onOutput(line) }
                 }
             
@@ -198,9 +213,8 @@ fun cameraScan(
 ) {
     runNmap(
         context,
-        "-p 80,443,554,8080,8000,8443,8554," +
-                "9000,37777,37778,34567,3702,10554 " +
-                "-T4 --open -F $ip",
+        // No -F here: nmap refuses "-F" together with an explicit -p port list.
+        "-p $CAMERA_PORTS -T4 --open $ip",
         onOutput, onComplete
     )
 }
@@ -222,9 +236,11 @@ fun vulnScan(
     onOutput: (String) -> Unit,
     onComplete: () -> Unit
 ) {
+    // Scanning all 1000 top ports made this take minutes on a camera. The vuln
+    // scripts only have anything to bite on the ports above.
     runNmap(
         context,
-        "--script vuln -T4 $ip",
+        "-p $CAMERA_PORTS --script vuln -T4 $ip",
         onOutput, onComplete
     )
 }
